@@ -1,6 +1,6 @@
-# BRACU Duburi 4.2 - Control Software
+# BRACU Duburi 4.2 - Control & Perception Software
 
-ROS 2 workspace for the BRACU Duburi AUV 4.2 control stack. Uses Pixhawk 2.4.8, ArduSub, and pymavlink.
+ROS 2 workspace for the BRACU Duburi AUV 4.2. Controls via Pixhawk 2.4.8 / ArduSub / pymavlink. Perception via YOLO object detection with GPU-accelerated inference.
 
 ---
 
@@ -13,9 +13,10 @@ ROS 2 workspace for the BRACU Duburi AUV 4.2 control stack. Uses Pixhawk 2.4.8, 
 5. [Using the Duburi CLI (Runner)](#using-the-duburi-cli-runner)
 6. [Planning Missions Without the Runner](#planning-missions-without-the-runner)
 7. [Logging](#logging)
-8. [Topics & Messages](#topics--messages)
-9. [Dependencies](#dependencies)
-10. [License](#license)
+8. [Vision & Perception](#vision--perception)
+9. [Topics & Messages](#topics--messages)
+10. [Dependencies](#dependencies)
+11. [License](#license)
 
 ---
 
@@ -29,6 +30,8 @@ ROS 2 workspace for the BRACU Duburi AUV 4.2 control stack. Uses Pixhawk 2.4.8, 
 | **Thrusters** | Blue Robotics T200 |
 | **Channels** | Ch 1–4 lateral, Ch 5–8 depth |
 | **Barometer** | BAR30 |
+| **Camera** | USB camera (V4L2 compatible) |
+| **GPU** | CUDA 12.8 (for YOLO inference) |
 
 ---
 
@@ -36,11 +39,13 @@ ROS 2 workspace for the BRACU Duburi AUV 4.2 control stack. Uses Pixhawk 2.4.8, 
 
 | Package | Description |
 |---------|-------------|
-| `duburi_interfaces` | Shared messages: `DriverCommand`, `MavlinkEvent`, `VehicleState`, `VehicleDiagnostics` |
+| `duburi_interfaces` | Shared messages: `DriverCommand`, `MavlinkEvent`, `VehicleState`, `VehicleDiagnostics`, `Detection`, `DetectionArray` |
 | `mavlink_inspector` | Main Pixhawk connection hub. Owns serial port, executes commands via MAVLink, publishes events and vehicle state |
 | `mavlink_driver` | Movement control: `mission_executor` (predefined missions), `teleop_driver` (Twist → DriverCommand) |
 | `mavlink_runner` | Interactive CLI with `Duburi >` prompt for quick testing and file-based missions |
 | `mavlink_logger` | Logs MAVLink activity to `logs/` (workspace-relative, session folders) |
+| `vision_manager` | Camera management: device enumeration, live testing, streaming (`/camera/image_raw`), checkerboard calibration |
+| `vision` | YOLO object detection: subscribes to camera, publishes `DetectionArray`, annotated images, terminal output |
 
 ---
 
@@ -52,7 +57,7 @@ colcon build
 source install/setup.bash
 ```
 
-**Typical workflow:**
+**Typical workflow (controls only):**
 
 ```bash
 # Terminal 1: Start inspector (connects to Pixhawk) – run first
@@ -63,6 +68,16 @@ ros2 run mavlink_runner runner
 
 # Terminal 3 (optional): Logger (logs to logs/<session>/)
 ros2 run mavlink_logger logger
+```
+
+**Typical workflow (perception):**
+
+```bash
+# Terminal 1: Camera streaming
+ros2 run vision_manager camera_node --ros-args -p device_id:=0
+
+# Terminal 2: YOLO detection (GPU default)
+ros2 run vision detector_node --ros-args -p enable_display:=True
 ```
 
 **Launch inspector + logger together:**
@@ -78,22 +93,29 @@ ros2 launch mavlink_inspector duburi_control.launch.py connection_port:=/dev/tty
 ## Architecture
 
 ```
-                    Pixhawk (/dev/ttyACM0)
-                            |
-                    mavlink_inspector
-                            |
-          /mavlink/events   |   /mavlink/vehicle_state
-                            |
-                   /driver/command
-                            |
-        +-------------------+-------------------+
-        |                   |                   |
-  mavlink_runner    mission_executor      teleop_driver
-  (CLI, missions)   (Python missions)    (/cmd_vel → DriverCommand)
-        |                   |                   |
-        +-------------------+-------------------+
-                            |
-                    mavlink_logger → auv_logs/
+┌──────────────────── CONTROLS ─────────────────────┐   ┌────────── PERCEPTION ──────────┐
+│                                                    │   │                                │
+│                 Pixhawk (/dev/ttyACM0)             │   │  USB Camera (/dev/videoN)      │
+│                         │                          │   │         │                      │
+│                 mavlink_inspector                   │   │   vision_manager               │
+│                         │                          │   │   (camera_node)                │
+│       /mavlink/events   │   /mavlink/vehicle_state │   │         │                      │
+│                         │                          │   │  /camera/image_raw             │
+│                /driver/command                     │   │  /camera/camera_info           │
+│                         │                          │   │         │                      │
+│     +-------------------+-------------------+      │   │      vision                    │
+│     │                   │                   │      │   │   (detector_node)              │
+│  mavlink_runner   mission_executor    teleop_driver│   │         │                      │
+│  (CLI, missions)  (Python missions)  (/cmd_vel)    │   │  /vision/detections            │
+│     │                   │                   │      │   │  /vision/annotated_image       │
+│     +-------------------+-------------------+      │   │                                │
+│                         │                          │   └────────────────────────────────┘
+│                 mavlink_logger → logs/              │
+│                                                    │       ┌──────────────────┐
+└────────────────────────────────────────────────────┘       │ duburi_interfaces│
+                                                            │ (shared messages)│
+          Both sides share duburi_interfaces ◄──────────────│                  │
+          Future: planning node bridges them                └──────────────────┘
 ```
 
 ---
@@ -552,6 +574,144 @@ The warning auto-clears when messages resume. Also visible in the `status` dashb
 
 ---
 
+## Vision & Perception
+
+The perception stack handles camera input and object detection, publishing results as ROS 2 topics for downstream use.
+
+### Quick Start
+
+```bash
+# Standalone test (camera + YOLO, no ROS pipeline needed)
+ros2 run vision detector_standalone --ros-args -p device_id:=0
+
+# Full ROS pipeline
+# Terminal 1: Camera streaming
+ros2 run vision_manager camera_node --ros-args -p device_id:=0
+
+# Terminal 2: YOLO detection (GPU by default)
+ros2 run vision detector_node --ros-args -p enable_display:=True
+
+# Terminal 3: See detections
+ros2 topic echo /vision/detections
+```
+
+### vision_manager – Camera Management
+
+| Executable | Description |
+|------------|-------------|
+| `camera_node` | Streams camera → `/camera/image_raw` + `/camera/camera_info` |
+| `camera_enum` | Lists all V4L2 cameras (one-shot, prints table) |
+| `camera_test` | Interactive preview with FPS overlay, snapshots (`s`), info (`i`) |
+| `camera_calibrate` | Checkerboard calibration → YAML file (ROS CameraInfo compatible) |
+
+**camera_node parameters:**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `device_id` | `0` | V4L2 device index (`/dev/videoN`) |
+| `frame_width` | `640` | Capture width |
+| `frame_height` | `480` | Capture height |
+| `fps` | `30` | Target framerate |
+| `camera_name` | `duburi_cam` | Frame ID for image headers |
+| `calibration_file` | `""` | Path to calibration YAML |
+
+```bash
+# Enumerate cameras
+ros2 run vision_manager camera_enum
+
+# Test a specific camera
+ros2 run vision_manager camera_test --ros-args -p device_id:=1
+
+# Calibrate (9x6 checkerboard, 2.5cm squares)
+ros2 run vision_manager camera_calibrate --ros-args \
+    -p board_width:=9 -p board_height:=6 -p square_size:=0.025
+
+# Launch camera node with calibration
+ros2 launch vision_manager camera.launch.py \
+    device_id:=0 calibration_file:=calibration/calibration_video0_20260306.yaml
+```
+
+### vision – YOLO Object Detection
+
+| Executable | Description |
+|------------|-------------|
+| `detector_node` | ROS node: subscribes to image topic, runs YOLO, publishes detections |
+| `detector_standalone` | Direct camera+YOLO test (no camera_node needed) |
+
+**detector_node parameters:**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `model` | `yolov8n.pt` | YOLO model file |
+| `confidence` | `0.5` | Detection confidence threshold |
+| `device` | `cuda:0` | Inference device (`cpu` or `cuda:0`) |
+| `image_topic` | `/camera/image_raw` | Input image topic |
+| `enable_display` | `False` | Show OpenCV preview window |
+| `publish_annotated` | `True` | Publish annotated image with bounding boxes |
+| `max_det` | `50` | Max detections per frame |
+| `classes` | `""` | Comma-separated class filter (empty = all) |
+| `iou` | `0.45` | NMS IoU threshold |
+
+```bash
+# Basic detection (GPU, prints to terminal)
+ros2 run vision detector_node
+
+# With display and custom model
+ros2 run vision detector_node --ros-args \
+    -p enable_display:=True -p model:=yolov8s.pt -p confidence:=0.3
+
+# Filter specific classes (e.g. only persons and cars)
+ros2 run vision detector_node --ros-args -p classes:="0,2"
+
+# Force CPU mode
+ros2 run vision detector_node --ros-args -p device:=cpu
+
+# Via launch file
+ros2 launch vision vision.launch.py enable_display:=True confidence:=0.4
+```
+
+### Detection Message Format
+
+**`Detection.msg`** – single detection:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `class_name` | string | Class label (e.g. `person`, `gate`) |
+| `class_id` | int32 | Numeric class ID from YOLO model |
+| `confidence` | float32 | Detection confidence (0.0–1.0) |
+| `bbox_x`, `bbox_y` | int32 | Top-left corner (pixels) |
+| `bbox_w`, `bbox_h` | int32 | Bounding box size (pixels) |
+| `center_x`, `center_y` | float32 | Normalized center (0.0–1.0, resolution-independent) |
+
+**`DetectionArray.msg`** – per frame:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `header` | Header | Timestamp + frame_id |
+| `detections` | Detection[] | List of detections |
+| `image_width` | int32 | Source image width |
+| `image_height` | int32 | Source image height |
+
+### Vision Data Flow
+
+```
+ USB Camera ──► camera_node ──► detector_node ──► /vision/detections
+ /dev/video0    (V4L2+OpenCV)    (YOLO GPU)        (DetectionArray)
+                    │                │
+             /camera/image_raw   /vision/annotated_image
+             (sensor_msgs/Image) (with bounding boxes)
+```
+
+Normalized center coordinates (`center_x`, `center_y`) are designed for easy future MAVLink integration:
+
+```
+  center_x < 0.4 → target is left  → yaw_left
+  center_x > 0.6 → target is right → yaw_right
+  0.4–0.6        → centered        → move_forward
+```
+
+---
+
 ## Topics & Messages
 
 | Topic | Type | Direction | Description |
@@ -561,6 +721,10 @@ The warning auto-clears when messages resume. Also visible in the `status` dashb
 | `/mavlink/vehicle_state` | `VehicleState` | Inspector → | Armed, mode, depth, yaw, voltage (10 Hz) |
 | `/mavlink/diagnostics` | `VehicleDiagnostics` | Inspector → | Heading rate, pressure, servos, RC, CPU (2 Hz) |
 | `/cmd_vel` | `Twist` | → teleop_driver | Teleop input (when using teleop_driver) |
+| `/camera/image_raw` | `Image` | camera_node → | Raw camera frames (bgr8, 30 Hz) |
+| `/camera/camera_info` | `CameraInfo` | camera_node → | Camera intrinsics / calibration |
+| `/vision/detections` | `DetectionArray` | detector_node → | YOLO detections per frame |
+| `/vision/annotated_image` | `Image` | detector_node → | Frames with bounding boxes drawn |
 
 **DriverCommand fields:**
 
@@ -614,8 +778,15 @@ The warning auto-clears when messages resume. Also visible in the `status` dashb
 
 ## Dependencies
 
+### Controls
 - **ROS 2** (Humble or later)
 - **pymavlink:** `pip install pymavlink` or `sudo apt install python3-pymavlink`
+
+### Perception
+- **OpenCV:** `pip install opencv-python` or `sudo apt install python3-opencv`
+- **Ultralytics YOLO:** `pip install ultralytics`
+- **PyTorch with CUDA:** Required for GPU inference (auto-detected by ultralytics)
+- **v4l-utils (optional):** `sudo apt install v4l-utils` — for `camera_enum` detailed device info
 
 ---
 

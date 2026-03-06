@@ -13,6 +13,7 @@ Usage examples:
 
 import os
 import re
+import signal
 import sys
 import time
 import threading
@@ -606,12 +607,9 @@ class DuburiRunnerNode(Node):
             except EOFError:
                 break
             except KeyboardInterrupt:
-                try:
-                    if rclpy.ok():
-                        self._publish(DriverCommand(command='stop'))
-                except Exception:
-                    pass
-                print('\nStopped. Use "quit" to exit.')
+                print('\nInterrupted — shutting down.')
+                self._safe_disarm()
+                break
             except Exception as e:
                 print(f'Error: {e}')
         try:
@@ -619,6 +617,20 @@ class DuburiRunnerNode(Node):
         except (AttributeError, OSError, NameError):
             pass
         print('Goodbye.')
+
+    def _safe_disarm(self):
+        """Send stop + disarm directly, ignoring arm-check guard."""
+        try:
+            if not rclpy.ok():
+                return
+            self._cmd_pub.publish(DriverCommand(command='stop'))
+            time.sleep(0.3)
+            if self._armed:
+                print('Vehicle armed — sending disarm...')
+                self._cmd_pub.publish(DriverCommand(command='disarm'))
+                time.sleep(1.0)
+        except Exception:
+            pass
 
 
 def main(args=None):
@@ -629,11 +641,15 @@ def main(args=None):
     executor.add_node(node)
     spin_thread = threading.Thread(target=executor.spin, daemon=True)
     spin_thread.start()
+    # Block SIGINT during cleanup so disarm isn't interrupted
+    original_sigint = signal.getsignal(signal.SIGINT)
     try:
         node.run_interactive()
     except KeyboardInterrupt:
         pass
     finally:
+        signal.signal(signal.SIGINT, signal.SIG_IGN)  # Ignore further Ctrl-C
+        node._safe_disarm()
         executor.shutdown()
         try:
             node.destroy_node()

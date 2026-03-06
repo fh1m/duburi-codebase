@@ -14,6 +14,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/MavlinkEvent.msg"
   "msg/VehicleDiagnostics.msg"
   "msg/VehicleState.msg"
+  "msg/Detection.msg"
+  "msg/DetectionArray.msg"
   DEPENDENCIES std_msgs
 )
 
