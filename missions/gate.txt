@@ -1,0 +1,11 @@
+# Gate mission for Duburi 4.2
+# Run with: run gate
+
+mode MANUAL
+arm
+# move depth 0.5
+move forward 50% 3s
+move left 50% 2s
+move forward 50% 2s
+stop
+disarm
