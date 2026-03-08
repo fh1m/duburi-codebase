@@ -45,28 +45,37 @@ HELP_TEXT = """
 Duburi 4.2 AUV Control - Quick Reference
 ========================================
 
+  Prefix:  bare = ArduSub (firmware)   ~  = PID (software, smooth)
+
 Movement (gain as %%, duration as Ns):
   move left [gain%%] [N]s      e.g. move left 50%% 10s
   move right/forward/back/up/down [gain%%] [N]s
+  forward [gain%%] [N]s         Shorthand (no 'move' prefix)
 
 Diagonal Movement:
   move forward-right [gain%%] [N]s     Diagonal (√2 speed scaled)
-  forward-right [gain%%] [N]s          Shorthand (no 'move')
+  forward-right [gain%%] [N]s          Shorthand
   Combos: forward-right, forward-left, back-right, back-left
 
 Depth Control:
-  dive <m>             Set depth via ALT_HOLD (e.g. dive 0.5)
-  p_dive               Hold current depth (software PID, any mode)
-  p_dive <m>           Hold specified depth (software PID)
-  p_dive off           Disable software depth PID
+  depth <m>            ArduSub ALT_HOLD firmware depth (e.g. depth 0.5)
+  ~depth               PID hold current depth (auto STABILIZE)
+  ~depth <m>           PID hold specific depth (auto STABILIZE)
+  ~depth off           Disable software depth PID
   surface              Ascend to surface
 
-Heading:
-  yaw <deg> [gain%%]    Yaw to heading bang-bang (e.g. yaw 260 50%%)
-  p_yaw <deg> [gain%%]  Yaw to heading PID (smoother, e.g. p_yaw 260 50%%)
-  yaw left/right [gain%%] [N]s
+Heading (absolute):
+  heading <deg> [gain%%]    Bang-bang yaw (e.g. heading 260 50%%)
+  ~heading <deg> [gain%%]   PID smooth yaw (e.g. ~heading 260)
+  heading left/right [gain%%] [N]s   Open-loop rotate
 
-Simultaneous Move + Heading:
+Heading (relative — from current heading):
+  turn left <deg> [gain%%]    Bang-bang turn (e.g. turn left 90)
+  turn right <deg> [gain%%]   Bang-bang turn right
+  ~turn left <deg> [gain%%]   PID smooth turn left
+  ~turn right <deg> [gain%%]  PID smooth turn right
+
+Simultaneous Move + Heading (go):
   go <dir> <deg> [gain%%] [N]s   Move + PID yaw simultaneously
                                 e.g. go forward 90 60%% 5s
   go forward-right 45 60%% 5s   Diagonal + PID heading
@@ -83,9 +92,13 @@ Stop & Actuators:
   grabber open/close   Grabber control
 
 Chained commands & Missions:
-  cmd1; cmd2; cmd3     Run multiple commands (waits for durations)
+  cmd1; cmd2; cmd3     Run multiple commands (sequential)
   run <mission>        Run mission file from missions/<mission>
   list missions        List available mission files
+
+Backward-compatible aliases:
+  dive = depth  |  p_dive = ~depth  |  yaw = heading
+  p_yaw = ~heading  |  p_turn = ~turn
 
 Other:
   help                 Show this help
@@ -263,6 +276,25 @@ class DuburiRunnerNode(Node):
         cmd = parts[0]
         args = parts[1:]
 
+        # ── Resolve ~ prefix (PID) and backward-compatible aliases ────
+        is_pid = False
+        if cmd.startswith('~'):
+            is_pid = True
+            cmd = cmd[1:]
+        if cmd == 'dive':
+            cmd = 'depth'
+        elif cmd == 'p_dive':
+            cmd = 'depth'
+            is_pid = True
+        elif cmd == 'yaw':
+            cmd = 'heading'
+        elif cmd == 'p_yaw':
+            cmd = 'heading'
+            is_pid = True
+        elif cmd == 'p_turn':
+            cmd = 'turn'
+            is_pid = True
+
         if cmd in ('quit', 'exit', 'q'):
             return False, 0.0
 
@@ -299,80 +331,113 @@ class DuburiRunnerNode(Node):
             print(f'Setting mode to {mode}')
             return True, 0.0
 
-        # ── Depth commands ───────────────────────────────────────────────
-        if cmd == 'dive':
-            if not args:
-                print('Usage: dive <meters> (e.g. dive 0.5)')
-                return True, 0.0
-            try:
-                depth = float(args[0].rstrip('m'))
-                if self._publish(DriverCommand(command='set_depth', depth=depth)):
-                    print(f'Diving to {depth}m (ALT_HOLD firmware depth hold)')
-                return True, 1.0  # Wait for mode switch + depth command
-            except ValueError:
-                print('Invalid depth (use float e.g. 0.5)')
-                return True, 0.0
-
-        if cmd == 'p_dive':
-            if args and args[0] == 'off':
-                self._publish(DriverCommand(command='pid_depth_off'))
-                print('PID depth hold OFF')
-                return True, 0.0
-            depth = 0.0  # 0 = hold current depth
-            if args:
+        # ── Depth commands (depth = ALT_HOLD, ~depth = PID) ─────────────
+        if cmd == 'depth':
+            if is_pid:
+                # ~depth — software PID depth hold (auto STABILIZE)
+                if args and args[0] == 'off':
+                    self._publish(DriverCommand(command='pid_depth_off'))
+                    print('~depth OFF')
+                    return True, 0.0
+                depth_val = 0.0
+                if args:
+                    try:
+                        depth_val = float(args[0].rstrip('m'))
+                    except ValueError:
+                        print('Usage: ~depth [meters] | ~depth off')
+                        return True, 0.0
+                self._publish(DriverCommand(command='set_mode', mode='STABILIZE'))
+                if self._publish(DriverCommand(command='pid_depth', depth=depth_val)):
+                    if depth_val == 0.0:
+                        print('~depth ON — holding current depth (STABILIZE)')
+                    else:
+                        print(f'~depth ON at {depth_val}m (STABILIZE)')
+                return True, 0.5
+            else:
+                # depth — ArduSub ALT_HOLD firmware depth
+                if not args:
+                    print('Usage: depth <meters>  (e.g. depth 0.5)')
+                    return True, 0.0
                 try:
                     depth = float(args[0].rstrip('m'))
+                    if self._publish(DriverCommand(command='set_depth', depth=depth)):
+                        print(f'Depth {depth}m (ALT_HOLD)')
+                    return True, 1.0
                 except ValueError:
-                    print('Usage: p_dive [meters] | p_dive off')
+                    print('Invalid depth (use float e.g. 0.5)')
                     return True, 0.0
-            if self._publish(DriverCommand(command='pid_depth', depth=depth)):
-                if depth == 0.0:
-                    print('PID depth hold ON (holding current depth)')
-                else:
-                    print(f'PID depth hold ON at {depth}m')
-            return True, 0.0
 
         if cmd == 'surface':
             self._publish(DriverCommand(command='surface'))
             print('Surfacing...')
             return True, 2.0
 
-        # ── Yaw commands ─────────────────────────────────────────────────
-        if cmd == 'p_yaw':
-            if not args:
-                print('Usage: p_yaw <degrees> [gain%]')
+        # ── Turn commands (relative — turn = bang-bang, ~turn = PID) ─────
+        if cmd == 'turn':
+            if len(args) < 2:
+                prefix = '~turn' if is_pid else 'turn'
+                print(f'Usage: {prefix} left/right <degrees> [gain%]')
+                return True, 0.0
+            direction = args[0]
+            if direction not in ('left', 'right'):
+                prefix = '~turn' if is_pid else 'turn'
+                print(f'Usage: {prefix} left/right <degrees> [gain%]')
                 return True, 0.0
             try:
-                angle = float(args[0])
-                if self._publish(DriverCommand(command='pid_yaw_to_heading', angle=angle, speed=int(gain))):
-                    print(f'PID yaw to heading {angle}°{f" ({gain}%)" if gain != self._default_speed else ""}')
-                return True, 0.0
+                rel_angle = float(args[1])
             except ValueError:
-                print('Invalid yaw angle')
+                print('Invalid angle (use degrees e.g. 90)')
                 return True, 0.0
+            if self._last_state is None:
+                print('  [WARNING] No telemetry yet — cannot compute relative turn.')
+                print('  Wait for inspector or use absolute heading/~heading.')
+                return True, 0.0
+            current = self._last_state.yaw
+            if direction == 'left':
+                target = (current - abs(rel_angle)) % 360
+            else:
+                target = (current + abs(rel_angle)) % 360
+            if is_pid:
+                driver_cmd = DriverCommand(command='pid_yaw_to_heading', angle=target, speed=int(gain))
+                mode = 'PID'
+            else:
+                driver_cmd = DriverCommand(command='yaw_to_heading', angle=target, speed=int(gain))
+                mode = 'bang-bang'
+            if self._publish(driver_cmd):
+                print(f'Turn {direction} {rel_angle}° ({mode}: {current:.0f}° → {target:.0f}°)')
+            return True, 0.0
 
-        if cmd == 'yaw':
+        # ── Heading commands (heading = bang-bang, ~heading = PID) ────────
+        if cmd == 'heading':
             if not args:
-                print('Usage: yaw <degrees> [gain%] or yaw left/right [gain%] [N]s')
+                prefix = '~heading' if is_pid else 'heading'
+                print(f'Usage: {prefix} <degrees> [gain%]')
+                print(f'       heading left/right [gain%] [Ns]')
                 return True, 0.0
             if args[0] == 'left':
                 if self._publish(DriverCommand(command='yaw_left', duration=duration, speed=int(gain))):
-                    print(f'Yaw left{f" {gain}%" if gain != self._default_speed else ""}{f" {duration}s" if duration else ""}')
+                    print(f'Rotate left{f" {gain}%" if gain != self._default_speed else ""}{f" {duration}s" if duration else ""}')
                     return True, duration
                 return True, 0.0
             elif args[0] == 'right':
                 if self._publish(DriverCommand(command='yaw_right', duration=duration, speed=int(gain))):
-                    print(f'Yaw right{f" {gain}%" if gain != self._default_speed else ""}{f" {duration}s" if duration else ""}')
+                    print(f'Rotate right{f" {gain}%" if gain != self._default_speed else ""}{f" {duration}s" if duration else ""}')
                     return True, duration
                 return True, 0.0
             else:
                 try:
                     angle = float(args[0])
-                    if self._publish(DriverCommand(command='yaw_to_heading', angle=angle, speed=int(gain))):
-                        print(f'Yaw to heading {angle}°{f" ({gain}%)" if gain != self._default_speed else ""}')
+                    if is_pid:
+                        icmd = 'pid_yaw_to_heading'
+                        label = 'PID'
+                    else:
+                        icmd = 'yaw_to_heading'
+                        label = 'bang-bang'
+                    if self._publish(DriverCommand(command=icmd, angle=angle, speed=int(gain))):
+                        print(f'Heading {angle}° ({label}){f" ({gain}%)" if gain != self._default_speed else ""}')
                     return True, 0.0
                 except ValueError:
-                    print('Invalid yaw angle')
+                    print('Invalid heading angle')
                     return True, 0.0
 
         if cmd == 'move':
@@ -382,13 +447,13 @@ class DuburiRunnerNode(Node):
             direction = args[0].lower()
             if direction == 'depth':
                 if len(args) < 2:
-                    print('Usage: move depth <m>  (same as: dive <m>)')
+                    print('Usage: move depth <m>  (same as: depth <m>)')
                     return True, 0.0
                 try:
                     depth_str = args[1].rstrip('m')
                     depth = float(depth_str)
                     if self._publish(DriverCommand(command='set_depth', depth=depth)):
-                        print(f'Diving to {depth}m (ALT_HOLD)')
+                        print(f'Depth {depth}m (ALT_HOLD)')
                 except ValueError:
                     print('Invalid depth (use float e.g. 0.2)')
                 return True, 1.0

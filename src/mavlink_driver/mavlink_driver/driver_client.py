@@ -1,6 +1,18 @@
 """
 Driver client - helper to publish DriverCommand.
-Used by mavlink_runner and mission nodes.
+Used by mavlink_runner, mission_executor, and custom mission nodes.
+
+Naming convention:
+  - ArduSub (firmware) functions: plain names  (set_depth, yaw_to_heading, turn_left)
+  - PID (software) functions:     pid_ prefix  (pid_depth, pid_yaw, pid_turn_left)
+  - Movement:  move_*  = single/compound thrust
+  - Go:        go_*    = movement + PID heading hold simultaneously
+
+Runner/mission CLI mapping:
+  depth  → set_depth()       |  ~depth  → pid_depth()
+  heading → yaw_to_heading() |  ~heading → pid_yaw()
+  turn   → turn_left/right() |  ~turn   → pid_turn_left/right()
+  move   → move_*()          |  go      → go_*()
 """
 
 from duburi_interfaces.msg import DriverCommand
@@ -57,12 +69,12 @@ def yaw_angle(angle: float) -> DriverCommand:
 
 
 def pid_yaw(angle: float, speed: int = 50) -> DriverCommand:
-    """PID yaw to heading (smooth, closed-loop)."""
+    """PID yaw to absolute heading (smooth, closed-loop)."""
     return make_command('pid_yaw_to_heading', angle=angle, speed=speed)
 
 
 def yaw_to_heading(angle: float, speed: int = 50) -> DriverCommand:
-    """Bang-bang yaw to heading."""
+    """Bang-bang yaw to absolute heading."""
     return make_command('yaw_to_heading', angle=angle, speed=speed)
 
 
@@ -72,6 +84,50 @@ def yaw_left(duration: float = 0, speed: int = 50) -> DriverCommand:
 
 def yaw_right(duration: float = 0, speed: int = 50) -> DriverCommand:
     return make_command('yaw_right', duration=duration, speed=speed)
+
+
+# ── Relative yaw helpers ─────────────────────────────────────────────────
+
+def resolve_relative_yaw(current_heading: float, direction: str, angle: float) -> float:
+    """Compute absolute heading from a relative turn.
+
+    Args:
+        current_heading: current heading in degrees (0-360).
+        direction: 'left' or 'right'.
+        angle: degrees to turn (positive).
+
+    Returns:
+        Absolute heading in degrees (0-360).
+    """
+    angle = abs(angle)
+    if direction == 'left':
+        return (current_heading - angle) % 360
+    else:  # right
+        return (current_heading + angle) % 360
+
+
+def turn_left(current_heading: float, angle: float, speed: int = 50) -> DriverCommand:
+    """Bang-bang relative turn left by `angle` degrees."""
+    target = resolve_relative_yaw(current_heading, 'left', angle)
+    return yaw_to_heading(target, speed=speed)
+
+
+def turn_right(current_heading: float, angle: float, speed: int = 50) -> DriverCommand:
+    """Bang-bang relative turn right by `angle` degrees."""
+    target = resolve_relative_yaw(current_heading, 'right', angle)
+    return yaw_to_heading(target, speed=speed)
+
+
+def pid_turn_left(current_heading: float, angle: float, speed: int = 50) -> DriverCommand:
+    """PID smooth relative turn left by `angle` degrees."""
+    target = resolve_relative_yaw(current_heading, 'left', angle)
+    return pid_yaw(target, speed=speed)
+
+
+def pid_turn_right(current_heading: float, angle: float, speed: int = 50) -> DriverCommand:
+    """PID smooth relative turn right by `angle` degrees."""
+    target = resolve_relative_yaw(current_heading, 'right', angle)
+    return pid_yaw(target, speed=speed)
 
 
 def set_depth(depth: float) -> DriverCommand:

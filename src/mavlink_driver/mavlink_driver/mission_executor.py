@@ -25,7 +25,7 @@ from pathlib import Path
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
-from duburi_interfaces.msg import DriverCommand, MavlinkEvent
+from duburi_interfaces.msg import DriverCommand, MavlinkEvent, VehicleState
 
 from mavlink_driver.driver_client import (
     arm,
@@ -48,6 +48,10 @@ from mavlink_driver.driver_client import (
     pid_depth,
     pid_depth_off,
     surface,
+    turn_left,
+    turn_right,
+    pid_turn_left,
+    pid_turn_right,
 )
 
 
@@ -78,6 +82,12 @@ class MissionExecutorNode(Node):
             MavlinkEvent, '/mavlink/events', self._on_event,
             QoSProfile(reliability=ReliabilityPolicy.RELIABLE, depth=10)
         )
+        # Subscribe to vehicle state for current heading (used by relative turn)
+        self._state_sub = self.create_subscription(
+            VehicleState, '/mavlink/vehicle_state', self._on_state,
+            QoSProfile(reliability=ReliabilityPolicy.RELIABLE, depth=1)
+        )
+        self._current_heading = 0.0  # updated from telemetry
         self._mission_name = self.declare_parameter('mission', 'pool_test').value
         self._mission_file = self.declare_parameter('mission_file', '').value
 
@@ -116,6 +126,10 @@ class MissionExecutorNode(Node):
         """Log relevant autopilot events during mission."""
         if msg.event_type in ('command_ack', 'command_rejected', 'arm_failed'):
             self.get_logger().info(f'  [{msg.event_type}] {msg.description}')
+
+    def _on_state(self, msg: VehicleState):
+        """Track current heading for relative turn commands."""
+        self._current_heading = msg.yaw
 
     def _publish(self, cmd: DriverCommand, delay: float = 0.5):
         """Publish command and wait. Returns False if mission aborted."""
@@ -282,6 +296,25 @@ class MissionExecutorNode(Node):
     def _parse_file_command(self, cmd: str, args: list[str]) -> DriverCommand | None:
         """Parse a single command line into a DriverCommand."""
         try:
+            # ── Resolve ~ prefix (PID) and backward-compatible aliases ──
+            is_pid = False
+            if cmd.startswith('~'):
+                is_pid = True
+                cmd = cmd[1:]
+            if cmd == 'dive':
+                cmd = 'depth'
+            elif cmd == 'p_dive':
+                cmd = 'depth'
+                is_pid = True
+            elif cmd == 'yaw':
+                cmd = 'heading'
+            elif cmd == 'p_yaw':
+                cmd = 'heading'
+                is_pid = True
+            elif cmd == 'p_turn':
+                cmd = 'turn'
+                is_pid = True
+
             if cmd == 'arm':
                 return arm()
             elif cmd == 'disarm':
@@ -316,22 +349,42 @@ class MissionExecutorNode(Node):
                 dur = float(args[0]) if args else 3.0
                 spd = int(args[1]) if len(args) > 1 else 50
                 return move_down(duration=dur, speed=spd)
-            elif cmd == 'dive':
-                return set_depth(float(args[0])) if args else None
-            elif cmd == 'p_dive':
-                if args and args[0] == 'off':
-                    return pid_depth_off()
-                return pid_depth(float(args[0]) if args else 0.0)
-            elif cmd == 'yaw':
+            elif cmd == 'depth':
+                if is_pid:
+                    if args and args[0] == 'off':
+                        return pid_depth_off()
+                    return pid_depth(float(args[0]) if args else 0.0)
+                else:
+                    return set_depth(float(args[0])) if args else None
+            elif cmd == 'heading':
                 if not args:
                     return None
                 if args[0] in ('left', 'right'):
                     dur = float(args[1]) if len(args) > 1 else 3.0
                     spd = int(args[2]) if len(args) > 2 else 50
                     return yaw_left(duration=dur, speed=spd) if args[0] == 'left' else yaw_right(duration=dur, speed=spd)
-                return yaw_to_heading(float(args[0])) if args else None
-            elif cmd == 'p_yaw':
-                return pid_yaw(float(args[0])) if args else None
+                if is_pid:
+                    return pid_yaw(float(args[0])) if args else None
+                else:
+                    return yaw_to_heading(float(args[0])) if args else None
+            elif cmd == 'turn':
+                # turn/~turn left/right <degrees> [speed]
+                if not args or len(args) < 2:
+                    return None
+                direction = args[0]
+                angle = float(args[1])
+                spd = int(args[2]) if len(args) > 2 else 50
+                if is_pid:
+                    if direction == 'left':
+                        return pid_turn_left(self._current_heading, angle, speed=spd)
+                    elif direction == 'right':
+                        return pid_turn_right(self._current_heading, angle, speed=spd)
+                else:
+                    if direction == 'left':
+                        return turn_left(self._current_heading, angle, speed=spd)
+                    elif direction == 'right':
+                        return turn_right(self._current_heading, angle, speed=spd)
+                return None
             elif cmd == 'move':
                 # Support 'move forward 3 50' syntax (matches runner format)
                 if not args:

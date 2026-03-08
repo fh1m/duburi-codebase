@@ -124,6 +124,17 @@ ros2 launch mavlink_inspector duburi_control.launch.py connection_port:=/dev/tty
 
 The runner provides an interactive prompt for direct control and file-based missions.
 
+### Naming Convention
+
+| Prefix | Meaning | Example |
+|--------|---------|--------|
+| *(bare)* | ArduSub firmware / standard | `depth 0.5`, `heading 90`, `turn left 45` |
+| `~` | Software PID (smooth, closed-loop) | `~depth 0.5`, `~heading 90`, `~turn left 45` |
+| `move` | Single/compound directional thrust | `move forward 50%`, `move forward-right 50%` |
+| `go` | Movement + PID heading hold | `go forward 90 50%`, `go forward-right 45 50%` |
+
+All old command names (`dive`, `p_dive`, `yaw`, `p_yaw`, `p_turn`) are kept as backward-compatible aliases.
+
 ### Starting the Runner
 
 ```bash
@@ -169,40 +180,56 @@ Move in two horizontal directions at once. Speed is automatically scaled by $1/\
 
 **Valid combinations:** Any pair of `{forward, back}` × `{left, right}`. Conflicting directions (e.g. `forward-back`) are rejected.
 
-> **Why only horizontal?** Vertical movement (up/down) should use `p_dive` or `dive` for PID-controlled depth hold. Raw throttle without PID drifts and is unreliable in water.
+> **Why only horizontal?** Vertical movement (up/down) should use `~depth` or `depth` for PID-controlled depth hold. Raw throttle without PID drifts and is unreliable in water.
 
 ---
 
 ### Depth Control
 
-Two depth control strategies are available:
+Two depth control strategies are available. Use bare command for ArduSub firmware, `~` prefix for software PID:
 
 | Command | Example | Description |
 |---------|---------|-------------|
-| `dive <m>` | `dive 0.5` | Firmware depth hold (switches to ALT_HOLD mode) |
-| `p_dive` | `p_dive` | Software PID — hold current depth (any mode) |
-| `p_dive <m>` | `p_dive 0.5` | Software PID — hold specific depth |
-| `p_dive off` | `p_dive off` | Disable software depth PID |
+| `depth <m>` | `depth 0.5` | ArduSub ALT_HOLD firmware depth hold |
+| `~depth` | `~depth` | Software PID — hold current depth (auto STABILIZE) |
+| `~depth <m>` | `~depth 0.5` | Software PID — hold specific depth (auto STABILIZE) |
+| `~depth off` | `~depth off` | Disable software depth PID |
 | `surface` | `surface` | Ascend to surface (stops everything) |
 
-- **`dive`** uses ArduSub's built-in ALT_HOLD. Pixhawk's firmware PID controls the throttle.
-- **`p_dive`** is our software PID running at 20 Hz. Works in MANUAL mode. Overrides CH_THROTTLE each tick.
+- **`depth`** uses ArduSub’s built-in ALT_HOLD. Pixhawk’s firmware PID controls the throttle.
+- **`~depth`** is our software PID running at 20 Hz. Auto-switches to STABILIZE mode. Overrides CH_THROTTLE each tick.
 - Both depth modes can be combined with forward/lateral movement — they only control the vertical axis.
+- **Aliases:** `dive` = `depth`, `p_dive` = `~depth`
 
 ---
 
 ### Heading Control
 
+Use bare command for bang-bang (fast, snappy), `~` prefix for PID (smooth, precise):
+
 | Command | Example | Description |
 |---------|---------|-------------|
-| `yaw <deg> [gain%]` | `yaw 260 50%` | Yaw to heading (bang-bang, snaps to heading) |
-| `p_yaw <deg> [gain%]` | `p_yaw 260 50%` | PID yaw to heading (smooth, oscillation-free) |
-| `yaw left [gain%] [Ns]` | `yaw left 50% 5s` | Rotate left (open-loop, no heading target) |
-| `yaw right [gain%] [Ns]` | `yaw right 50% 5s` | Rotate right (open-loop) |
+| `heading <deg> [gain%]` | `heading 260 50%` | Bang-bang yaw to heading |
+| `~heading <deg> [gain%]` | `~heading 260 50%` | PID smooth yaw to heading |
+| `heading left [gain%] [Ns]` | `heading left 50% 5s` | Open-loop rotate left |
+| `heading right [gain%] [Ns]` | `heading right 50% 5s` | Open-loop rotate right |
 
-- `yaw` completes once the heading is within 5° of target.
-- `p_yaw` completes once within 3° (PID is smoother and more precise).
-- Both are software-only — ArduSub doesn't provide heading PID in MANUAL mode.
+- `heading` completes once the heading is within 5° of target.
+- `~heading` completes once within 3° (PID is smoother and more precise).
+- Both are software-only — ArduSub doesn’t provide heading PID in MANUAL mode.
+- **Aliases:** `yaw` = `heading`, `p_yaw` = `~heading`
+
+### Relative Turn (from current heading)
+
+| Command | Example | Description |
+|---------|---------|-------------|
+| `turn left <deg> [gain%]` | `turn left 90` | Bang-bang relative turn left |
+| `turn right <deg> [gain%]` | `turn right 45 60%` | Bang-bang relative turn right |
+| `~turn left <deg> [gain%]` | `~turn left 90` | PID smooth relative turn left |
+| `~turn right <deg> [gain%]` | `~turn right 45` | PID smooth relative turn right |
+
+- Turns are computed from the current heading (requires telemetry from inspector).
+- **Aliases:** `p_turn` = `~turn`
 
 ---
 
@@ -244,6 +271,8 @@ go forward 90 60% 5s
 ```bash
 Duburi > p_dive 0.5; go forward 90 60% 10s
 ```
+
+> Can also be written with new names: `Duburi > ~depth 0.5; go forward 90 60% 10s`
 
 This holds 0.5m depth (Layer 3) while moving forward toward 90° (Layers 2+4).
 
@@ -328,7 +357,7 @@ Duburi > list missions
 arm
 mode MANUAL
 sleep 2
-p_dive 0.5                    # hold 0.5m depth (software PID)
+~depth 0.5                    # hold 0.5m depth (software PID)
 sleep 3
 go forward 90 60% 8s          # move forward + PID yaw to 90°
 sleep 9
@@ -345,7 +374,7 @@ disarm
 arm
 mode MANUAL
 sleep 2
-p_dive 0.3                    # hold depth
+~depth 0.3                    # hold depth (PID)
 sleep 3
 go forward-right 45 50% 5s    # diagonal + heading 45°
 sleep 6
@@ -449,7 +478,9 @@ from duburi_interfaces.msg import DriverCommand
 from mavlink_driver.driver_client import (
     arm, disarm, move_forward, move_left, move_combo,
     go_forward, go_combo, pid_depth, pid_depth_off,
-    set_mode, stop, surface,
+    set_mode, stop, surface, set_depth,
+    yaw_to_heading, pid_yaw,
+    turn_left, pid_turn_left,
 )
 
 class MyMissionNode(Node):

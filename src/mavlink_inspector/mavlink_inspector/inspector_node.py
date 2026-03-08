@@ -774,15 +774,12 @@ class MavlinkInspectorNode(Node):
             d_out = dh['kd'] * (depth_error - last_err) / dt
 
             # Total PID → throttle PWM
+            # ArduSub throttle: >1500 = UP (ascend), <1500 = DOWN (descend)
             # Depth convention: altitude 0 = surface, negative = below.
-            # Error negative → need to go deeper → throttle > 1500.
-            # Formula: throttle_pwm = NEUTRAL - pid_output
-            #   (negative pid → positive offset → down)
-            # POOL TODO: Verify throttle direction! If AUV goes UP when told to
-            #   go DOWN (or vice versa), flip the sign: change `-pid_output` to
-            #   `pid_output` below. This is the most critical thing to check.
+            # Error negative (need deeper) → pid negative → offset negative → PWM<1500 → DOWN ✓
+            # Error positive (too deep)   → pid positive → offset positive → PWM>1500 → UP   ✓
             pid_output = p_out + i_out + d_out
-            throttle_offset = max(-PWM_RANGE, min(PWM_RANGE, int(-pid_output)))
+            throttle_offset = max(-PWM_RANGE, min(PWM_RANGE, int(pid_output)))
             channels[CH_THROTTLE] = NEUTRAL_PWM + throttle_offset
 
             # Update PID state
@@ -872,7 +869,11 @@ class MavlinkInspectorNode(Node):
         end_time = time.time() + duration if duration > 0 else float('inf')
 
         def set_movement(channels: dict, desc: str):
+            # Don't let movement commands set CH_THROTTLE when depth PID is active
+            # — the PID layer controls throttle exclusively for depth hold.
             with self._movement_lock:
+                if self._depth_pid is not None and CH_THROTTLE in channels:
+                    channels = {k: v for k, v in channels.items() if k != CH_THROTTLE}
                 self._current_movement = {'channels': channels, 'end_time': end_time}
             self._publish_event('movement', desc)
 
@@ -904,14 +905,16 @@ class MavlinkInspectorNode(Node):
             )
 
         elif c in ('move_up', 'up'):
+            # ArduSub: >1500 = UP (ascend)
             set_movement(
-                {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: NEUTRAL_PWM - (speed - NEUTRAL_PWM), CH_YAW: NEUTRAL_PWM},
+                {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: speed, CH_YAW: NEUTRAL_PWM},
                 'Moving up'
             )
 
         elif c in ('move_down', 'down'):
+            # ArduSub: <1500 = DOWN (descend)
             set_movement(
-                {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: speed, CH_YAW: NEUTRAL_PWM},
+                {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: NEUTRAL_PWM - (speed - NEUTRAL_PWM), CH_YAW: NEUTRAL_PWM},
                 'Moving down'
             )
 
@@ -1007,7 +1010,10 @@ class MavlinkInspectorNode(Node):
                     mv_channels[CH_YAW] = NEUTRAL_PWM
                     # CH_THROTTLE left neutral (depth PID overrides if active)
                     mv_channels[CH_THROTTLE] = NEUTRAL_PWM
+                    # Strip CH_THROTTLE if depth PID is active
                     with self._movement_lock:
+                        if self._depth_pid is not None:
+                            mv_channels = {k: v for k, v in mv_channels.items() if k != CH_THROTTLE}
                         self._current_movement = {'channels': mv_channels, 'end_time': end_time}
                         self._yaw_to_heading = {
                             'target_deg': cmd.angle % 360,
@@ -1097,7 +1103,7 @@ class MavlinkInspectorNode(Node):
                     self._current_movement = {
                         'channels': {
                             CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM,
-                            CH_THROTTLE: NEUTRAL_PWM - PWM_RANGE // 2,  # Up at 50%
+                            CH_THROTTLE: NEUTRAL_PWM + PWM_RANGE // 2,  # Up (ArduSub: >1500 = ascend)
                             CH_YAW: NEUTRAL_PWM,
                         },
                         'end_time': time.time() + 10.0,  # Up for up to 10s
