@@ -15,8 +15,10 @@ ROS 2 workspace for the BRACU Duburi AUV 4.2. Controls via Pixhawk 2.4.8 / ArduS
 7. [Logging](#logging)
 8. [Vision & Perception](#vision--perception)
 9. [Topics & Messages](#topics--messages)
-10. [Dependencies](#dependencies)
-11. [License](#license)
+10. [Inspector Parameters](#inspector-parameters)
+11. [Analysis & Documentation](#analysis--documentation)
+12. [Dependencies](#dependencies)
+13. [License](#license)
 
 ---
 
@@ -197,7 +199,7 @@ Two depth control strategies are available. Use bare command for ArduSub firmwar
 | `surface` | `surface` | Ascend to surface (stops everything) |
 
 - **`depth`** uses ArduSub’s built-in ALT_HOLD. Pixhawk’s firmware PID controls the throttle.
-- **`~depth`** is our software PID running at 20 Hz. Auto-switches to STABILIZE mode. Overrides CH_THROTTLE each tick.
+- **`~depth`** is our software PID running at 20 Hz. Auto-switches to STABILIZE mode. Overrides CH_THROTTLE each tick. Uses derivative-on-measurement and conditional integration to prevent overshoot.
 - Both depth modes can be combined with forward/lateral movement — they only control the vertical axis.
 - **Aliases:** `dive` = `depth`, `p_dive` = `~depth`
 
@@ -553,16 +555,18 @@ Use `missions/*.txt` files as mission descriptions even when not using the runne
 ### Option 5: Teleop via /cmd_vel
 
 Use `teleop_driver` to drive the AUV with Twist messages (e.g., from a joystick or nav stack).
-Supports **multi-axis**: simultaneous horizontal axes are combined into diagonal commands (e.g. `move_forward_right`), vertical and yaw are sent as separate commands.
+All 4 axes (forward/lateral/vertical/yaw) are combined into a **single `teleop` command** per tick — no per-axis stomping. When the joystick returns to centre, a single `teleop_idle` is sent that clears movement without disrupting active depth PID or heading hold.
 
 ```bash
 ros2 run mavlink_driver teleop_driver
 # Publish to /cmd_vel (geometry_msgs/Twist)
 # Single axis:
 ros2 topic pub /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.5, y: 0.0, z: 0.0}, angular: {x: 0.0, y: 0.0, z: 0.0}}"
-# Multi-axis (diagonal forward-right + yaw):
-ros2 topic pub /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.5, y: 0.5, z: 0.0}, angular: {x: 0.0, y: 0.0, z: 0.3}}"
+# Multi-axis (forward + right + up + yaw simultaneously):
+ros2 topic pub /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.5, y: 0.5, z: 0.3}, angular: {x: 0.0, y: 0.0, z: 0.3}}"
 ```
+
+The `teleop` command encodes PWM offsets in DriverCommand fields: `speed`=forward, `duration`=lateral, `depth`=throttle, `angle`=yaw. The inspector decodes all 4 and sets channels in one `_current_movement`.
 
 ---
 
@@ -804,6 +808,64 @@ Normalized center coordinates (`center_x`, `center_y`) are designed for easy fut
 | `stop` | Control | Stop all movement + clear all PIDs |
 | `open_grabber` | Actuator | Open grabber servo |
 | `close_grabber` | Actuator | Close grabber servo |
+| `teleop` | Teleop | All 4 axes in one command (used by teleop_driver) |
+| `teleop_idle` | Teleop | Clear movement without nuking PIDs (used by teleop_driver) |
+
+---
+
+## Inspector Parameters
+
+The inspector node accepts the following ROS parameters for tuning:
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `connection_port` | `/dev/ttyACM0` | Pixhawk serial port |
+| `baud` | `115200` | Serial baud rate |
+| `yaw_source` | `attitude` | Which MAVLink message updates yaw: `attitude` (ATTITUDE, recommended), `ahrs2` (AHRS2), or `both` (legacy, causes jitter) |
+| `depth_kp` | `500.0` | Depth PID proportional gain |
+| `depth_ki` | `25.0` | Depth PID integral gain |
+| `depth_kd` | `200.0` | Depth PID derivative gain |
+| `depth_max_integral` | `0.5` | Depth PID max integral accumulator (anti-windup cap) |
+| `yaw_kp` | `2.0` | Yaw PID proportional gain |
+| `yaw_ki` | `0.05` | Yaw PID integral gain |
+| `yaw_kd` | `0.5` | Yaw PID derivative gain |
+| `yaw_max_integral` | `50.0` | Yaw PID max integral accumulator |
+
+```bash
+# Override parameters at launch
+ros2 run mavlink_inspector inspector --ros-args \
+  -p connection_port:=/dev/ttyACM1 \
+  -p yaw_source:=attitude \
+  -p depth_kp:=300.0 \
+  -p depth_ki:=15.0
+```
+
+### PID Implementation Notes
+
+- **Derivative on measurement** — both depth and yaw PIDs use derivative-on-measurement (not derivative-on-error) to avoid PWM spikes when setpoint changes. Depth uses `(depth - prev_depth)/dt`, yaw uses the gyro-measured heading rate from ATTITUDE messages.
+- **Conditional integration** — integral accumulation pauses when PID output is saturated (`|output| ≥ 400 PWM`), preventing windup during large transients.
+- **Yaw speed scaling** — the `speed` parameter on `pid_yaw_to_heading` now clamps max PID output (lower speed = gentler corrections).
+
+---
+
+## Analysis & Documentation
+
+The `analysis/` folder contains detailed technical documentation:
+
+| Document | Description |
+|----------|-------------|
+| `00_OVERVIEW.md` | High-level system overview |
+| `01_ARCHITECTURE.md` | Detailed architecture and data flow |
+| `02_DESIGN_DECISIONS.md` | Rationale for key design choices (12 decisions) |
+| `03_INSPECTOR_LINE_BY_LINE.md` | Inspector node code walkthrough |
+| `04_RUNNER_LINE_BY_LINE.md` | Runner CLI code walkthrough |
+| `05_DRIVER_LINE_BY_LINE.md` | Driver client library walkthrough |
+| `06_INTERFACES.md` | Message definitions and field semantics |
+| `07_ARDUSUB_CONSTRAINTS.md` | ArduSub firmware constraints and gotchas |
+| `08_AGENT_GUIDE.md` | Guide for AI agents working on this codebase |
+| `09_KNOWN_ISSUES_AND_GOTCHAS.md` | Known issues, edge cases, and fixes (21 entries) |
+| `10_DESIGN_ISSUES.md` | 7 architectural concerns with severity/effort ratings |
+| `11_DESK_TESTING_GUIDE.md` | Step-by-step desk testing procedures for bug fixes |
 
 ---
 
