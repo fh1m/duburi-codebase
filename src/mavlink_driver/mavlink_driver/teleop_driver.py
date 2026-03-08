@@ -2,15 +2,15 @@
 """
 Teleop driver - subscribes to /cmd_vel (Twist) and publishes DriverCommand.
 
-Maps simultaneous Twist axes to compound movement commands:
-  - linear.x  → forward / back
-  - linear.y  → left / right  (positive = right)
-  - linear.z  → up / down     (positive = up)
-  - angular.z → yaw_left / yaw_right
+Maps simultaneous Twist axes to a SINGLE 'teleop' DriverCommand carrying
+all 4 axes at once.  This avoids the old pattern where per-axis commands
+stomped _current_movement in the inspector.
 
-Horizontal axes are combined into compound diagonals (e.g. move_forward_right).
-Vertical (linear.z) is sent as a separate command because depth PID
-silently overrides CH_THROTTLE, making 3-axis compounds unreliable.
+Axis mapping:
+  - linear.x  → forward / back  (speed field, PWM offset)
+  - linear.y  → left / right    (duration field, +right / -left)
+  - linear.z  → up / down       (depth field, +up / -down)
+  - angular.z → yaw left/right  (angle field, +CCW / -CW)
 """
 
 import rclpy
@@ -39,57 +39,47 @@ class TeleopDriverNode(Node):
         )
         self._scale_linear = self.declare_parameter('scale_linear', 50.0).value
         self._scale_angular = self.declare_parameter('scale_angular', 50.0).value
+
+        # BUG4 FIX: Track whether we've already sent teleop_idle so we
+        # don't flood the inspector with idle commands every tick.
+        self._last_was_idle = False
+
         self.get_logger().info('Teleop driver ready (multi-axis). Publishing to /driver/command')
 
     def _twist_cb(self, msg: Twist):
-        """Convert Twist to one or two DriverCommands.
+        """Convert Twist to a single teleop DriverCommand.
 
-        Horizontal axes (x, y) are combined into a single command.
-        Vertical (z) and yaw (angular.z) are sent separately if active.
+        BUG3 FIX: All axes combined into ONE command.  The inspector's
+        'teleop' handler reads speed/duration/depth/angle as forward/
+        lateral/throttle/yaw PWM offsets, sets all channels at once.
+
+        BUG4 FIX: When all axes are in the dead-zone, send 'teleop_idle'
+        ONCE (clears movement without nuking depth PID / yaw hold).
         """
-        published = False
+        fwd = msg.linear.x if abs(msg.linear.x) > _DZ else 0.0
+        lat = msg.linear.y if abs(msg.linear.y) > _DZ else 0.0
+        vert = msg.linear.z if abs(msg.linear.z) > _DZ else 0.0
+        yaw = msg.angular.z if abs(msg.angular.z) > _DZ else 0.0
 
-        # ── Horizontal compound ──────────────────────────────────────────
-        dirs: list[str] = []
-        max_mag = 0.0
-        if abs(msg.linear.x) > _DZ:
-            dirs.append('forward' if msg.linear.x > 0 else 'back')
-            max_mag = max(max_mag, abs(msg.linear.x))
-        if abs(msg.linear.y) > _DZ:
-            dirs.append('right' if msg.linear.y > 0 else 'left')
-            max_mag = max(max_mag, abs(msg.linear.y))
+        if fwd == 0.0 and lat == 0.0 and vert == 0.0 and yaw == 0.0:
+            # All dead-zone → idle
+            if not self._last_was_idle:
+                cmd = DriverCommand()
+                cmd.command = 'teleop_idle'
+                self._cmd_pub.publish(cmd)
+                self._last_was_idle = True
+            return
 
-        if dirs:
-            cmd = DriverCommand()
-            cmd.command = 'move_' + '_'.join(dirs)
-            cmd.speed = int(self._scale_linear * max_mag)
-            cmd.duration = 0
-            self._cmd_pub.publish(cmd)
-            published = True
+        self._last_was_idle = False
 
-        # ── Vertical ─────────────────────────────────────────────────────
-        if abs(msg.linear.z) > _DZ:
-            cmd = DriverCommand()
-            cmd.command = 'move_up' if msg.linear.z > 0 else 'move_down'
-            cmd.speed = int(self._scale_linear * abs(msg.linear.z))
-            cmd.duration = 0
-            self._cmd_pub.publish(cmd)
-            published = True
-
-        # ── Yaw ──────────────────────────────────────────────────────────
-        if abs(msg.angular.z) > _DZ:
-            cmd = DriverCommand()
-            cmd.command = 'yaw_left' if msg.angular.z > 0 else 'yaw_right'
-            cmd.speed = int(self._scale_angular * abs(msg.angular.z))
-            cmd.duration = 0
-            self._cmd_pub.publish(cmd)
-            published = True
-
-        # ── All axes zero → stop ─────────────────────────────────────────
-        if not published:
-            cmd = DriverCommand()
-            cmd.command = 'stop'
-            self._cmd_pub.publish(cmd)
+        cmd = DriverCommand()
+        cmd.command = 'teleop'
+        # Encode PWM offsets: scale * magnitude, preserve sign
+        cmd.speed = int(self._scale_linear * fwd)       # forward (+) / back (-)
+        cmd.duration = self._scale_linear * lat          # right (+) / left (-)
+        cmd.depth = self._scale_linear * vert            # up (+) / down (-)
+        cmd.angle = self._scale_angular * yaw            # CCW/left (+) / CW/right (-)
+        self._cmd_pub.publish(cmd)
 
 
 def main(args=None):

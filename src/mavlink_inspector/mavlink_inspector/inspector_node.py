@@ -128,6 +128,13 @@ class MavlinkInspectorNode(Node):
         self._current = 0.0
         self._prev_armed = None
         self._prev_mode = None
+        self._prev_depth = 0.0   # for derivative-on-measurement (depth PID)
+        self._prev_yaw = 0.0     # for derivative-on-measurement (yaw PID)
+
+        # BUG6 FIX: Yaw source selection — AHRS2 and ATTITUDE both update yaw
+        # but at different rates, causing jitter. Configurable: 'attitude' (default),
+        # 'ahrs2', or 'both' (legacy, not recommended).
+        self._yaw_source = self.declare_parameter('yaw_source', 'attitude').value
 
         # Diagnostics state (lower priority, published at 2 Hz)
         self._heading_rate = 0.0      # deg/s
@@ -157,10 +164,13 @@ class MavlinkInspectorNode(Node):
         #   Ki handles steady-state drift — reduce if integral windup is visible.
         #   Kd damps overshoot — increase if AUV yo-yos past target.
         self._depth_kp = self.declare_parameter('depth_kp', 500.0).value
-        self._depth_ki = self.declare_parameter('depth_ki', 100.0).value
+        # BUG7 FIX: Ki reduced from 100→25 and max_integral from 2.0→0.5.
+        # Old values: ki=100, max_integral=2.0 → max I contribution = 200 PWM (50% of range!).
+        # New values: ki=25,  max_integral=0.5 → max I contribution = 12.5 PWM (safe offset).
+        # Integral now only compensates buoyancy drift, won't cause overshoot.
+        self._depth_ki = self.declare_parameter('depth_ki', 25.0).value
         self._depth_kd = self.declare_parameter('depth_kd', 200.0).value
-        # POOL TODO: If integral grows too fast in pool, lower this cap or reduce Ki.
-        self._depth_max_integral = self.declare_parameter('depth_max_integral', 2.0).value
+        self._depth_max_integral = self.declare_parameter('depth_max_integral', 0.5).value
         # POOL TODO: Increase tolerance if depth sensor noise causes throttle jitter
         #   at rest (try 0.10 or 0.15 if 0.05 is too tight).
         self._depth_tolerance = self.declare_parameter('depth_tolerance', 0.05).value  # metres
@@ -406,15 +416,24 @@ class MavlinkInspectorNode(Node):
                 self._publish_event('mode_change', f'Flight mode: {self._flight_mode}')
             self._prev_mode = self._flight_mode
         elif msg_type == 'AHRS2':
+            # AHRS2: secondary AHRS. Depth always comes from here.
+            # BUG6 FIX: Yaw only from AHRS2 if yaw_source='ahrs2' or 'both'.
+            self._prev_depth = self._depth  # store previous for derivative-on-measurement
             self._depth = msg.altitude
-            self._yaw = math.degrees(msg.yaw) % 360
+            if self._yaw_source in ('ahrs2', 'both'):
+                self._prev_yaw = self._yaw
+                self._yaw = math.degrees(msg.yaw) % 360
             self._pitch = math.degrees(msg.pitch)
             self._roll = math.degrees(msg.roll)
         elif msg_type == 'ATTITUDE':
+            # ATTITUDE: primary attitude (ArduSub standard for heading).
+            # BUG6 FIX: Yaw only from ATTITUDE if yaw_source='attitude' or 'both'.
             yaw_rad = msg.yaw
             if yaw_rad < 0:
                 yaw_rad += 2 * math.pi
-            self._yaw = math.degrees(yaw_rad) % 360
+            if self._yaw_source in ('attitude', 'both'):
+                self._prev_yaw = self._yaw
+                self._yaw = math.degrees(yaw_rad) % 360
             self._heading_rate = math.degrees(msg.yawspeed)
         elif msg_type == 'SYS_STATUS':
             self._voltage = msg.voltage_battery / 1000.0 if msg.voltage_battery != 0xFFFF else 0
@@ -763,15 +782,23 @@ class MavlinkInspectorNode(Node):
             # Proportional
             p_out = dh['kp'] * depth_error
 
-            # Integral with anti-windup
-            integral = dh.get('integral', 0.0) + depth_error * dt
+            # BUG7 FIX: Conditional integration — only accumulate integral when
+            # PID output is not saturated. Prevents windup during large transients.
+            last_output = dh.get('last_output', 0.0)
+            integral = dh.get('integral', 0.0)
+            if abs(last_output) < PWM_RANGE:  # not saturated → integrate
+                integral += depth_error * dt
             max_i = dh.get('max_integral', self._depth_max_integral)
             integral = max(-max_i, min(max_i, integral))
             i_out = dh['ki'] * integral
 
-            # Derivative (on error, with dt guard)
-            last_err = dh.get('last_error', depth_error)
-            d_out = dh['kd'] * (depth_error - last_err) / dt
+            # BUG1 FIX: Derivative on measurement instead of error.
+            # Old: d_out = kd * (error - last_error) / dt  — causes derivative kick
+            # when setpoint changes (error jumps, derivative spikes).
+            # New: d_out = -kd * (measurement - last_measurement) / dt
+            # This only responds to actual depth changes, not setpoint jumps.
+            depth_rate = (self._depth - self._prev_depth) / dt
+            d_out = -dh['kd'] * depth_rate
 
             # Total PID → throttle PWM
             # ArduSub throttle: >1500 = UP (ascend), <1500 = DOWN (descend)
@@ -788,6 +815,7 @@ class MavlinkInspectorNode(Node):
                     self._depth_pid['integral'] = integral
                     self._depth_pid['last_error'] = depth_error
                     self._depth_pid['last_time'] = now
+                    self._depth_pid['last_output'] = throttle_offset
 
         # ── Layer 4: yaw-to-heading (overrides CH_YAW) ──────────────────
         if y2h is not None:
@@ -808,11 +836,21 @@ class MavlinkInspectorNode(Node):
                 max_i = y2h.get('max_integral', self._yaw_max_integral)
                 integral = max(-max_i, min(max_i, integral))
                 i_out = y2h['ki'] * integral
-                last_err = y2h.get('last_error', err)
-                d_out = y2h['kd'] * (err - last_err) / dt
+
+                # BUG1 FIX: Derivative on measurement instead of error.
+                # Old: d_out = kd * (error - last_error) / dt  — derivative kick on setpoint change.
+                # New: d_out = -kd * yaw_rate (from ATTITUDE msg, deg/s).
+                # Uses the gyro-measured heading rate directly — much smoother than
+                # differencing discrete position samples, and immune to setpoint jumps.
+                d_out = -y2h['kd'] * self._heading_rate
 
                 pid_output = p_out + i_out + d_out
-                pwm_offset = max(-PWM_RANGE, min(PWM_RANGE, int(pid_output)))
+                # BUG2 FIX: Scale PID output by user's speed parameter.
+                # Previously gain_offset was stored but ignored for PID mode.
+                # Now speed acts as a max output clamp: PID output is clamped to
+                # ±gain_offset instead of ±PWM_RANGE. Lower speed% = gentler turns.
+                max_pwm = y2h.get('gain_offset', PWM_RANGE)
+                pwm_offset = max(-max_pwm, min(max_pwm, int(pid_output)))
                 channels[CH_YAW] = NEUTRAL_PWM + pwm_offset
 
                 with self._movement_lock:
@@ -851,7 +889,7 @@ class MavlinkInspectorNode(Node):
         self.get_logger().info(f'RX command: {c}{param_str}')
 
         # Commands allowed when disarmed
-        UNARMED_ALLOWED = {'arm', 'disarm', 'set_mode', 'stop', 'pid_depth_off', 'surface'}
+        UNARMED_ALLOWED = {'arm', 'disarm', 'set_mode', 'stop', 'pid_depth_off', 'surface', 'teleop_idle'}
         if not self._armed and c not in UNARMED_ALLOWED:
             self.get_logger().warn(f'Rejecting "{c}" - vehicle not armed. Arm first.')
             self._publish_event('command_rejected', f'"{c}" rejected: vehicle not armed')
@@ -1039,7 +1077,10 @@ class MavlinkInspectorNode(Node):
             if self._flight_mode != 'ALT_HOLD':
                 self.get_logger().info('Auto-switching to ALT_HOLD for firmware depth hold')
                 self._set_mode('ALT_HOLD')
-                time.sleep(0.5)  # Give mode switch time to take effect
+                # BUG5 FIX: Was time.sleep(0.5) which blocks the ROS callback thread,
+                # delaying any commands arriving within 500ms. Instead, schedule the
+                # depth target to be sent by the resend timer (runs at 2 Hz, fires
+                # within 500ms). No blocking needed.
             self._alt_hold_target = d  # Store for periodic re-send
             self._set_target_depth(d)
             # Disable software depth PID if active (ALT_HOLD replaces it)
@@ -1126,6 +1167,39 @@ class MavlinkInspectorNode(Node):
         elif c == 'close_grabber':
             self._set_servo_pwm(1, 1900)
             self._publish_event('actuator', 'Grabber close')
+
+        # ── BUG3 FIX: Multi-axis teleop command ─────────────────────────
+        # Single command carries all 4 axes simultaneously via repurposed
+        # msg fields.  Prevents the old pattern where separate per-axis
+        # DriverCommands stomped _current_movement.
+        #
+        # Field encoding (all PWM offsets from 1500, clamped ±PWM_RANGE):
+        #   speed    → forward  (>0 = forward, <0 = backward)
+        #   duration → lateral  (>0 = right,   <0 = left)
+        #   depth    → throttle (>0 = up,      <0 = down)
+        #   angle    → yaw      (>0 = CCW/left, <0 = CW/right)
+        elif c == 'teleop':
+            clamp = lambda v: max(-PWM_RANGE, min(PWM_RANGE, int(v)))
+            fwd  = clamp(cmd.speed)
+            lat  = clamp(cmd.duration)
+            thr  = clamp(cmd.depth)
+            yaw  = clamp(cmd.angle)
+            channels = {
+                CH_FORWARD:  NEUTRAL_PWM + fwd,
+                CH_LATERAL:  NEUTRAL_PWM + lat,
+                CH_THROTTLE: NEUTRAL_PWM + thr,
+                CH_YAW:      NEUTRAL_PWM + yaw,
+            }
+            set_movement(channels, f'Teleop (fwd={fwd} lat={lat} thr={thr} yaw={yaw})')
+
+        # BUG4 FIX: Gentle stop for teleop — clears _current_movement but
+        # preserves _depth_pid and _yaw_to_heading.  Unlike 'stop' which
+        # nukes everything, this only neutralises the movement overlay.
+        elif c == 'teleop_idle':
+            with self._movement_lock:
+                self._current_movement = None
+            # Don't publish event — teleop_idle is sent every tick when
+            # joystick is centred.  Logging each one would flood events.
 
         else:
             self.get_logger().warn(f'Unknown command: {c}')

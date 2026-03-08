@@ -91,8 +91,9 @@ ros2 run mavlink_inspector inspector --ros-args -p connection_port:=/dev/ttyACM0
 
 ### 13. Teleop Driver — Depth PID Interaction
 
-- Teleop sends vertical commands (`move_up`/`move_down`) as separate DriverCommands, not as part of a compound.
-- If `p_dive` is active, Layer 3 overrides CH_THROTTLE and the vertical teleop command has no effect.
+- ~~Teleop sends vertical commands (`move_up`/`move_down`) as separate DriverCommands, not as part of a compound.~~
+- **Status: Fixed** — Teleop now sends a single `teleop` command with all 4 axes combined. No more per-axis stomping.
+- If `p_dive` is active, Layer 3 overrides CH_THROTTLE and the vertical teleop axis has no effect.
 - Users should disable `p_dive` before using vertical teleop axes.
 
 ### 14. Logger Path Changes
@@ -100,3 +101,81 @@ ros2 run mavlink_inspector inspector --ros-args -p connection_port:=/dev/ttyACM0
 - Logger now stores logs in `<workspace>/logs/<YYYY-MM-DD_HH-MM-SS>/` (was `~/auv_logs/`).
 - Session folder is created at startup. Each session has: `session.log`, `events.log`, `commands.log`, `state.csv`.
 - RotatingFileHandler: 5 MB max, 3 backups per log file.
+
+---
+
+## Bug Fixes (Audit Batch — 2026-03)
+
+### 15. BUG1 — PID Derivative Kick (inspector_node.py)
+
+**Problem:** Both depth and yaw PID controllers computed the derivative term as `Kd * (error - last_error) / dt`. When the setpoint changes (e.g. new target depth), the error jumps instantly, producing a massive derivative spike that sends a full-range PWM pulse. This is the textbook "derivative kick" problem.
+
+**Fix:** Changed to derivative-on-measurement:
+- Depth PID: `d_out = -Kd * (current_depth - prev_depth) / dt` — responds only to actual depth changes, not setpoint jumps.
+- Yaw PID: `d_out = -Kd * heading_rate` — uses the gyro-measured yaw rate from ATTITUDE messages directly, which is smoother than differencing discrete samples.
+
+**Files:** `inspector_node.py` (depth PID ~L770, yaw PID ~L810)
+
+### 16. BUG2 — Yaw PID Speed Parameter Ignored (inspector_node.py)
+
+**Problem:** `pid_yaw_to_heading` accepted a `speed` parameter and stored it as `gain_offset`, but the PID loop clamped output to `±PWM_RANGE` (400) regardless. A user requesting `~yaw 90 30%` got the same max thrust as `~yaw 90 100%`.
+
+**Fix:** PID output is now clamped to `±gain_offset` instead of `±PWM_RANGE`. Lower speed = gentler maximum PID correction.
+
+**Files:** `inspector_node.py` (yaw PID output clamp ~L820)
+
+### 17. BUG3 — Teleop Multi-Axis Broken (teleop_driver.py)
+
+**Problem:** The teleop driver published up to 3 separate DriverCommands per Twist callback (horizontal, vertical, yaw). Each one replaced `_current_movement` in the inspector, so only the last command took effect. Moving diagonally with vertical thrust was impossible.
+
+**Fix:** New `teleop` command carries all 4 axes in a single DriverCommand:
+- `speed` → forward/back PWM offset
+- `duration` → lateral PWM offset (repurposed field)
+- `depth` → throttle PWM offset
+- `angle` → yaw PWM offset
+
+Inspector decodes all 4 and sets channels in one `_current_movement`.
+
+**Files:** `teleop_driver.py` (complete rewrite of `_twist_cb`), `inspector_node.py` (new `teleop` command handler)
+
+### 18. BUG4 — Teleop Stop Floods (teleop_driver.py)
+
+**Problem:** When all joystick axes returned to centre, the teleop driver published a `stop` command **every tick**. The `stop` handler clears `_depth_pid`, `_yaw_to_heading`, and `_alt_hold_target` — so any active depth hold or heading lock was destroyed whenever the joystick was idle.
+
+**Fix:**
+1. New `teleop_idle` command in inspector — clears `_current_movement` only, preserves PIDs and heading lock.
+2. Teleop driver tracks `_last_was_idle` flag and sends `teleop_idle` only once when entering dead-zone.
+
+**Files:** `teleop_driver.py` (idle tracking), `inspector_node.py` (new `teleop_idle` command handler)
+
+### 19. BUG5 — `time.sleep(0.5)` Blocks Callback Thread (inspector_node.py)
+
+**Problem:** The `set_depth` handler called `time.sleep(0.5)` after switching to ALT_HOLD mode to "wait for mode switch to take effect". This blocked the ROS callback thread for 500ms, delaying all other incoming commands during that window.
+
+**Fix:** Removed the `sleep()`. The depth target is sent immediately after the mode switch — the 2Hz resend timer (`_resend_alt_hold`) ensures the target is retransmitted if the first one arrives before the mode switch completes.
+
+**Files:** `inspector_node.py` (`set_depth` handler ~L1090)
+
+### 20. BUG6 — Dual Yaw Source Jitter (inspector_node.py)
+
+**Problem:** Both `AHRS2` and `ATTITUDE` MAVLink messages wrote to `self._yaw`, but at different rates and from different EKF filters. When both are active, `_yaw` alternates between two slightly different values, causing PID oscillation and heading hold jitter.
+
+**Fix:** New ROS parameter `yaw_source` (default: `'attitude'`) selects which message updates `self._yaw`:
+- `'attitude'` — ATTITUDE only (recommended, higher rate, primary ArduSub AHRS)
+- `'ahrs2'` — AHRS2 only
+- `'both'` — legacy behaviour (both update, not recommended)
+
+Depth always comes from AHRS2 regardless of yaw source.
+
+**Files:** `inspector_node.py` (AHRS2/ATTITUDE handlers ~L410-430, new `yaw_source` parameter ~L140)
+
+### 21. BUG7 — Integral Windup Aggressive Defaults (inspector_node.py)
+
+**Problem:** Depth PID defaults were Ki=100, max_integral=2.0 → maximum integral contribution = Ki × max_integral = 200 PWM (50% of the 400-PWM range). On descent, the integral quickly saturated, and upon reaching target depth the accumulated integral drove a massive overshoot requiring many seconds to unwind.
+
+**Fix:**
+1. **Reduced defaults:** Ki: 100→25, max_integral: 2.0→0.5 → max I contribution = 12.5 PWM (3% of range). Now integrals only compensate for buoyancy drift, not overpower proportional control.
+2. **Conditional integration:** Integral accumulation pauses when PID output is saturated (|output| ≥ PWM_RANGE). Prevents windup during large transients.
+3. All defaults remain overridable via ROS parameters (`depth_ki`, `depth_max_integral`).
+
+**Files:** `inspector_node.py` (depth PID defaults ~L155, depth PID loop ~L770)
