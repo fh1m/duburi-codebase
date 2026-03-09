@@ -150,6 +150,27 @@ class MavlinkInspectorNode(Node):
         # Yaw-to-heading: use thrusters to reach target (not set_attitude_target)
         self._yaw_to_heading = None  # {target_deg, gain_offset, tolerance_deg, ...}
 
+        # ── Acceleration / deceleration ramp (Design Issue 1) ────────────
+        # Movement commands set target PWM instantly, but actual PWM sent to
+        # thrusters is ramped at `ramp_rate` PWM/second to produce trapezoidal
+        # velocity profiles.  This prevents mechanical stress, current spikes,
+        # and jerky motion from instant PWM jumps.
+        #
+        # How it works:
+        #   - _ramped_channels tracks the ACTUAL PWM being sent per channel.
+        #   - Each 20Hz tick, actual moves toward target by ramp_rate * dt.
+        #   - When movement expires, target becomes neutral → natural decel.
+        #   - stop command bypasses ramp (instant neutral for safety).
+        #
+        # NOT applied to PID layers (depth, yaw, future vision).  PID output
+        # is inherently smooth (proportional to error).  Ramping PID output
+        # would add phase lag and degrade disturbance rejection.
+        #
+        # Default 800 PWM/s → 0.5s full-range ramp (0 to ±400 PWM).
+        # 50% speed (±200 offset) ramps in ~0.25s.
+        self._ramped_channels = {}  # {channel_id: current_actual_pwm (float)}
+        self._ramp_rate = self.declare_parameter('ramp_rate', 800).value  # PWM/second
+
         # PID yaw gains (tunable via ROS params)
         self._yaw_kp = self.declare_parameter('yaw_kp', 2.0).value
         self._yaw_ki = self.declare_parameter('yaw_ki', 0.05).value
@@ -723,11 +744,16 @@ class MavlinkInspectorNode(Node):
     }
 
     def _stop_all(self):
-        """Stop all thrusters (neutral) in a single RC message."""
+        """Stop all thrusters (neutral) in a single RC message.
+
+        Safety override: bypasses the ramp and sends neutral IMMEDIATELY.
+        When the operator says stop, the AUV stops NOW — no gradual decel.
+        """
         with self._movement_lock:
             self._current_movement = None
             self._yaw_to_heading = None
             self._depth_pid = None
+        self._ramped_channels.clear()  # reset ramp — instant neutral
         self._alt_hold_target = None
         self._send_rc_channels(self._NEUTRAL_CHANNELS)
         self._publish_event('movement', 'Stop - all thrusters neutral')
@@ -768,9 +794,36 @@ class MavlinkInspectorNode(Node):
         # ── Layer 1: base neutral ────────────────────────────────────────
         channels = dict(self._NEUTRAL_CHANNELS)
 
-        # ── Layer 2: active movement ─────────────────────────────────────
-        if mv is not None:
-            channels.update(mv.get('channels', {}))
+        # ── Layer 2: active movement (ramped) ─────────────────────────
+        # Instead of instantly copying target PWM, we ramp actual PWM toward
+        # target at ramp_rate PWM/second.  This produces a trapezoidal
+        # velocity profile: smooth accel → cruise → smooth decel.
+        #
+        # Only movement channels (Layer 2) are ramped.  PID layers (3, 4)
+        # write directly — they're already smooth (proportional to error)
+        # and ramping PID output would add harmful phase lag.
+        #
+        # When movement expires (mv=None), targets become neutral (1500),
+        # so channels naturally ramp down — no special decel code needed.
+        # stop command clears _ramped_channels for instant halt (safety).
+        ramp_rate = self._ramp_rate
+        dt = 0.05  # 20Hz tick period
+        max_step = ramp_rate * dt  # max PWM change per tick
+
+        # Channels subject to ramping (movement axes only)
+        RAMP_CHANNELS = (CH_FORWARD, CH_LATERAL, CH_THROTTLE, CH_YAW)
+        targets = mv.get('channels', {}) if mv is not None else {}
+
+        for ch in RAMP_CHANNELS:
+            target = float(targets.get(ch, NEUTRAL_PWM))
+            current = self._ramped_channels.get(ch, float(NEUTRAL_PWM))
+            diff = target - current
+            if abs(diff) <= max_step:
+                current = target  # close enough — snap to avoid jitter
+            else:
+                current += max_step if diff > 0 else -max_step
+            self._ramped_channels[ch] = current
+            channels[ch] = int(round(current))
 
         # ── Layer 3: depth PID (overrides CH_THROTTLE) ───────────────────
         if dh is not None:
