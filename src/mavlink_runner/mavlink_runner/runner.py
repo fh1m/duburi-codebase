@@ -630,7 +630,7 @@ class DuburiRunnerNode(Node):
                 print(f'Unknown direction: {direction}. Use: forward, back, left, right (or diagonal e.g. forward-right)')
                 return True, 0.0
             go_cmd = DriverCommand(
-                command='go_' + '_'.join(parts),
+                command=_cmd_name('go_' + '_'.join(parts)),
                 angle=heading,
                 duration=duration,
                 speed=int(gain),
@@ -641,7 +641,7 @@ class DuburiRunnerNode(Node):
                     extra.append(f'{gain}%')
                 if duration:
                     extra.append(f'{duration}s')
-                print(f'Go {direction} → {heading}°' + (' ' + ' '.join(extra) if extra else ''))
+                print(f'{_just_label}Go {direction} → {heading}°' + (' ' + ' '.join(extra) if extra else ''))
                 return True, duration
             return True, 0.0
 

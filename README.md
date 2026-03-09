@@ -41,7 +41,7 @@ ROS 2 workspace for the BRACU Duburi AUV 4.2. Controls via Pixhawk 2.4.8 / ArduS
 
 | Package | Description |
 |---------|-------------|
-| `duburi_interfaces` | Shared messages: `DriverCommand`, `MavlinkEvent`, `VehicleState`, `VehicleDiagnostics`, `Detection`, `DetectionArray` |
+| `duburi_interfaces` | Shared messages: `DriverCommand`, `MavlinkEvent`, `VehicleState`, `VehicleDiagnostics`, `DriverCommandFeedback`, `Detection`, `DetectionArray` |
 | `mavlink_inspector` | Main Pixhawk connection hub. Owns serial port, executes commands via MAVLink, publishes events and vehicle state |
 | `mavlink_driver` | Movement control: `mission_executor` (predefined missions), `teleop_driver` (Twist → DriverCommand) |
 | `mavlink_runner` | Interactive CLI with `Duburi >` prompt for quick testing and file-based missions |
@@ -133,7 +133,10 @@ The runner provides an interactive prompt for direct control and file-based miss
 | *(bare)* | ArduSub firmware / standard | `depth 0.5`, `heading 90`, `turn left 45` |
 | `~` | Software PID (smooth, closed-loop) | `~depth 0.5`, `~heading 90`, `~turn left 45` |
 | `move` | Single/compound directional thrust | `move forward 50%`, `move forward-right 50%` |
+| `at` | Body-frame vector thrust (arbitrary angle) | `at 45 60% 5s` (45° from forward) |
 | `go` | Movement + PID heading hold | `go forward 90 50%`, `go forward-right 45 50%` |
+| `cruise` | Movement + depth PID + heading PID | `cruise 0 90 0.5 60% 10s` |
+| `just` | Instant (bypass PWM ramp) variant | `just forward`, `just go forward 90`, `just cruise ...` |
 
 All old command names (`dive`, `p_dive`, `yaw`, `p_yaw`, `p_turn`) are kept as backward-compatible aliases.
 
@@ -254,15 +257,15 @@ go forward 90 60% 5s
 ```
 
 1. **Tick 0 (instantly):** Inspector sets BOTH:
-   - `_current_movement` → CH_FORWARD=1740 (60%), CH_LATERAL=1500, CH_THROTTLE=1500, CH_YAW=1500
+   - `_current_movement` → CH_FORWARD=1740 (60%)  *(only the channels the command owns)*
    - `_yaw_to_heading` → PID targeting 90°
 2. **Every 50ms (20 Hz):** The RC override layer builds one combined PWM message:
-   - Layer 2: forward thrust from `_current_movement`
+   - Layer 2: forward thrust from `_current_movement` (ramped toward target)
    - Layer 3: depth PID overrides CH_THROTTLE (if `p_dive` active)
    - Layer 4: yaw PID overrides CH_YAW with correction toward 90°
 3. **The AUV moves forward AND rotates toward 90° simultaneously from the first tick.**
-4. **When heading 90° is reached** (within 3°): yaw PID stops. CH_YAW goes neutral. Forward thrust continues.
-5. **After 5 seconds:** movement expires. All channels go neutral. AUV stops.
+4. **When heading 90° is reached** (within 3°): yaw PID output goes to zero. Forward thrust continues.
+5. **After 5 seconds:** movement expires. Ramp smoothly decelerates to neutral. AUV stops.
 
 > **Key insight:** `go` doesn't "first turn, then move." Translation and rotation happen in parallel from the very start.
 
@@ -280,29 +283,86 @@ This holds 0.5m depth (Layer 3) while moving forward toward 90° (Layers 2+4).
 
 ---
 
+### Body-Frame Vector Movement (`at` commands)
+
+Move in an arbitrary direction relative to the AUV body using a bearing angle. The bearing is decomposed into forward + lateral channels using cos/sin.
+
+| Command | Example | Description |
+|---------|---------|-------------|
+| `at <deg> [gain%] [Ns]` | `at 45 60% 5s` | Move at 45° (forward-right diagonal) |
+| `at <deg> [gain%] [Ns]` | `at 90 50% 3s` | Move at 90° (pure right strafe) |
+| `at <deg> [gain%] [Ns]` | `at 180 50%` | Move at 180° (pure backward) |
+
+**Bearing reference:** 0° = forward, 90° = right, 180° = backward, 270° = left.
+
+> Why use `at` instead of `move forward-right`? Diagonals use fixed √2 scaling at 45°. `at` lets you move at *any* arbitrary angle (e.g. 30°, 60°, 120°).
+
+---
+
+### Coordinated Cruise
+
+The `cruise` command combines body-frame vector movement, depth PID, and heading PID into a single coordinated manoeuvre. This is the most comprehensive command — the AUV moves in a direction, holds a heading, and maintains depth simultaneously.
+
+| Command | Example | Description |
+|---------|---------|-------------|
+| `cruise <bearing°> <heading°> <depth_m> [gain%] [Ns]` | `cruise 0 90 0.5 60% 10s` | Move forward, hold 90° heading, hold 0.5m depth |
+| `cruise <bearing°> <heading°> <depth_m> [gain%] [Ns]` | `cruise 45 45 1.0 50%` | Move at 45°, hold 45° heading, hold 1.0m depth |
+
+- **bearing** — body-frame thrust direction (0° = forward)
+- **heading** — target compass heading for yaw PID
+- **depth** — target depth in meters for depth PID (0 = current depth)
+
+---
+
+### Instant (No-Ramp) Variants (`just` prefix)
+
+All movement commands accept a `just` prefix that bypasses PWM ramping for instant thruster response. This is useful for emergency manoeuvres or when you need raw bang-bang control.
+
+| Command | Example | Description |
+|---------|---------|-------------|
+| `just forward [gain%] [Ns]` | `just forward 50% 3s` | Instant forward thrust |
+| `just back [gain%] [Ns]` | `just back 50%` | Instant backward thrust |
+| `just surface` | `just surface` | Instant surface |
+| `just at <deg> [gain%] [Ns]` | `just at 45 60%` | Instant vector movement |
+| `just go forward <deg> [gain%] [Ns]` | `just go forward 90 60%` | Instant go + heading |
+| `just cruise <bear> <head> <dep> [%] [s]` | `just cruise 0 90 0.5 60%` | Instant cruise |
+| `just forward-right [gain%] [Ns]` | `just forward-right 50%` | Instant diagonal |
+
+> **When to use `just`:** Emergency stops/corrections, testing thruster response, or when ramp delay is unacceptable. For normal operation, ramped commands are preferred — they're gentler on thrusters and produce smoother motion.
+
+---
+
 ### How the RC Override Layering Works
 
 Every 50ms, the inspector builds a single PWM message from 4 layers:
 
 ```
 Layer 1: Neutral (1500) on all channels ─── baseline
-Layer 2: Active movement ─── sets CH_FORWARD, CH_LATERAL, CH_THROTTLE, CH_YAW
+Layer 2: Active movement (ramped) ─── sets only the channels the command owns
 Layer 3: Depth PID ─── OVERRIDES CH_THROTTLE (if p_dive active)
 Layer 4: Yaw PID ─── OVERRIDES CH_YAW (if go/p_yaw/yaw active)
 ```
 
-Higher layers override lower ones. This means:
+Higher layers override lower ones. Movement commands (DESIGN 5) only set the channels they control:
+- `move forward` → sets CH_FORWARD only
+- `move forward-right` → sets CH_FORWARD + CH_LATERAL only
+- `move up` → sets CH_THROTTLE only
+- `yaw left` → sets CH_YAW only
+
+PWM values are **ramped** (smooth acceleration) by default. `just *` variants bypass ramping for instant response.
+
+Examples:
 - `move forward` alone → Layer 2 sets forward thrust
 - `move forward` + `p_dive 0.5` → Layer 2 sets forward, Layer 3 overwrites throttle
-- `go forward 90` → Layer 2 sets forward + neutral yaw, Layer 4 overwrites yaw with PID
+- `go forward 90` → Layer 2 sets forward, Layer 4 adds yaw PID
 - `go forward-right 45` + `p_dive 0.3` → Layers 2+3+4 all active simultaneously
 
 | Channel | What controls it | Priority |
 |---------|------------------|----------|
 | CH_FORWARD (5) | Movement commands | Layer 2 |
 | CH_LATERAL (6) | Movement commands | Layer 2 |
-| CH_THROTTLE (3) | `move up/down`, OR `p_dive`/`dive` | Layer 3 overrides Layer 2 |
-| CH_YAW (4) | `yaw left/right`, OR `go`/`p_yaw` | Layer 4 overrides Layer 2 |
+| CH_THROTTLE (3) | `move up/down` (Layer 2), OR `p_dive`/`dive` (Layer 3) | Layer 3 overrides Layer 2 |
+| CH_YAW (4) | `yaw left/right` (Layer 2), OR `go`/`p_yaw` (Layer 4) | Layer 4 overrides Layer 2 |
 
 ---
 
@@ -752,6 +812,7 @@ Normalized center coordinates (`center_x`, `center_y`) are designed for easy fut
 | Topic | Type | Direction | Description |
 |-------|------|-----------|-------------|
 | `/driver/command` | `DriverCommand` | → Inspector | Movement and control commands |
+| `/driver/feedback` | `DriverCommandFeedback` | Inspector → | Command acknowledgement (accepted/completed/reached) |
 | `/mavlink/events` | `MavlinkEvent` | Inspector → | Arm/disarm, mode, movement events |
 | `/mavlink/vehicle_state` | `VehicleState` | Inspector → | Armed, mode, depth, yaw, voltage (10 Hz) |
 | `/mavlink/diagnostics` | `VehicleDiagnostics` | Inspector → | Heading rate, pressure, servos, RC, CPU (2 Hz) |
@@ -766,11 +827,11 @@ Normalized center coordinates (`center_x`, `center_y`) are designed for easy fut
 | Field | Description |
 |-------|-------------|
 | `command` | See command reference below |
-| `mode` | For `set_mode`: `MANUAL`, `ALT_HOLD`, `STABILIZE` |
-| `depth` | Target depth in meters (for `set_depth`, `pid_depth`) |
-| `angle` | Target heading in degrees 0–360 (for `yaw_to_heading`, `pid_yaw_to_heading`, `go_*`) |
-| `duration` | Duration in seconds (0 = indefinite) |
-| `speed` | Gain 0–100 (percent) |
+| `mode` | For `set_mode`: flight mode name. For `cruise`/`just_cruise`: target heading (string, parsed to float). |
+| `depth` | Target depth in meters (for `set_depth`, `pid_depth`, `cruise`). *Teleop: throttle PWM offset.* |
+| `angle` | Target heading/bearing in degrees (for `yaw_to_heading`, `go_*`, `move_at`, `cruise`). *Teleop: yaw offset.* |
+| `duration` | Duration in seconds (0 = indefinite). *Teleop: lateral PWM offset.* |
+| `speed` | Gain 0–100 (percent). *Teleop: forward PWM offset.* |
 
 **Command reference:**
 
@@ -782,6 +843,7 @@ Normalized center coordinates (`center_x`, `center_y`) are designed for easy fut
 | `move_right` | Movement | Single-axis strafe right |
 | `move_up` | Movement | Single-axis up (prefer `pid_depth`) |
 | `move_down` | Movement | Single-axis down (prefer `pid_depth`) |
+| `move_at` | Vector | Body-frame vector movement at `angle` bearing |
 | `move_forward_right` | Diagonal | Horizontal diagonal (√2 scaled) |
 | `move_forward_left` | Diagonal | Horizontal diagonal (√2 scaled) |
 | `move_back_right` | Diagonal | Horizontal diagonal (√2 scaled) |
@@ -794,6 +856,8 @@ Normalized center coordinates (`center_x`, `center_y`) are designed for easy fut
 | `go_forward_left` | Go | Diagonal + PID yaw to `angle` |
 | `go_back_right` | Go | Diagonal + PID yaw to `angle` |
 | `go_back_left` | Go | Diagonal + PID yaw to `angle` |
+| `cruise` | Cruise | Vector move + depth PID + heading PID |
+| `yaw_angle` | Heading | Legacy SET_ATTITUDE_TARGET |
 | `yaw_to_heading` | Heading | Bang-bang yaw to `angle` |
 | `pid_yaw_to_heading` | Heading | PID yaw to `angle` |
 | `yaw_left` | Heading | Open-loop rotate left |
@@ -810,6 +874,7 @@ Normalized center coordinates (`center_x`, `center_y`) are designed for easy fut
 | `close_grabber` | Actuator | Close grabber servo |
 | `teleop` | Teleop | All 4 axes in one command (used by teleop_driver) |
 | `teleop_idle` | Teleop | Clear movement without nuking PIDs (used by teleop_driver) |
+| `just_*` | Instant | Any movement command with `just_` prefix bypasses PWM ramp |
 
 ---
 
@@ -822,14 +887,18 @@ The inspector node accepts the following ROS parameters for tuning:
 | `connection_port` | `/dev/ttyACM0` | Pixhawk serial port |
 | `baud` | `115200` | Serial baud rate |
 | `yaw_source` | `attitude` | Which MAVLink message updates yaw: `attitude` (ATTITUDE, recommended), `ahrs2` (AHRS2), or `both` (legacy, causes jitter) |
+| `ramp_rate` | `800` | PWM velocity ramp rate (PWM/second). 800 = 0.5s full-range ramp |
 | `depth_kp` | `500.0` | Depth PID proportional gain |
 | `depth_ki` | `25.0` | Depth PID integral gain |
 | `depth_kd` | `200.0` | Depth PID derivative gain |
 | `depth_max_integral` | `0.5` | Depth PID max integral accumulator (anti-windup cap) |
+| `depth_tolerance` | `0.05` | Depth PID deadband tolerance in metres |
 | `yaw_kp` | `2.0` | Yaw PID proportional gain |
 | `yaw_ki` | `0.05` | Yaw PID integral gain |
 | `yaw_kd` | `0.5` | Yaw PID derivative gain |
 | `yaw_max_integral` | `50.0` | Yaw PID max integral accumulator |
+| `pid_max_rate` | `50` | Max PID output change per tick (PWM units). Prevents thruster hunting |
+| `nominal_voltage` | `0.0` | Battery voltage for compensation (0 = disabled). Set to full-charge voltage to maintain consistent thrust as battery depletes |
 
 ```bash
 # Override parameters at launch
@@ -866,6 +935,7 @@ The `analysis/` folder contains detailed technical documentation:
 | `09_KNOWN_ISSUES_AND_GOTCHAS.md` | Known issues, edge cases, and fixes (21 entries) |
 | `10_DESIGN_ISSUES.md` | 7 architectural concerns with severity/effort ratings |
 | `11_DESK_TESTING_GUIDE.md` | Step-by-step desk testing procedures for bug fixes |
+| `12_COMMAND_REFERENCE.md` | Complete command reference with examples and field encoding |
 
 ---
 

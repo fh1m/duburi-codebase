@@ -25,6 +25,10 @@ This folder contains comprehensive documentation for the BRACU Duburi AUV 4.2 RO
 | `06_INTERFACES.md` | duburi_interfaces – messages and fields |
 | `07_ARDUSUB_CONSTRAINTS.md` | ArduSub requirements that shape the design |
 | `08_AGENT_GUIDE.md` | Quick reference for agents |
+| `09_KNOWN_ISSUES_AND_GOTCHAS.md` | Known issues, edge cases, and applied fixes |
+| `10_DESIGN_ISSUES.md` | 7 architectural concerns with severity/effort ratings |
+| `11_DESK_TESTING_GUIDE.md` | Step-by-step desk testing procedures |
+| `12_COMMAND_REFERENCE.md` | Complete command reference with field encoding details |
 
 ## Key Invariants (Do Not Violate)
 

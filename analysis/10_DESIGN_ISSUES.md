@@ -6,23 +6,24 @@
 
 ---
 
-## Issue 1 — God Object: `MavlinkInspectorNode` (1300+ lines)
+## Issue 1 — God Object: `MavlinkInspectorNode` (1700+ lines)
 
 **Severity:** HIGH  |  **Effort to fix:** HIGH
 
 ### What It Is
 
-`inspector_node.py` contains a single 1300-line class that handles everything:
+`inspector_node.py` contains a single 1700-line class that handles everything:
 
 | Responsibility | Lines | Description |
 |---|---|---|
-| Serial connection & reconnect | ~L100–L328 | Port scanning, heartbeat, auto-reconnect with backoff |
-| MAVLink message parsing | ~L396–L520 | 8 message types (HEARTBEAT, AHRS2, ATTITUDE, etc.) |
-| State publishing | ~L521–L590 | VehicleState + VehicleDiagnostics at 10Hz / 2Hz |
-| PID controllers (depth + yaw) | ~L788–L862 | Two separate control loops embedded in RC timer |
-| RC override (20 Hz) | ~L756–L869 | 4-layer priority channel builder |
-| Command dispatch | ~L871–L1204 | 25+ if/elif branches for DriverCommand handling |
-| Arm/disarm, mode, servo | ~L1210–L1306 | Actuator & mode control helpers |
+| Serial connection & reconnect | ~L100–L392 | Port scanning, heartbeat, auto-reconnect with backoff |
+| MAVLink message parsing | ~L456–L563 | 8 message types (HEARTBEAT, AHRS2, ATTITUDE, etc.) |
+| State publishing | ~L576–L633 | VehicleState + VehicleDiagnostics at 10Hz / 2Hz |
+| PID controllers (depth + yaw) | ~L876–L984 | Two control loops with rate limiting (DESIGN 7) |
+| PWM ramp + RC override (20 Hz) | ~L805–L986 | 4-layer priority channel builder with smooth transitions |
+| Command dispatch | ~L988–L1639 | 30+ if/elif branches for DriverCommand handling |
+| Feedback publisher | ~L291–L307 | DriverCommandFeedback (DESIGN 6) |
+| Arm/disarm, mode, servo | ~L1641–L1710 | Actuator & mode control helpers |
 
 ### Why It's a Problem
 
@@ -127,6 +128,10 @@ configuration. Changing pool behavior requires editing source code.
 | Teleop dead-zone | teleop_driver.py | `0.1` | No |
 | Mission startup delay | mission_executor.py | `3.0` s | No |
 | State log interval | logger_node.py | `1.0` s | No |
+| PWM ramp rate | inspector_node.py | 800 PWM/s | **Yes** ✓ (ramp_rate) |
+| PID max rate | inspector_node.py | 50 PWM/tick | **Yes** ✓ (pid_max_rate) |
+| Nominal voltage | inspector_node.py | 0.0 (disabled) | **Yes** ✓ (nominal_voltage) |
+| Depth tolerance | inspector_node.py | 0.05 m | **Yes** ✓ (depth_tolerance) |
 | Depth PID gains | inspector_node.py | Kp/Ki/Kd | **Yes** ✓ |
 | Yaw PID gains | inspector_node.py | Kp/Ki/Kd | **Yes** ✓ |
 | Connection port | inspector_node.py | `/dev/ttyACM0` | **Yes** ✓ |
@@ -146,13 +151,13 @@ the team can swap profiles on launch day without touching code.
 
 ---
 
-## Issue 4 — if/elif Command Dispatch Chain (25+ branches)
+## Issue 4 — if/elif Command Dispatch Chain (30+ branches)
 
 **Severity:** MEDIUM  |  **Effort to fix:** MEDIUM
 
 ### What It Is
 
-`_on_driver_command()` (~L871–L1204) is a 330-line method with 25+ `if/elif`
+`_on_driver_command()` (~L988–L1639) is a 651-line method with 30+ `if/elif`
 branches for routing commands:
 
 ```python

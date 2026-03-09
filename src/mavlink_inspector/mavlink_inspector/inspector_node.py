@@ -55,7 +55,7 @@ DIRECTION_COMPONENTS = {
 
 
 def percent_to_pwm(percent: float) -> int:
-    """Convert -100..100 percent to PWM offset from 1500."""
+    """Convert -100..100 percent to absolute PWM (1100-1900, centered at 1500)."""
     percent = max(-100, min(100, percent))
     return int(1500 + (percent / 100) * PWM_RANGE)
 
@@ -1027,10 +1027,12 @@ class MavlinkInspectorNode(Node):
         end_time = time.time() + duration if duration > 0 else float('inf')
 
         def set_movement(channels: dict, desc: str, bypass_ramp: bool = False):
-            """Set movement target channels (DESIGN 5: only fwd/lat axes).
+            """Set movement target channels (DESIGN 5: only the axes the command owns).
 
             Args:
-                channels: dict of CH_* → PWM values (forward + lateral only).
+                channels: dict of CH_* → PWM values.  Each command sets only
+                    the channels it controls (e.g. forward → CH_FORWARD,
+                    move_up → CH_THROTTLE, yaw_left → CH_YAW).
                 desc: human-readable description for event log.
                 bypass_ramp: if True, PWM is applied instantly (no ramp).
                     Used by 'just_*' fallback commands for raw bang-bang control.
@@ -1107,6 +1109,10 @@ class MavlinkInspectorNode(Node):
             result = _build_diagonal_channels(parts, speed)
             if result:
                 channels, label = result
+                # DESIGN 5: filter to horizontal axes only (diagonal builder
+                # returns all 4 channels with neutral defaults for throttle/yaw)
+                channels = {k: v for k, v in channels.items()
+                            if k in (CH_FORWARD, CH_LATERAL)}
                 n = len(parts)
                 scaled = int((speed - NEUTRAL_PWM) / math.sqrt(n))
                 set_movement(channels,
@@ -1132,6 +1138,7 @@ class MavlinkInspectorNode(Node):
             # Legacy: set_attitude_target (may not work in MANUAL)
             self._set_target_attitude(0, 0, cmd.angle)
             self._publish_event('movement', f'Setting heading to {cmd.angle}°')
+            self._publish_feedback(c, 'accepted', detail=f'target={cmd.angle}° (attitude target)')
 
         elif c == 'yaw_to_heading':
             # Bang-bang: use thrusters to rotate to target heading (works in MANUAL)
@@ -1274,8 +1281,10 @@ class MavlinkInspectorNode(Node):
                             },
                             'end_time': time.time() + 10.0,
                             'bypass_ramp': True,
+                            'command': c,  # track for feedback on expiry
                         }
                     self._publish_event('movement', '[JUST] Surfacing (MANUAL, instant throttle up 10s)')
+                self._publish_feedback(c, 'accepted', detail='surfacing (instant)')
 
             # Compound diagonal: just_forward_right, just_back_left, etc.
             elif '_' in raw and raw.startswith('move_'):
@@ -1283,6 +1292,9 @@ class MavlinkInspectorNode(Node):
                 result = _build_diagonal_channels(parts, speed)
                 if result:
                     ch, label = result
+                    # DESIGN 5: filter to horizontal axes only
+                    ch = {k: v for k, v in ch.items()
+                          if k in (CH_FORWARD, CH_LATERAL)}
                     n = len(parts)
                     scaled = int((speed - NEUTRAL_PWM) / math.sqrt(n))
                     set_movement(ch,
@@ -1313,11 +1325,7 @@ class MavlinkInspectorNode(Node):
                                 'channels': mv_channels,
                                 'end_time': end_time,
                                 'bypass_ramp': True,
-                            }
-                            self._yaw_to_heading = {
-                                'target_deg': cmd.angle % 360,
-                                'gain_offset': abs(speed - NEUTRAL_PWM) or PWM_RANGE // 2,
-                                'tolerance_deg': 3.0,
+                        'command': c,  # track for feedback on expiry
                                 'use_pid': True,
                                 'kp': self._yaw_kp,
                                 'ki': self._yaw_ki,
@@ -1364,7 +1372,11 @@ class MavlinkInspectorNode(Node):
                     mv_channels = {k: v for k, v in mv_channels.items()
                                    if k in (CH_FORWARD, CH_LATERAL)}
                     with self._movement_lock:
-                        self._current_movement = {'channels': mv_channels, 'end_time': end_time}
+                        self._current_movement = {
+                            'channels': mv_channels,
+                            'end_time': end_time,
+                            'command': c,  # track for feedback on expiry
+                        }
                         self._yaw_to_heading = {
                             'target_deg': cmd.angle % 360,
                             'gain_offset': abs(speed - NEUTRAL_PWM) or PWM_RANGE // 2,
@@ -1381,6 +1393,8 @@ class MavlinkInspectorNode(Node):
                     dur_str = f' {duration}s' if duration > 0 else ''
                     self._publish_event('movement',
                         f'Go {label} → {cmd.angle:.0f}°{dur_str} (speed={speed})')
+                    self._publish_feedback(c, 'accepted',
+                        detail=f'Go {label} → {cmd.angle:.0f}°')
 
         elif c in ('depth', 'set_depth'):
             d = float(cmd.depth)
@@ -1460,6 +1474,7 @@ class MavlinkInspectorNode(Node):
                             CH_THROTTLE: NEUTRAL_PWM + PWM_RANGE // 2,  # Up (ArduSub: >1500 = ascend)
                         },
                         'end_time': time.time() + 10.0,  # Up for up to 10s
+                        'command': c,  # track for feedback on expiry
                     }
                 self._publish_event('movement', 'Surfacing (MANUAL, throttle up 10s)')
             self._publish_feedback(c, 'accepted', detail='surfacing')
