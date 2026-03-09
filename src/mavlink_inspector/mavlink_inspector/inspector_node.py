@@ -23,7 +23,7 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy
 from pymavlink import mavutil
 from pymavlink.quaternion import QuaternionBase
 
-from duburi_interfaces.msg import DriverCommand, MavlinkEvent, VehicleDiagnostics, VehicleState
+from duburi_interfaces.msg import DriverCommand, DriverCommandFeedback, MavlinkEvent, VehicleDiagnostics, VehicleState
 
 
 # Duburi 4.2 channel mapping (ArduSub)
@@ -196,6 +196,21 @@ class MavlinkInspectorNode(Node):
         #   at rest (try 0.10 or 0.15 if 0.05 is too tight).
         self._depth_tolerance = self.declare_parameter('depth_tolerance', 0.05).value  # metres
 
+        # ── PID output rate limiting (DESIGN 7) ───────────────────────────
+        # Limits how fast PID output can change per tick, preventing
+        # thruster hunting from rapid PWM oscillation.
+        # Separate from velocity ramp (Design 1): ramp is for commanded speed,
+        # rate limiting is for PID output smoothing.
+        self._pid_max_rate = self.declare_parameter('pid_max_rate', 50).value  # PWM units per tick
+        self._last_depth_pid_output = 0  # track for rate limiting
+        self._last_yaw_pid_output = 0    # track for rate limiting
+
+        # ── Battery voltage compensation (MISSING 3) ───────────────────
+        # Scales movement PWM offset by (nominal / actual) voltage to
+        # maintain consistent thrust despite battery discharge.
+        # Set to 0.0 to disable. Typical 4S LiPo nominal = 14.8V.
+        self._nominal_voltage = self.declare_parameter('nominal_voltage', 0.0).value  # 0=disabled
+
         # ── ALT_HOLD depth target (for periodic re-send) ──
         # POOL TODO: Verify ALT_HOLD mode actually engages with our Pixhawk 2.4.8
         #   firmware. If `dive` command has no effect, firmware may not support
@@ -225,6 +240,12 @@ class MavlinkInspectorNode(Node):
         self._diag_pub = self.create_publisher(
             VehicleDiagnostics, '/mavlink/diagnostics', QoSProfile(
                 reliability=ReliabilityPolicy.RELIABLE, depth=1
+            )
+        )
+        # DESIGN 6: Command feedback publisher
+        self._feedback_pub = self.create_publisher(
+            DriverCommandFeedback, '/driver/feedback', QoSProfile(
+                reliability=ReliabilityPolicy.RELIABLE, depth=10
             )
         )
 
@@ -264,6 +285,22 @@ class MavlinkInspectorNode(Node):
             msg.raw_data = raw_data
             self._event_pub.publish(msg)
             self.get_logger().info(f"[{event_type}] {description}")
+        except Exception:
+            pass
+
+    def _publish_feedback(self, command: str, status: str, error: float = 0.0, detail: str = ''):
+        """Publish command feedback (DESIGN 6). Safe to call during shutdown."""
+        try:
+            if not rclpy.ok():
+                return
+            msg = DriverCommandFeedback()
+            msg.header.stamp = self.get_clock().now().to_msg()
+            msg.header.frame_id = 'inspector'
+            msg.command = command
+            msg.status = status
+            msg.error = float(error)
+            msg.detail = detail
+            self._feedback_pub.publish(msg)
         except Exception:
             pass
 
@@ -784,12 +821,18 @@ class MavlinkInspectorNode(Node):
             y2h = self._yaw_to_heading
             dh = self._depth_pid
 
-        # ── Movement expiry ──────────────────────────────────────────────
+        # ── Movement expiry (MISSING 4: smooth transitions) ────────────
+        # Instead of snapping to neutral on expiry, we clear the movement
+        # targets. The ramp layer (below) will then decelerate smoothly
+        # toward neutral because targets default to NEUTRAL_PWM when
+        # mv is None. This avoids abrupt thruster transients.
         if mv is not None and now >= mv['end_time']:
+            expired_cmd = mv.get('command', 'unknown')
             with self._movement_lock:
                 self._current_movement = None
             self._publish_event('movement', 'Movement duration expired')
-            mv = None  # don't overlay expired movement this tick
+            self._publish_feedback(expired_cmd, 'completed', detail='duration expired')
+            mv = None  # targets will default to neutral → ramp decelerates
 
         # ── Layer 1: base neutral ────────────────────────────────────────
         channels = dict(self._NEUTRAL_CHANNELS)
@@ -866,6 +909,14 @@ class MavlinkInspectorNode(Node):
             # Error positive (too deep)   → pid positive → offset positive → PWM>1500 → UP   ✓
             pid_output = p_out + i_out + d_out
             throttle_offset = max(-PWM_RANGE, min(PWM_RANGE, int(pid_output)))
+
+            # DESIGN 7: Rate-limit PID output to prevent thruster hunting.
+            # Clamp change-per-tick to ±pid_max_rate PWM units.
+            max_rate = self._pid_max_rate
+            prev = self._last_depth_pid_output
+            throttle_offset = max(prev - max_rate, min(prev + max_rate, throttle_offset))
+            self._last_depth_pid_output = throttle_offset
+
             channels[CH_THROTTLE] = NEUTRAL_PWM + throttle_offset
 
             # Update PID state
@@ -883,6 +934,8 @@ class MavlinkInspectorNode(Node):
                 with self._movement_lock:
                     self._yaw_to_heading = None
                 self._publish_event('movement', f'Heading reached: {y2h["target_deg"]}°')
+                self._publish_feedback('yaw_to_heading', 'reached', error=err,
+                                       detail=f'heading={y2h["target_deg"]}°')
             elif y2h.get('use_pid', False):
                 # ── PID yaw controller ──
                 now_t = time.time()
@@ -910,6 +963,13 @@ class MavlinkInspectorNode(Node):
                 # ±gain_offset instead of ±PWM_RANGE. Lower speed% = gentler turns.
                 max_pwm = y2h.get('gain_offset', PWM_RANGE)
                 pwm_offset = max(-max_pwm, min(max_pwm, int(pid_output)))
+
+                # DESIGN 7: Rate-limit yaw PID output.
+                max_rate = self._pid_max_rate
+                prev_yaw = self._last_yaw_pid_output
+                pwm_offset = max(prev_yaw - max_rate, min(prev_yaw + max_rate, pwm_offset))
+                self._last_yaw_pid_output = pwm_offset
+
                 channels[CH_YAW] = NEUTRAL_PWM + pwm_offset
 
                 with self._movement_lock:
@@ -952,6 +1012,7 @@ class MavlinkInspectorNode(Node):
         if not self._armed and c not in UNARMED_ALLOWED:
             self.get_logger().warn(f'Rejecting "{c}" - vehicle not armed. Arm first.')
             self._publish_event('command_rejected', f'"{c}" rejected: vehicle not armed')
+            self._publish_feedback(c, 'rejected', detail='vehicle not armed')
             return
 
         # Speed: 0-100 = percent (use percent_to_pwm), else PWM offset from 1500
@@ -966,69 +1027,74 @@ class MavlinkInspectorNode(Node):
         end_time = time.time() + duration if duration > 0 else float('inf')
 
         def set_movement(channels: dict, desc: str, bypass_ramp: bool = False):
-            """Set movement target channels.
+            """Set movement target channels (DESIGN 5: only fwd/lat axes).
 
             Args:
-                channels: dict of CH_* → PWM values.
+                channels: dict of CH_* → PWM values (forward + lateral only).
                 desc: human-readable description for event log.
                 bypass_ramp: if True, PWM is applied instantly (no ramp).
                     Used by 'just_*' fallback commands for raw bang-bang control.
             """
-            # Don't let movement commands set CH_THROTTLE when depth PID is active
-            # — the PID layer controls throttle exclusively for depth hold.
             with self._movement_lock:
-                if self._depth_pid is not None and CH_THROTTLE in channels:
-                    channels = {k: v for k, v in channels.items() if k != CH_THROTTLE}
                 self._current_movement = {
                     'channels': channels,
                     'end_time': end_time,
                     'bypass_ramp': bypass_ramp,
+                    'command': c,  # track for feedback on expiry
                 }
             self._publish_event('movement', desc)
+            self._publish_feedback(c, 'accepted', detail=desc)
 
         # offset from neutral — computed once, applied with sign below.
         # Positive offset = above neutral (forward/right/up/yaw-right).
         # Negative sign flips direction (back/left/down/yaw-left).
         offset = speed - NEUTRAL_PWM  # e.g. 1700-1500 = 200
 
+        # MISSING 3: Battery voltage compensation — scale offset so that thrust
+        # stays consistent as battery discharges. When nominal_voltage > 0 and
+        # actual voltage is available, multiply offset by (nominal / actual).
+        if self._nominal_voltage > 0 and self._voltage > 1.0:
+            offset = int(offset * self._nominal_voltage / self._voltage)
+
         if c == 'stop':
             self._stop_all()
+            self._publish_feedback(c, 'accepted', detail='All thrusters neutral')
 
         elif c in ('move_forward', 'forward'):
             set_movement(
-                {CH_FORWARD: NEUTRAL_PWM + offset, CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM},
+                {CH_FORWARD: NEUTRAL_PWM + offset, CH_LATERAL: NEUTRAL_PWM},
                 f'Moving forward (speed={speed})'
             )
 
         elif c in ('move_back', 'back', 'backward'):
             set_movement(
-                {CH_FORWARD: NEUTRAL_PWM - offset, CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM},
+                {CH_FORWARD: NEUTRAL_PWM - offset, CH_LATERAL: NEUTRAL_PWM},
                 'Moving backward'
             )
 
         elif c in ('move_left', 'left'):
             set_movement(
-                {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM - offset, CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM},
+                {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM - offset},
                 'Moving left'
             )
 
         elif c in ('move_right', 'right'):
             set_movement(
-                {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM + offset, CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM},
+                {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM + offset},
                 'Moving right'
             )
 
         elif c in ('move_up', 'up'):
-            # ArduSub: >1500 = UP (ascend)
+            # ArduSub: >1500 = UP (ascend) — only sets throttle axis
             set_movement(
-                {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: NEUTRAL_PWM + offset, CH_YAW: NEUTRAL_PWM},
+                {CH_THROTTLE: NEUTRAL_PWM + offset},
                 'Moving up'
             )
 
         elif c in ('move_down', 'down'):
-            # ArduSub: <1500 = DOWN (descend)
+            # ArduSub: <1500 = DOWN (descend) — only sets throttle axis
             set_movement(
-                {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: NEUTRAL_PWM - offset, CH_YAW: NEUTRAL_PWM},
+                {CH_THROTTLE: NEUTRAL_PWM - offset},
                 'Moving down'
             )
 
@@ -1058,7 +1124,7 @@ class MavlinkInspectorNode(Node):
             fwd_pwm = NEUTRAL_PWM + int(offset * math.cos(rad))
             lat_pwm = NEUTRAL_PWM + int(offset * math.sin(rad))
             set_movement(
-                {CH_FORWARD: fwd_pwm, CH_LATERAL: lat_pwm, CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM},
+                {CH_FORWARD: fwd_pwm, CH_LATERAL: lat_pwm},
                 f'Moving at {bearing_deg}° (fwd={fwd_pwm} lat={lat_pwm})'
             )
 
@@ -1078,6 +1144,7 @@ class MavlinkInspectorNode(Node):
                     'use_pid': False,
                 }
             self._publish_event('movement', f'Yaw to heading {cmd.angle}° (bang-bang)')
+            self._publish_feedback(c, 'accepted', detail=f'target={cmd.angle % 360}° bang-bang')
 
         elif c == 'pid_yaw_to_heading':
             # PID: use thrusters with proportional-integral-derivative control
@@ -1097,16 +1164,17 @@ class MavlinkInspectorNode(Node):
                     'max_integral': self._yaw_max_integral,
                 }
             self._publish_event('movement', f'PID yaw to heading {cmd.angle}° (Kp={self._yaw_kp} Ki={self._yaw_ki} Kd={self._yaw_kd})')
+            self._publish_feedback(c, 'accepted', detail=f'target={cmd.angle % 360}° PID')
 
         elif c == 'yaw_left':
             set_movement(
-                {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM - offset},
+                {CH_YAW: NEUTRAL_PWM - offset},
                 'Yaw left'
             )
 
         elif c == 'yaw_right':
             set_movement(
-                {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM + offset},
+                {CH_YAW: NEUTRAL_PWM + offset},
                 'Yaw right'
             )
 
@@ -1123,42 +1191,42 @@ class MavlinkInspectorNode(Node):
 
             if raw in ('move_forward', 'forward'):
                 set_movement(
-                    {CH_FORWARD: NEUTRAL_PWM + offset, CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM},
+                    {CH_FORWARD: NEUTRAL_PWM + offset, CH_LATERAL: NEUTRAL_PWM},
                     f'[JUST] Moving forward (speed={speed})', bypass_ramp=True)
 
             elif raw in ('move_back', 'back', 'backward'):
                 set_movement(
-                    {CH_FORWARD: NEUTRAL_PWM - offset, CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM},
+                    {CH_FORWARD: NEUTRAL_PWM - offset, CH_LATERAL: NEUTRAL_PWM},
                     '[JUST] Moving backward', bypass_ramp=True)
 
             elif raw in ('move_left', 'left'):
                 set_movement(
-                    {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM - offset, CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM},
+                    {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM - offset},
                     '[JUST] Moving left', bypass_ramp=True)
 
             elif raw in ('move_right', 'right'):
                 set_movement(
-                    {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM + offset, CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM},
+                    {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM + offset},
                     '[JUST] Moving right', bypass_ramp=True)
 
             elif raw in ('move_up', 'up'):
                 set_movement(
-                    {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: NEUTRAL_PWM + offset, CH_YAW: NEUTRAL_PWM},
+                    {CH_THROTTLE: NEUTRAL_PWM + offset},
                     '[JUST] Moving up', bypass_ramp=True)
 
             elif raw in ('move_down', 'down'):
                 set_movement(
-                    {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: NEUTRAL_PWM - offset, CH_YAW: NEUTRAL_PWM},
+                    {CH_THROTTLE: NEUTRAL_PWM - offset},
                     '[JUST] Moving down', bypass_ramp=True)
 
             elif raw == 'yaw_left':
                 set_movement(
-                    {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM - offset},
+                    {CH_YAW: NEUTRAL_PWM - offset},
                     '[JUST] Yaw left', bypass_ramp=True)
 
             elif raw == 'yaw_right':
                 set_movement(
-                    {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM + offset},
+                    {CH_YAW: NEUTRAL_PWM + offset},
                     '[JUST] Yaw right', bypass_ramp=True)
 
             elif raw == 'move_at':
@@ -1167,7 +1235,7 @@ class MavlinkInspectorNode(Node):
                 fwd_pwm = NEUTRAL_PWM + int(offset * math.cos(rad))
                 lat_pwm = NEUTRAL_PWM + int(offset * math.sin(rad))
                 set_movement(
-                    {CH_FORWARD: fwd_pwm, CH_LATERAL: lat_pwm, CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM},
+                    {CH_FORWARD: fwd_pwm, CH_LATERAL: lat_pwm},
                     f'[JUST] Moving at {bearing_deg}° (fwd={fwd_pwm} lat={lat_pwm})',
                     bypass_ramp=True)
 
@@ -1202,9 +1270,7 @@ class MavlinkInspectorNode(Node):
                     with self._movement_lock:
                         self._current_movement = {
                             'channels': {
-                                CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM,
                                 CH_THROTTLE: NEUTRAL_PWM + PWM_RANGE // 2,
-                                CH_YAW: NEUTRAL_PWM,
                             },
                             'end_time': time.time() + 10.0,
                             'bypass_ramp': True,
@@ -1239,11 +1305,10 @@ class MavlinkInspectorNode(Node):
                         self.get_logger().warn(f'Invalid just_go direction: {c}')
                     else:
                         mv_channels, label = result
-                        mv_channels[CH_YAW] = NEUTRAL_PWM
-                        mv_channels[CH_THROTTLE] = NEUTRAL_PWM
+                        # DESIGN 5: only keep fwd/lat from diagonal builder
+                        mv_channels = {k: v for k, v in mv_channels.items()
+                                       if k in (CH_FORWARD, CH_LATERAL)}
                         with self._movement_lock:
-                            if self._depth_pid is not None:
-                                mv_channels = {k: v for k, v in mv_channels.items() if k != CH_THROTTLE}
                             self._current_movement = {
                                 'channels': mv_channels,
                                 'end_time': end_time,
@@ -1265,6 +1330,8 @@ class MavlinkInspectorNode(Node):
                         dur_str = f' {duration}s' if duration > 0 else ''
                         self._publish_event('movement',
                             f'[JUST] Go {label} → {cmd.angle:.0f}°{dur_str} (speed={speed})')
+                        self._publish_feedback(c, 'accepted',
+                            detail=f'Go {label} → {cmd.angle:.0f}°')
 
             else:
                 self.get_logger().warn(f'Unknown just_ command: {c}')
@@ -1293,14 +1360,10 @@ class MavlinkInspectorNode(Node):
                     self.get_logger().warn(f'Invalid go direction: {c}')
                 else:
                     mv_channels, label = result
-                    # CH_YAW is controlled by PID, set to neutral in movement layer
-                    mv_channels[CH_YAW] = NEUTRAL_PWM
-                    # CH_THROTTLE left neutral (depth PID overrides if active)
-                    mv_channels[CH_THROTTLE] = NEUTRAL_PWM
-                    # Strip CH_THROTTLE if depth PID is active
+                    # DESIGN 5: only keep fwd/lat from diagonal builder
+                    mv_channels = {k: v for k, v in mv_channels.items()
+                                   if k in (CH_FORWARD, CH_LATERAL)}
                     with self._movement_lock:
-                        if self._depth_pid is not None:
-                            mv_channels = {k: v for k, v in mv_channels.items() if k != CH_THROTTLE}
                         self._current_movement = {'channels': mv_channels, 'end_time': end_time}
                         self._yaw_to_heading = {
                             'target_deg': cmd.angle % 360,
@@ -1364,12 +1427,14 @@ class MavlinkInspectorNode(Node):
             self._publish_event('movement',
                 f'PID depth hold ON: target {abs(target):.2f}m '
                 f'(Kp={self._depth_kp} Ki={self._depth_ki} Kd={self._depth_kd})')
+            self._publish_feedback(c, 'accepted', detail=f'target={abs(target):.2f}m')
 
         elif c == 'pid_depth_off':
             with self._movement_lock:
                 self._depth_pid = None
             self._alt_hold_target = None
             self._publish_event('movement', 'PID depth hold OFF')
+            self._publish_feedback(c, 'accepted', detail='depth PID disabled')
 
         elif c == 'surface':
             # Surface: stop everything, then command to near-surface
@@ -1392,30 +1457,149 @@ class MavlinkInspectorNode(Node):
                 with self._movement_lock:
                     self._current_movement = {
                         'channels': {
-                            CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM,
                             CH_THROTTLE: NEUTRAL_PWM + PWM_RANGE // 2,  # Up (ArduSub: >1500 = ascend)
-                            CH_YAW: NEUTRAL_PWM,
                         },
                         'end_time': time.time() + 10.0,  # Up for up to 10s
                     }
                 self._publish_event('movement', 'Surfacing (MANUAL, throttle up 10s)')
+            self._publish_feedback(c, 'accepted', detail='surfacing')
 
         elif c == 'arm':
             self._arm_disarm(True)
+            self._publish_feedback(c, 'accepted', detail='arm requested')
 
         elif c == 'disarm':
             self._arm_disarm(False)
+            self._publish_feedback(c, 'accepted', detail='disarm requested')
 
         elif c == 'set_mode':
             self._set_mode(cmd.mode)
+            self._publish_feedback(c, 'accepted', detail=f'mode={cmd.mode}')
 
         elif c == 'open_grabber':
             self._set_servo_pwm(1, 1100)
             self._publish_event('actuator', 'Grabber open')
+            self._publish_feedback(c, 'accepted', detail='grabber open')
 
         elif c == 'close_grabber':
             self._set_servo_pwm(1, 1900)
             self._publish_event('actuator', 'Grabber close')
+            self._publish_feedback(c, 'accepted', detail='grabber close')
+
+        # ── MISSING 2: Coordinated maneuver — cruise ────────────────────
+        # Simultaneously activates:
+        #   1. Movement at a body-frame bearing (like move_at)
+        #   2. Depth PID to hold target depth
+        #   3. Yaw PID to hold target heading
+        # Field encoding:
+        #   angle    → bearing (body-frame, 0°=forward, 90°=right)
+        #   depth    → target depth (positive metres, converted to negative)
+        #   speed    → movement speed (0-100%)
+        #   duration → movement duration (seconds)
+        #   mode     → target heading (degrees, 0-360)
+        elif c == 'cruise':
+            bearing_deg = cmd.angle
+            rad = math.radians(bearing_deg)
+            fwd_pwm = NEUTRAL_PWM + int(offset * math.cos(rad))
+            lat_pwm = NEUTRAL_PWM + int(offset * math.sin(rad))
+            set_movement(
+                {CH_FORWARD: fwd_pwm, CH_LATERAL: lat_pwm},
+                f'Cruise bearing={bearing_deg}° heading={cmd.mode}° '
+                f'depth={cmd.depth}m speed={raw_speed}%'
+            )
+            # Activate depth PID
+            target_depth = float(cmd.depth) if cmd.depth != 0.0 else self._depth
+            target_depth = -abs(target_depth) if target_depth > 0 else target_depth
+            if abs(target_depth) < 0.02:
+                target_depth = self._depth
+            self._alt_hold_target = None
+            with self._movement_lock:
+                self._depth_pid = {
+                    'target_m': target_depth,
+                    'kp': self._depth_kp,
+                    'ki': self._depth_ki,
+                    'kd': self._depth_kd,
+                    'integral': 0.0,
+                    'last_error': 0.0,
+                    'last_time': time.time(),
+                    'max_integral': self._depth_max_integral,
+                }
+            # Activate yaw PID to target heading
+            try:
+                heading_deg = float(cmd.mode) % 360
+            except (ValueError, TypeError):
+                heading_deg = self._yaw % 360  # hold current heading
+            gain_offset = abs(speed - NEUTRAL_PWM) or PWM_RANGE // 2
+            with self._movement_lock:
+                self._yaw_to_heading = {
+                    'target_deg': heading_deg,
+                    'gain_offset': min(PWM_RANGE, gain_offset),
+                    'tolerance_deg': 3.0,
+                    'use_pid': True,
+                    'kp': self._yaw_kp,
+                    'ki': self._yaw_ki,
+                    'kd': self._yaw_kd,
+                    'integral': 0.0,
+                    'last_error': 0.0,
+                    'last_time': time.time(),
+                    'max_integral': self._yaw_max_integral,
+                }
+            self._publish_event('movement',
+                f'Cruise: bearing={bearing_deg}° heading={heading_deg}° '
+                f'depth={abs(target_depth):.2f}m speed={raw_speed}% dur={duration}s')
+
+        # Similarly, just_cruise bypasses the movement ramp
+        elif c == 'just_cruise':
+            bearing_deg = cmd.angle
+            rad = math.radians(bearing_deg)
+            fwd_pwm = NEUTRAL_PWM + int(offset * math.cos(rad))
+            lat_pwm = NEUTRAL_PWM + int(offset * math.sin(rad))
+            set_movement(
+                {CH_FORWARD: fwd_pwm, CH_LATERAL: lat_pwm},
+                f'[JUST] Cruise bearing={bearing_deg}° heading={cmd.mode}° '
+                f'depth={cmd.depth}m speed={raw_speed}%',
+                bypass_ramp=True
+            )
+            # Activate depth PID
+            target_depth = float(cmd.depth) if cmd.depth != 0.0 else self._depth
+            target_depth = -abs(target_depth) if target_depth > 0 else target_depth
+            if abs(target_depth) < 0.02:
+                target_depth = self._depth
+            self._alt_hold_target = None
+            with self._movement_lock:
+                self._depth_pid = {
+                    'target_m': target_depth,
+                    'kp': self._depth_kp,
+                    'ki': self._depth_ki,
+                    'kd': self._depth_kd,
+                    'integral': 0.0,
+                    'last_error': 0.0,
+                    'last_time': time.time(),
+                    'max_integral': self._depth_max_integral,
+                }
+            # Activate yaw PID to target heading
+            try:
+                heading_deg = float(cmd.mode) % 360
+            except (ValueError, TypeError):
+                heading_deg = self._yaw % 360
+            gain_offset = abs(speed - NEUTRAL_PWM) or PWM_RANGE // 2
+            with self._movement_lock:
+                self._yaw_to_heading = {
+                    'target_deg': heading_deg,
+                    'gain_offset': min(PWM_RANGE, gain_offset),
+                    'tolerance_deg': 3.0,
+                    'use_pid': True,
+                    'kp': self._yaw_kp,
+                    'ki': self._yaw_ki,
+                    'kd': self._yaw_kd,
+                    'integral': 0.0,
+                    'last_error': 0.0,
+                    'last_time': time.time(),
+                    'max_integral': self._yaw_max_integral,
+                }
+            self._publish_event('movement',
+                f'[JUST] Cruise: bearing={bearing_deg}° heading={heading_deg}° '
+                f'depth={abs(target_depth):.2f}m speed={raw_speed}% dur={duration}s')
 
         # ── BUG3 FIX: Multi-axis teleop command ─────────────────────────
         # Single command carries all 4 axes simultaneously via repurposed
@@ -1452,6 +1636,7 @@ class MavlinkInspectorNode(Node):
 
         else:
             self.get_logger().warn(f'Unknown command: {c}')
+            self._publish_feedback(c, 'rejected', detail='unknown command')
 
     def _set_servo_pwm(self, servo_n: int, microseconds: int):
         """Set servo PWM (AUX output).

@@ -66,6 +66,9 @@ from mavlink_driver.driver_client import (
     just_move_at,
     just_go_combo,
     just_surface,
+    # Coordinated cruise
+    cruise,
+    just_cruise,
 )
 
 
@@ -452,6 +455,18 @@ class MissionExecutorNode(Node):
                 if is_just:
                     return just_go_combo(direction, angle=heading, duration=dur, speed=spd)
                 return go_combo(direction, angle=heading, duration=dur, speed=spd)
+            elif cmd == 'cruise':
+                # cruise <bearing°> <heading°> <depth_m> [duration] [speed]
+                if not args or len(args) < 3:
+                    return None
+                bearing = float(args[0])
+                heading_val = float(args[1])
+                depth_val = float(args[2])
+                dur = float(args[3]) if len(args) > 3 else 0.0
+                spd = int(args[4]) if len(args) > 4 else 50
+                if is_just:
+                    return just_cruise(bearing, heading_val, depth=depth_val, duration=dur, speed=spd)
+                return cruise(bearing, heading_val, depth=depth_val, duration=dur, speed=spd)
             elif '-' in cmd:
                 # Compound diagonal: forward-right 5 50 (horizontal only)
                 VALID = {'forward', 'back', 'backward', 'left', 'right'}

@@ -334,3 +334,31 @@ def just_go_combo(direction: str, angle: float, duration: float = 0, speed: int 
 def just_surface() -> DriverCommand:
     """Instant surface (no ramp on throttle)."""
     return make_command('just_surface')
+
+
+# ── Coordinated maneuver: cruise ─────────────────────────────────────────
+# Simultaneously activates movement (bearing), depth PID, and yaw PID.
+# Field encoding:
+#   angle    → bearing (body-frame, 0°=forward, 90°=right)
+#   depth    → target depth (positive metres)
+#   speed    → movement speed (0-100%)
+#   duration → movement duration (seconds)
+#   mode     → target heading (degrees, 0-360) — repurposed string field
+
+def cruise(bearing: float, heading: float, depth: float = 0.0,
+           duration: float = 0, speed: int = 50) -> DriverCommand:
+    """Coordinated cruise: movement + depth PID + yaw PID simultaneously.
+
+    bearing: body-frame direction (0°=forward, 90°=right).
+    heading: target heading in degrees (0-360).
+    depth:   target depth in metres (positive).
+    """
+    return make_command('cruise', mode=str(heading), angle=bearing,
+                        depth=depth, duration=duration, speed=speed)
+
+
+def just_cruise(bearing: float, heading: float, depth: float = 0.0,
+                duration: float = 0, speed: int = 50) -> DriverCommand:
+    """Instant coordinated cruise (no ramp on movement)."""
+    return make_command('just_cruise', mode=str(heading), angle=bearing,
+                        depth=depth, duration=duration, speed=speed)

@@ -88,6 +88,11 @@ Simultaneous Move + Heading (go):
                                 Dirs: forward, back, left, right
                                 (and diagonal combos)
 
+Coordinated Cruise (move + depth PID + heading PID):
+  cruise <bearing°> <heading°> <depth_m> [gain%%] [N]s
+  e.g. cruise 0 90 0.5 60%% 10s  — forward, heading 90°, depth 0.5m
+  just cruise <bearing°> <heading°> <depth_m> [gain%%] [N]s  (instant)
+
 Mode & Arm (non-blocking):
   mode <MODE>          MANUAL, ALT_HOLD, STABILIZE
   arm                  Arm motors
@@ -637,6 +642,39 @@ class DuburiRunnerNode(Node):
                 if duration:
                     extra.append(f'{duration}s')
                 print(f'Go {direction} → {heading}°' + (' ' + ' '.join(extra) if extra else ''))
+                return True, duration
+            return True, 0.0
+
+        # ── Coordinated cruise (move + depth PID + heading PID) ──────────
+        if cmd == 'cruise':
+            # cruise <bearing°> <heading°> <depth_m> [gain%] [Ns]
+            if len(args) < 3:
+                print('Usage: cruise <bearing°> <heading°> <depth_m> [gain%] [Ns]')
+                print('  e.g. cruise 0 90 0.5 60% 10s')
+                return True, 0.0
+            try:
+                bearing = float(args[0])
+                heading = float(args[1])
+                depth_val = float(args[2].rstrip('m'))
+            except ValueError:
+                print('Invalid arguments. Usage: cruise <bearing°> <heading°> <depth_m>')
+                return True, 0.0
+            cruise_cmd = DriverCommand(
+                command=_cmd_name('cruise'),
+                angle=bearing,
+                mode=str(heading),
+                depth=depth_val,
+                duration=duration,
+                speed=int(gain),
+            )
+            if self._publish(cruise_cmd):
+                extra = []
+                if gain != self._default_speed:
+                    extra.append(f'{gain}%')
+                if duration:
+                    extra.append(f'{duration}s')
+                print(f'{_just_label}Cruise bearing={bearing}° heading={heading}° depth={depth_val}m'
+                      + (' ' + ' '.join(extra) if extra else ''))
                 return True, duration
             return True, 0.0
 

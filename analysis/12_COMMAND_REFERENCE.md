@@ -17,15 +17,16 @@ the interactive **Runner CLI**, **mission file** syntax, and the **Python API**
 7. [Heading / Yaw Control](#7-heading--yaw-control)
 8. [Relative Turn Commands](#8-relative-turn-commands)
 9. [Simultaneous Move + Heading (go)](#9-simultaneous-move--heading-go)
-10. [Surface / Stop / Arm / Disarm / Mode](#10-surface--stop--arm--disarm--mode)
-11. [Actuators (Grabber)](#11-actuators-grabber)
-12. [Teleop (Joystick)](#12-teleop-joystick)
-13. [Chained Commands & Missions](#13-chained-commands--missions)
-14. [Mission File Syntax](#14-mission-file-syntax)
-15. [Python API (driver_client.py)](#15-python-api-driver_clientpy)
-16. [Naming Convention Summary](#16-naming-convention-summary)
-17. [Fallback Matrix](#17-fallback-matrix)
-18. [ROS Parameters](#18-ros-parameters)
+10. [Coordinated Cruise](#10-coordinated-cruise)
+11. [Surface / Stop / Arm / Disarm / Mode](#11-surface--stop--arm--disarm--mode)
+12. [Actuators (Grabber)](#12-actuators-grabber)
+13. [Teleop (Joystick)](#13-teleop-joystick)
+14. [Chained Commands & Missions](#14-chained-commands--missions)
+15. [Mission File Syntax](#15-mission-file-syntax)
+16. [Python API (driver_client.py)](#16-python-api-driver_clientpy)
+17. [Naming Convention Summary](#17-naming-convention-summary)
+18. [Fallback Matrix](#18-fallback-matrix)
+19. [ROS Parameters](#19-ros-parameters)
 
 ---
 
@@ -490,7 +491,64 @@ just_go_combo('forward-right', angle=45, duration=3.0, speed=70)
 
 ---
 
-## 10. Surface / Stop / Arm / Disarm / Mode
+## 10. Coordinated Cruise
+
+Simultaneously activates movement at a body-frame bearing, depth PID, and
+yaw PID. This is the full coordinated maneuver: the AUV moves in a direction,
+holds a target depth, and maintains a heading — all at once.
+
+### Runner CLI Syntax
+
+```
+cruise <bearing°> <heading°> <depth_m> [<gain>%] [<dur>s]
+just cruise <bearing°> <heading°> <depth_m> [<gain>%] [<dur>s]
+```
+
+| Parameter | Description |
+|-----------|-------------|
+| `bearing°` | Body-frame direction (0°=forward, 90°=right, 180°=back, 270°=left) |
+| `heading°` | Target compass heading 0–360° (yaw PID) |
+| `depth_m` | Target depth in metres (depth PID) |
+
+### Examples
+
+```
+Duburi > cruise 0 90 0.5 60% 10s    # Forward, heading 90°, depth 0.5m
+Duburi > cruise 45 180 1.0 50% 5s   # Diagonal, heading 180°, depth 1m
+Duburi > just cruise 0 0 0.3 70% 8s # Instant (no ramp on movement)
+```
+
+### Mission File Syntax
+
+```
+cruise 0 90 0.5 10 60       # bearing heading depth duration speed
+cruise 45 180 1.0 5 50
+just cruise 0 0 0.3 8 70    # Instant fallback
+```
+
+### Python API
+
+```python
+from mavlink_driver.driver_client import cruise, just_cruise
+
+cruise(bearing=0, heading=90, depth=0.5, duration=10.0, speed=60)
+just_cruise(bearing=0, heading=90, depth=0.5, duration=10.0, speed=60)
+```
+
+### DriverCommand Fields
+
+| Field | Usage |
+|-------|-------|
+| `command` | `cruise` or `just_cruise` |
+| `angle` | Bearing (body-frame degrees) |
+| `mode` | Target heading (string, degrees) |
+| `depth` | Target depth (metres) |
+| `speed` | Movement speed (0-100%) |
+| `duration` | Duration (seconds) |
+
+---
+
+## 11. Surface / Stop / Arm / Disarm / Mode
 
 ### Surface
 
@@ -547,7 +605,7 @@ set_mode('MANUAL')
 
 ---
 
-## 11. Actuators (Grabber)
+## 12. Actuators (Grabber)
 
 Controls servo-based grabber via AUX output.
 
@@ -567,7 +625,7 @@ close_grabber()
 
 ---
 
-## 12. Teleop (Joystick)
+## 13. Teleop (Joystick)
 
 Used by the teleop driver node (not typed manually). Single command
 carries all 4 axes simultaneously via repurposed message fields.
@@ -587,7 +645,7 @@ teleop_idle   # Joystick centered — clears movement, ramp decelerates naturall
 
 ---
 
-## 13. Chained Commands & Missions
+## 14. Chained Commands & Missions
 
 ### Chained Commands (Runner CLI)
 
@@ -610,7 +668,7 @@ Duburi > list missions      # List available mission files
 
 ---
 
-## 14. Mission File Syntax
+## 15. Mission File Syntax
 
 Mission files are text files with one command per line. Placed in `missions/`.
 
@@ -662,7 +720,7 @@ disarm
 
 ---
 
-## 15. Python API (driver_client.py)
+## 16. Python API (driver_client.py)
 
 All functions return a `DriverCommand` message. Publish it to
 `/driver/command` topic, or use `mission_executor.py`'s `_publish()`.
@@ -721,7 +779,7 @@ All functions return a `DriverCommand` message. Publish it to
 
 ---
 
-## 16. Naming Convention Summary
+## 17. Naming Convention Summary
 
 ```
 Layer   CLI Prefix   API Prefix     Behavior
@@ -767,7 +825,7 @@ Control:
 
 ---
 
-## 17. Fallback Matrix
+## 18. Fallback Matrix
 
 Every command has a working fallback for when the primary mechanism fails.
 
@@ -782,12 +840,13 @@ Every command has a working fallback for when the primary mechanism fails.
 | `~depth 0.5` (PID) | `depth 0.5` | Firmware ALT_HOLD |
 | `~heading 260` (PID) | `heading 260` | Bang-bang (Layer 4) |
 | `~turn left 90` (PID) | `turn left 90` | Bang-bang |
+| `cruise 0 90 0.5` (ramped) | `just cruise 0 90 0.5` | Bypasses ramp on movement |
 | `stop` | — | Already instant |
 | `teleop` (ramped) | `just_teleop` | Inspector-level only |
 
 ---
 
-## 18. ROS Parameters
+## 19. ROS Parameters
 
 Tunable at launch or runtime via `ros2 param set`.
 
@@ -803,6 +862,8 @@ Tunable at launch or runtime via `ros2 param set`.
 | `depth_kd` | `200.0` | Depth PID derivative gain |
 | `depth_max_integral` | `0.5` | Depth PID integral windup limit |
 | `depth_tolerance` | `0.05` | Depth PID deadband (metres) |
+| `pid_max_rate` | `50` | PID output rate limit (PWM units/tick). Prevents thruster hunting. |
+| `nominal_voltage` | `0.0` | Battery voltage compensation. 0=disabled. Set to nominal (e.g. 14.8 for 4S LiPo). |
 | `ack_timeout` | `3.0` | Command ACK timeout (seconds) |
 | `yaw_source` | `compass` | Yaw source: `compass` or `gyro` |
 
