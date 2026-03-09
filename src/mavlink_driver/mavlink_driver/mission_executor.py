@@ -52,6 +52,18 @@ from mavlink_driver.driver_client import (
     turn_right,
     pid_turn_left,
     pid_turn_right,
+    # Instant (no-ramp) fallbacks
+    just_move_forward,
+    just_move_back,
+    just_move_left,
+    just_move_right,
+    just_move_up,
+    just_move_down,
+    just_yaw_left,
+    just_yaw_right,
+    just_move_combo,
+    just_go_combo,
+    just_surface,
 )
 
 
@@ -294,8 +306,22 @@ class MissionExecutorNode(Node):
             self.get_logger().info('=== Mission file complete ===')
 
     def _parse_file_command(self, cmd: str, args: list[str]) -> DriverCommand | None:
-        """Parse a single command line into a DriverCommand."""
+        """Parse a single command line into a DriverCommand.
+
+        Supports 'just' prefix for instant (no-ramp) fallbacks:
+          just forward 3 50  → just_move_forward(duration=3, speed=50)
+          just go forward 90 5 60  → just_go_combo(...)
+        """
         try:
+            # ── 'just' prefix: instant (no-ramp) fallback ───────────────
+            is_just = False
+            if cmd == 'just':
+                is_just = True
+                if not args:
+                    return None
+                cmd = args[0]
+                args = args[1:]
+
             # ── Resolve ~ prefix (PID) and backward-compatible aliases ──
             is_pid = False
             if cmd.startswith('~'):
@@ -322,33 +348,33 @@ class MissionExecutorNode(Node):
             elif cmd == 'stop':
                 return stop()
             elif cmd == 'surface':
-                return surface()
+                return just_surface() if is_just else surface()
             elif cmd in ('mode', 'set_mode'):
                 return set_mode(args[0].upper() if args else 'MANUAL')
             elif cmd == 'forward':
                 dur = float(args[0]) if args else 3.0
                 spd = int(args[1]) if len(args) > 1 else 50
-                return move_forward(duration=dur, speed=spd)
+                return just_move_forward(duration=dur, speed=spd) if is_just else move_forward(duration=dur, speed=spd)
             elif cmd == 'back':
                 dur = float(args[0]) if args else 3.0
                 spd = int(args[1]) if len(args) > 1 else 50
-                return move_back(duration=dur, speed=spd)
+                return just_move_back(duration=dur, speed=spd) if is_just else move_back(duration=dur, speed=spd)
             elif cmd == 'left':
                 dur = float(args[0]) if args else 3.0
                 spd = int(args[1]) if len(args) > 1 else 50
-                return move_left(duration=dur, speed=spd)
+                return just_move_left(duration=dur, speed=spd) if is_just else move_left(duration=dur, speed=spd)
             elif cmd == 'right':
                 dur = float(args[0]) if args else 3.0
                 spd = int(args[1]) if len(args) > 1 else 50
-                return move_right(duration=dur, speed=spd)
+                return just_move_right(duration=dur, speed=spd) if is_just else move_right(duration=dur, speed=spd)
             elif cmd == 'up':
                 dur = float(args[0]) if args else 3.0
                 spd = int(args[1]) if len(args) > 1 else 50
-                return move_up(duration=dur, speed=spd)
+                return just_move_up(duration=dur, speed=spd) if is_just else move_up(duration=dur, speed=spd)
             elif cmd == 'down':
                 dur = float(args[0]) if args else 3.0
                 spd = int(args[1]) if len(args) > 1 else 50
-                return move_down(duration=dur, speed=spd)
+                return just_move_down(duration=dur, speed=spd) if is_just else move_down(duration=dur, speed=spd)
             elif cmd == 'depth':
                 if is_pid:
                     if args and args[0] == 'off':
@@ -362,7 +388,10 @@ class MissionExecutorNode(Node):
                 if args[0] in ('left', 'right'):
                     dur = float(args[1]) if len(args) > 1 else 3.0
                     spd = int(args[2]) if len(args) > 2 else 50
-                    return yaw_left(duration=dur, speed=spd) if args[0] == 'left' else yaw_right(duration=dur, speed=spd)
+                    if args[0] == 'left':
+                        return just_yaw_left(duration=dur, speed=spd) if is_just else yaw_left(duration=dur, speed=spd)
+                    else:
+                        return just_yaw_right(duration=dur, speed=spd) if is_just else yaw_right(duration=dur, speed=spd)
                 if is_pid:
                     return pid_yaw(float(args[0])) if args else None
                 else:
@@ -387,8 +416,11 @@ class MissionExecutorNode(Node):
                 return None
             elif cmd == 'move':
                 # Support 'move forward 3 50' syntax (matches runner format)
+                # Preserve 'just' prefix: 'just move forward' → dispatch 'just forward'
                 if not args:
                     return None
+                if is_just:
+                    return self._parse_file_command('just', [args[0]] + args[1:])
                 return self._parse_file_command(args[0], args[1:])
             elif cmd == 'go':
                 # go <direction> <heading> [duration] [speed]
@@ -399,6 +431,8 @@ class MissionExecutorNode(Node):
                 heading = float(args[1])
                 dur = float(args[2]) if len(args) > 2 else 0.0
                 spd = int(args[3]) if len(args) > 3 else 50
+                if is_just:
+                    return just_go_combo(direction, angle=heading, duration=dur, speed=spd)
                 return go_combo(direction, angle=heading, duration=dur, speed=spd)
             elif '-' in cmd:
                 # Compound diagonal: forward-right 5 50 (horizontal only)
@@ -407,6 +441,8 @@ class MissionExecutorNode(Node):
                 if len(parts) == 2 and all(p in VALID for p in parts):
                     dur = float(args[0]) if args else 3.0
                     spd = int(args[1]) if len(args) > 1 else 50
+                    if is_just:
+                        return just_move_combo(cmd, duration=dur, speed=spd)
                     return move_combo(cmd, duration=dur, speed=spd)
                 return None
             elif cmd == 'grabber':
