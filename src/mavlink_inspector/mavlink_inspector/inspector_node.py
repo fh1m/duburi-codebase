@@ -184,17 +184,18 @@ class MavlinkInspectorNode(Node):
         #   reduce Kp first (try 300→200). If it settles slowly, increase Kp.
         #   Ki handles steady-state drift — reduce if integral windup is visible.
         #   Kd damps overshoot — increase if AUV yo-yos past target.
-        self._depth_kp = self.declare_parameter('depth_kp', 500.0).value
-        # BUG7 FIX: Ki reduced from 100→25 and max_integral from 2.0→0.5.
-        # Old values: ki=100, max_integral=2.0 → max I contribution = 200 PWM (50% of range!).
-        # New values: ki=25,  max_integral=0.5 → max I contribution = 12.5 PWM (safe offset).
-        # Integral now only compensates buoyancy drift, won't cause overshoot.
-        self._depth_ki = self.declare_parameter('depth_ki', 25.0).value
-        self._depth_kd = self.declare_parameter('depth_kd', 200.0).value
-        self._depth_max_integral = self.declare_parameter('depth_max_integral', 0.5).value
-        # POOL TODO: Increase tolerance if depth sensor noise causes throttle jitter
-        #   at rest (try 0.10 or 0.15 if 0.05 is too tight).
-        self._depth_tolerance = self.declare_parameter('depth_tolerance', 0.05).value  # metres
+        # POOL-TUNED defaults (from 2026-03-09 pool session):
+        #   Kp 500→800: 500 was too gentle — AUV didn't fight depth disturbances.
+        #   Ki 25→50:   better buoyancy compensation (max I = 50*1.0 = 50 PWM = 12.5%).
+        #   Kd 200→100: reduced because EMA-filtered derivative is smoother;
+        #               200 with raw derivative caused pulsing (derivative spikes).
+        #   max_integral 0.5→1.0: allows Ki to compensate buoyancy drift properly.
+        #   tolerance 0.05→0.08: 8cm deadband to suppress sensor-noise throttle jitter.
+        self._depth_kp = self.declare_parameter('depth_kp', 800.0).value
+        self._depth_ki = self.declare_parameter('depth_ki', 50.0).value
+        self._depth_kd = self.declare_parameter('depth_kd', 100.0).value
+        self._depth_max_integral = self.declare_parameter('depth_max_integral', 1.0).value
+        self._depth_tolerance = self.declare_parameter('depth_tolerance', 0.08).value  # metres
 
         # ── PID output rate limiting (DESIGN 7) ───────────────────────────
         # Limits how fast PID output can change per tick, preventing
@@ -205,11 +206,25 @@ class MavlinkInspectorNode(Node):
         self._last_depth_pid_output = 0  # track for rate limiting
         self._last_yaw_pid_output = 0    # track for rate limiting
 
+        # ── EMA-filtered depth rate for PID derivative (POOL FIX 2) ──────
+        # Raw depth_rate from consecutive AHRS2 samples oscillates because
+        # AHRS2 arrives at ~10Hz while PID runs at 20Hz. EMA smoothing
+        # (α=0.3) removes this noise while preserving dynamic response.
+        self._filtered_depth_rate = 0.0
+
         # ── Battery voltage compensation (MISSING 3) ───────────────────
         # Scales movement PWM offset by (nominal / actual) voltage to
         # maintain consistent thrust despite battery discharge.
         # Set to 0.0 to disable. Typical 4S LiPo nominal = 14.8V.
         self._nominal_voltage = self.declare_parameter('nominal_voltage', 0.0).value  # 0=disabled
+
+        # ── Surface depth offset (POOL FIX 3) ────────────────────────────
+        # Barometer may read ~-0.1m at the water surface (not exactly 0).
+        # User-specified depths are relative to the water surface, so we
+        # compute target_m = surface_depth - abs(user_depth).
+        # Auto-calibrated on first arm, or set manually via ROS param /
+        # 'calibrate_depth' command.
+        self._surface_depth = self.declare_parameter('surface_depth', 0.0).value
 
         # ── ALT_HOLD depth target (for periodic re-send) ──
         # POOL TODO: Verify ALT_HOLD mode actually engages with our Pixhawk 2.4.8
@@ -469,6 +484,18 @@ class MavlinkInspectorNode(Node):
             if self._prev_armed is not None and self._prev_armed != self._armed:
                 ev = 'armed' if self._armed else 'disarmed'
                 self._publish_event(ev, f'Motors {"ARMED" if self._armed else "DISARMED"}')
+                # POOL FIX 4: Clear all control state on disarm so PID/yaw
+                # lock doesn't persist across disarm→arm cycles.
+                if not self._armed:
+                    with self._movement_lock:
+                        self._current_movement = None
+                        self._yaw_to_heading = None
+                        self._depth_pid = None
+                    self._ramped_channels.clear()
+                    self._alt_hold_target = None
+                    self._last_depth_pid_output = 0
+                    self._last_yaw_pid_output = 0
+                    self._filtered_depth_rate = 0.0
             self._prev_armed = self._armed
             if self._prev_mode is not None and self._prev_mode != self._flight_mode:
                 self._publish_event('mode_change', f'Flight mode: {self._flight_mode}')
@@ -881,51 +908,77 @@ class MavlinkInspectorNode(Node):
             if dt <= 0:
                 dt = 0.05  # fallback to one tick
 
-            # Proportional
-            p_out = dh['kp'] * depth_error
+            # POOL FIX 2: Deadband — suppress PID output when within
+            # tolerance to prevent thruster pulsing from sensor noise.
+            # Without this, ±1-2cm baro noise causes rapid sign-flipping
+            # on the throttle channel → audible motor pulsing at target.
+            if abs(depth_error) < self._depth_tolerance:
+                # Within deadband: neutral throttle.  Preserve integral
+                # so buoyancy compensation isn't lost on re-entry.
+                channels[CH_THROTTLE] = NEUTRAL_PWM
+                # Smoothly decay the rate-limiter state toward 0
+                max_rate = self._pid_max_rate
+                prev = self._last_depth_pid_output
+                if abs(prev) <= max_rate:
+                    self._last_depth_pid_output = 0
+                else:
+                    self._last_depth_pid_output = (
+                        prev - max_rate if prev > 0 else prev + max_rate)
+                with self._movement_lock:
+                    if self._depth_pid is not None:
+                        self._depth_pid['last_time'] = now
+            else:
+                # ── Active PID computation (outside deadband) ────────────
 
-            # BUG7 FIX: Conditional integration — only accumulate integral when
-            # PID output is not saturated. Prevents windup during large transients.
-            last_output = dh.get('last_output', 0.0)
-            integral = dh.get('integral', 0.0)
-            if abs(last_output) < PWM_RANGE:  # not saturated → integrate
-                integral += depth_error * dt
-            max_i = dh.get('max_integral', self._depth_max_integral)
-            integral = max(-max_i, min(max_i, integral))
-            i_out = dh['ki'] * integral
+                # Proportional
+                p_out = dh['kp'] * depth_error
 
-            # BUG1 FIX: Derivative on measurement instead of error.
-            # Old: d_out = kd * (error - last_error) / dt  — causes derivative kick
-            # when setpoint changes (error jumps, derivative spikes).
-            # New: d_out = -kd * (measurement - last_measurement) / dt
-            # This only responds to actual depth changes, not setpoint jumps.
-            depth_rate = (self._depth - self._prev_depth) / dt
-            d_out = -dh['kd'] * depth_rate
+                # BUG7 FIX: Conditional integration — only accumulate when
+                # PID output is not saturated (prevents windup).
+                last_output = dh.get('last_output', 0.0)
+                integral = dh.get('integral', 0.0)
+                if abs(last_output) < PWM_RANGE:  # not saturated → integrate
+                    integral += depth_error * dt
+                max_i = dh.get('max_integral', self._depth_max_integral)
+                integral = max(-max_i, min(max_i, integral))
+                i_out = dh['ki'] * integral
 
-            # Total PID → throttle PWM
-            # ArduSub throttle: >1500 = UP (ascend), <1500 = DOWN (descend)
-            # Depth convention: altitude 0 = surface, negative = below.
-            # Error negative (need deeper) → pid negative → offset negative → PWM<1500 → DOWN ✓
-            # Error positive (too deep)   → pid positive → offset positive → PWM>1500 → UP   ✓
-            pid_output = p_out + i_out + d_out
-            throttle_offset = max(-PWM_RANGE, min(PWM_RANGE, int(pid_output)))
+                # POOL FIX 2: EMA-filtered derivative on measurement.
+                # Raw depth_rate from consecutive AHRS2 samples alternates
+                # between actual-change and zero (AHRS2 ~10Hz, PID ~20Hz),
+                # producing derivative spikes → thruster pulsing.
+                # EMA (α=0.3) smooths this while preserving dynamic response.
+                raw_depth_rate = (self._depth - self._prev_depth) / dt
+                alpha = 0.3
+                self._filtered_depth_rate = (
+                    alpha * raw_depth_rate
+                    + (1.0 - alpha) * self._filtered_depth_rate
+                )
+                d_out = -dh['kd'] * self._filtered_depth_rate
 
-            # DESIGN 7: Rate-limit PID output to prevent thruster hunting.
-            # Clamp change-per-tick to ±pid_max_rate PWM units.
-            max_rate = self._pid_max_rate
-            prev = self._last_depth_pid_output
-            throttle_offset = max(prev - max_rate, min(prev + max_rate, throttle_offset))
-            self._last_depth_pid_output = throttle_offset
+                # Total PID → throttle PWM
+                # ArduSub throttle: >1500 = UP, <1500 = DOWN
+                # Error negative (need deeper) → PWM<1500 → DOWN ✓
+                # Error positive (too deep)    → PWM>1500 → UP   ✓
+                pid_output = p_out + i_out + d_out
+                throttle_offset = max(-PWM_RANGE, min(PWM_RANGE, int(pid_output)))
 
-            channels[CH_THROTTLE] = NEUTRAL_PWM + throttle_offset
+                # DESIGN 7: Rate-limit PID output to prevent thruster hunting.
+                max_rate = self._pid_max_rate
+                prev = self._last_depth_pid_output
+                throttle_offset = max(prev - max_rate,
+                                      min(prev + max_rate, throttle_offset))
+                self._last_depth_pid_output = throttle_offset
 
-            # Update PID state
-            with self._movement_lock:
-                if self._depth_pid is not None:
-                    self._depth_pid['integral'] = integral
-                    self._depth_pid['last_error'] = depth_error
-                    self._depth_pid['last_time'] = now
-                    self._depth_pid['last_output'] = throttle_offset
+                channels[CH_THROTTLE] = NEUTRAL_PWM + throttle_offset
+
+                # Update PID state
+                with self._movement_lock:
+                    if self._depth_pid is not None:
+                        self._depth_pid['integral'] = integral
+                        self._depth_pid['last_error'] = depth_error
+                        self._depth_pid['last_time'] = now
+                        self._depth_pid['last_output'] = throttle_offset
 
         # ── Layer 4: yaw-to-heading (overrides CH_YAW) ──────────────────
         if y2h is not None:
@@ -1008,7 +1061,7 @@ class MavlinkInspectorNode(Node):
         self.get_logger().info(f'RX command: {c}{param_str}')
 
         # Commands allowed when disarmed
-        UNARMED_ALLOWED = {'arm', 'disarm', 'set_mode', 'stop', 'pid_depth_off', 'surface', 'just_surface', 'teleop_idle'}
+        UNARMED_ALLOWED = {'arm', 'disarm', 'set_mode', 'stop', 'pid_depth_off', 'surface', 'just_surface', 'teleop_idle', 'calibrate_depth'}
         if not self._armed and c not in UNARMED_ALLOWED:
             self.get_logger().warn(f'Rejecting "{c}" - vehicle not armed. Arm first.')
             self._publish_event('command_rejected', f'"{c}" rejected: vehicle not armed')
@@ -1143,20 +1196,29 @@ class MavlinkInspectorNode(Node):
         elif c == 'yaw_to_heading':
             # Bang-bang: use thrusters to rotate to target heading (works in MANUAL)
             gain_offset = abs(speed - NEUTRAL_PWM) or PWM_RANGE // 2
+            # POOL FIX 1: Stop active movement so yaw doesn't fight forward/
+            # lateral inertia from preceding commands.  Snap ramp to neutral
+            # so thrust stops immediately (not just ramp-decel).
             with self._movement_lock:
+                self._current_movement = None
                 self._yaw_to_heading = {
                     'target_deg': cmd.angle % 360,
                     'gain_offset': min(PWM_RANGE, gain_offset),
                     'tolerance_deg': 5.0,
                     'use_pid': False,
                 }
+            self._ramped_channels[CH_FORWARD] = float(NEUTRAL_PWM)
+            self._ramped_channels[CH_LATERAL] = float(NEUTRAL_PWM)
             self._publish_event('movement', f'Yaw to heading {cmd.angle}° (bang-bang)')
             self._publish_feedback(c, 'accepted', detail=f'target={cmd.angle % 360}° bang-bang')
 
         elif c == 'pid_yaw_to_heading':
             # PID: use thrusters with proportional-integral-derivative control
             gain_offset = abs(speed - NEUTRAL_PWM) or PWM_RANGE // 2
+            # POOL FIX 1: Stop active movement so yaw PID doesn't fight
+            # forward/lateral inertia from preceding commands.
             with self._movement_lock:
+                self._current_movement = None
                 self._yaw_to_heading = {
                     'target_deg': cmd.angle % 360,
                     'gain_offset': min(PWM_RANGE, gain_offset),
@@ -1170,6 +1232,9 @@ class MavlinkInspectorNode(Node):
                     'last_time': time.time(),
                     'max_integral': self._yaw_max_integral,
                 }
+            self._ramped_channels[CH_FORWARD] = float(NEUTRAL_PWM)
+            self._ramped_channels[CH_LATERAL] = float(NEUTRAL_PWM)
+            self._last_yaw_pid_output = 0  # reset rate-limiter for fresh start
             self._publish_event('movement', f'PID yaw to heading {cmd.angle}° (Kp={self._yaw_kp} Ki={self._yaw_ki} Kd={self._yaw_kd})')
             self._publish_feedback(c, 'accepted', detail=f'target={cmd.angle % 360}° PID')
 
@@ -1398,7 +1463,11 @@ class MavlinkInspectorNode(Node):
 
         elif c in ('depth', 'set_depth'):
             d = float(cmd.depth)
-            d = -abs(d) if d > 0 else d  # ArduSub: negative = below surface
+            # POOL FIX 3: Account for surface depth offset
+            if abs(d) < 0.02:
+                d = self._depth  # hold current depth
+            else:
+                d = self._surface_depth - abs(d)  # e.g. -0.1 - 0.3 = -0.4
             # Auto-switch to ALT_HOLD if not already (ArduSub firmware depth hold)
             if self._flight_mode != 'ALT_HOLD':
                 self.get_logger().info('Auto-switching to ALT_HOLD for firmware depth hold')
@@ -1412,21 +1481,22 @@ class MavlinkInspectorNode(Node):
             # Disable software depth PID if active (ALT_HOLD replaces it)
             with self._movement_lock:
                 self._depth_pid = None
-            self._publish_event('movement', f'ALT_HOLD depth target: {abs(d):.2f}m')
+            self._publish_event('movement', f'ALT_HOLD depth target: {abs(d):.2f}m (raw={d:.3f})')
 
         elif c == 'pid_depth':
             # Software PID depth hold via RC throttle (works in any mode)
-            # POOL TODO: Test procedure — start in MANUAL mode at surface:
-            #   1. arm  →  p_dive 0.5  (shallow first, easy to recover)
-            #   2. Watch throttle PWM in telemetry — should settle near 1500±small
-            #   3. If oscillating: stop, reduce Kp via `ros2 param set`
-            #   4. Gradually test deeper: p_dive 1.0, p_dive 1.5
-            #   5. Only after PID is verified, test `dive` (ALT_HOLD) mode
-            target = float(cmd.depth) if cmd.depth != 0.0 else self._depth
-            target = -abs(target) if target > 0 else target  # Ensure negative
+            target = float(cmd.depth) if cmd.depth != 0.0 else 0.0
             if abs(target) < 0.02:
-                target = self._depth  # "hold current depth"
+                target = self._depth  # "hold current depth" — use raw reading
+            else:
+                # POOL FIX 3: Account for surface depth offset.
+                # User says "0.3m" meaning 0.3m below water surface.
+                # surface_depth is barometer reading at surface (e.g. -0.1).
+                # target = surface_depth - abs(depth) = -0.1 - 0.3 = -0.4
+                target = self._surface_depth - abs(target)
             self._alt_hold_target = None  # Disable ALT_HOLD re-send
+            self._filtered_depth_rate = 0.0  # reset derivative filter
+            self._last_depth_pid_output = 0   # reset rate limiter
             with self._movement_lock:
                 self._depth_pid = {
                     'target_m': target,
@@ -1439,16 +1509,30 @@ class MavlinkInspectorNode(Node):
                     'max_integral': self._depth_max_integral,
                 }
             self._publish_event('movement',
-                f'PID depth hold ON: target {abs(target):.2f}m '
+                f'PID depth hold ON: target {abs(target):.2f}m (raw={target:.3f}) '
                 f'(Kp={self._depth_kp} Ki={self._depth_ki} Kd={self._depth_kd})')
-            self._publish_feedback(c, 'accepted', detail=f'target={abs(target):.2f}m')
+            self._publish_feedback(c, 'accepted',
+                detail=f'target={abs(target):.2f}m surface_offset={self._surface_depth:.3f}m')
 
         elif c == 'pid_depth_off':
             with self._movement_lock:
                 self._depth_pid = None
             self._alt_hold_target = None
+            self._last_depth_pid_output = 0
+            self._filtered_depth_rate = 0.0
             self._publish_event('movement', 'PID depth hold OFF')
             self._publish_feedback(c, 'accepted', detail='depth PID disabled')
+
+        elif c == 'calibrate_depth':
+            # POOL FIX 3: Record current depth reading as the surface reference.
+            # Run this command while the AUV is floating at the surface.
+            self._surface_depth = self._depth
+            self.get_logger().info(
+                f'Surface depth calibrated: {self._surface_depth:.3f}m')
+            self._publish_event('calibration',
+                f'Surface depth set to {self._surface_depth:.3f}m')
+            self._publish_feedback(c, 'accepted',
+                detail=f'surface_depth={self._surface_depth:.3f}m')
 
         elif c == 'surface':
             # Surface: stop everything, then command to near-surface
@@ -1480,10 +1564,19 @@ class MavlinkInspectorNode(Node):
             self._publish_feedback(c, 'accepted', detail='surfacing')
 
         elif c == 'arm':
+            # POOL FIX 3: Auto-calibrate surface depth on first arm
+            if self._surface_depth == 0.0 and abs(self._depth) > 0.01:
+                self._surface_depth = self._depth
+                self.get_logger().info(
+                    f'Auto-calibrated surface depth: {self._surface_depth:.3f}m')
             self._arm_disarm(True)
-            self._publish_feedback(c, 'accepted', detail='arm requested')
+            self._publish_feedback(c, 'accepted',
+                detail=f'arm requested (surface_depth={self._surface_depth:.3f}m)')
 
         elif c == 'disarm':
+            # POOL FIX 4: Clear all control state before disarming so
+            # PID/yaw lock doesn't persist across disarm→arm cycles.
+            self._stop_all()
             self._arm_disarm(False)
             self._publish_feedback(c, 'accepted', detail='disarm requested')
 
@@ -1523,11 +1616,14 @@ class MavlinkInspectorNode(Node):
                 f'depth={cmd.depth}m speed={raw_speed}%'
             )
             # Activate depth PID
-            target_depth = float(cmd.depth) if cmd.depth != 0.0 else self._depth
-            target_depth = -abs(target_depth) if target_depth > 0 else target_depth
+            target_depth = float(cmd.depth) if cmd.depth != 0.0 else 0.0
             if abs(target_depth) < 0.02:
-                target_depth = self._depth
+                target_depth = self._depth  # hold current depth
+            else:
+                target_depth = self._surface_depth - abs(target_depth)
             self._alt_hold_target = None
+            self._filtered_depth_rate = 0.0
+            self._last_depth_pid_output = 0
             with self._movement_lock:
                 self._depth_pid = {
                     'target_m': target_depth,
@@ -1576,11 +1672,14 @@ class MavlinkInspectorNode(Node):
                 bypass_ramp=True
             )
             # Activate depth PID
-            target_depth = float(cmd.depth) if cmd.depth != 0.0 else self._depth
-            target_depth = -abs(target_depth) if target_depth > 0 else target_depth
+            target_depth = float(cmd.depth) if cmd.depth != 0.0 else 0.0
             if abs(target_depth) < 0.02:
                 target_depth = self._depth
+            else:
+                target_depth = self._surface_depth - abs(target_depth)
             self._alt_hold_target = None
+            self._filtered_depth_rate = 0.0
+            self._last_depth_pid_output = 0
             with self._movement_lock:
                 self._depth_pid = {
                     'target_m': target_depth,

@@ -172,6 +172,11 @@ def set_mode(mode: str) -> DriverCommand:
     return make_command('set_mode', mode=mode)
 
 
+def calibrate_depth() -> DriverCommand:
+    """Record current depth as the surface reference for PID depth offset."""
+    return make_command('calibrate_depth')
+
+
 def open_grabber() -> DriverCommand:
     return make_command('open_grabber')
 

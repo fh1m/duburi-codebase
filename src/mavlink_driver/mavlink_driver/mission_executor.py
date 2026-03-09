@@ -29,6 +29,7 @@ from duburi_interfaces.msg import DriverCommand, MavlinkEvent, VehicleState
 
 from mavlink_driver.driver_client import (
     arm,
+    calibrate_depth,
     disarm,
     go_combo,
     move_at,
@@ -345,6 +346,8 @@ class MissionExecutorNode(Node):
             elif cmd == 'p_turn':
                 cmd = 'turn'
                 is_pid = True
+            elif cmd in ('cal_depth', 'calibrate', 'cal'):
+                cmd = 'calibrate_depth'
 
             if cmd == 'arm':
                 return arm()
@@ -356,6 +359,8 @@ class MissionExecutorNode(Node):
                 return just_surface() if is_just else surface()
             elif cmd in ('mode', 'set_mode'):
                 return set_mode(args[0].upper() if args else 'MANUAL')
+            elif cmd == 'calibrate_depth':
+                return calibrate_depth()
             elif cmd == 'forward':
                 dur = float(args[0]) if args else 3.0
                 spd = int(args[1]) if len(args) > 1 else 50

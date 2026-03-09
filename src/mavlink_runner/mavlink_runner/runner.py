@@ -97,6 +97,7 @@ Mode & Arm (non-blocking):
   mode <MODE>          MANUAL, ALT_HOLD, STABILIZE
   arm                  Arm motors
   disarm               Disarm motors
+  calibrate            Record surface depth offset for PID depth
 
 Stop & Actuators:
   stop                 Stop all thrusters + depth PID
@@ -266,7 +267,7 @@ class DuburiRunnerNode(Node):
     def _publish(self, cmd: DriverCommand) -> bool:
         """Publish command. Returns True if sent, False if rejected (not armed)."""
         c = cmd.command.lower()
-        UNARMED_ALLOWED = {'arm', 'disarm', 'set_mode', 'stop', 'pid_depth_off', 'surface', 'just_surface'}
+        UNARMED_ALLOWED = {'arm', 'disarm', 'set_mode', 'stop', 'pid_depth_off', 'surface', 'just_surface', 'calibrate_depth'}
         if not self._armed and c not in UNARMED_ALLOWED:
             print(f'  [WARNING] Vehicle not armed! Arm first.')
             return False
@@ -329,6 +330,8 @@ class DuburiRunnerNode(Node):
         elif cmd == 'p_turn':
             cmd = 'turn'
             is_pid = True
+        elif cmd in ('cal_depth', 'calibrate', 'cal'):
+            cmd = 'calibrate_depth'
 
         if cmd in ('quit', 'exit', 'q'):
             return False, 0.0
@@ -370,6 +373,11 @@ class DuburiRunnerNode(Node):
             mode = args[0].upper().replace('MANNUAL', 'MANUAL') if args else 'MANUAL'
             self._publish(DriverCommand(command='set_mode', mode=mode))
             print(f'Setting mode to {mode}')
+            return True, 0.0
+
+        if cmd == 'calibrate_depth':
+            self._publish(DriverCommand(command='calibrate_depth'))
+            print('Calibrating surface depth offset from current reading.')
             return True, 0.0
 
         # ── Depth commands (depth = ALT_HOLD, ~depth = PID) ─────────────
