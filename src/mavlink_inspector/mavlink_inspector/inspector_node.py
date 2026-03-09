@@ -794,36 +794,42 @@ class MavlinkInspectorNode(Node):
         # ── Layer 1: base neutral ────────────────────────────────────────
         channels = dict(self._NEUTRAL_CHANNELS)
 
-        # ── Layer 2: active movement (ramped) ─────────────────────────
-        # Instead of instantly copying target PWM, we ramp actual PWM toward
-        # target at ramp_rate PWM/second.  This produces a trapezoidal
-        # velocity profile: smooth accel → cruise → smooth decel.
+        # ── Layer 2: active movement (ramped or instant) ──────────────
+        # By default, actual PWM ramps toward target at ramp_rate PWM/s
+        # to produce trapezoidal velocity profiles (smooth accel/decel).
         #
-        # Only movement channels (Layer 2) are ramped.  PID layers (3, 4)
-        # write directly — they're already smooth (proportional to error)
-        # and ramping PID output would add harmful phase lag.
+        # Commands prefixed with 'just_' set bypass_ramp=True in the
+        # movement dict, which skips ramping and applies PWM instantly.
+        # This serves as a fallback when ramping causes issues during
+        # testing — the raw bang-bang behavior is always available.
         #
-        # When movement expires (mv=None), targets become neutral (1500),
-        # so channels naturally ramp down — no special decel code needed.
+        # PID layers (3, 4) always write directly — inherently smooth.
         # stop command clears _ramped_channels for instant halt (safety).
-        ramp_rate = self._ramp_rate
-        dt = 0.05  # 20Hz tick period
-        max_step = ramp_rate * dt  # max PWM change per tick
-
-        # Channels subject to ramping (movement axes only)
+        bypass_ramp = mv.get('bypass_ramp', False) if mv is not None else False
         RAMP_CHANNELS = (CH_FORWARD, CH_LATERAL, CH_THROTTLE, CH_YAW)
         targets = mv.get('channels', {}) if mv is not None else {}
 
-        for ch in RAMP_CHANNELS:
-            target = float(targets.get(ch, NEUTRAL_PWM))
-            current = self._ramped_channels.get(ch, float(NEUTRAL_PWM))
-            diff = target - current
-            if abs(diff) <= max_step:
-                current = target  # close enough — snap to avoid jitter
-            else:
-                current += max_step if diff > 0 else -max_step
-            self._ramped_channels[ch] = current
-            channels[ch] = int(round(current))
+        if bypass_ramp:
+            # Instant (bang-bang) — copy target PWM directly, sync ramp state
+            for ch in RAMP_CHANNELS:
+                val = float(targets.get(ch, NEUTRAL_PWM))
+                self._ramped_channels[ch] = val
+                channels[ch] = int(round(val))
+        else:
+            # Ramped — move actual PWM toward target by ramp_rate * dt per tick
+            ramp_rate = self._ramp_rate
+            dt = 0.05  # 20Hz tick period
+            max_step = ramp_rate * dt  # max PWM change per tick
+            for ch in RAMP_CHANNELS:
+                target = float(targets.get(ch, NEUTRAL_PWM))
+                current = self._ramped_channels.get(ch, float(NEUTRAL_PWM))
+                diff = target - current
+                if abs(diff) <= max_step:
+                    current = target  # close enough — snap to avoid jitter
+                else:
+                    current += max_step if diff > 0 else -max_step
+                self._ramped_channels[ch] = current
+                channels[ch] = int(round(current))
 
         # ── Layer 3: depth PID (overrides CH_THROTTLE) ───────────────────
         if dh is not None:
@@ -942,7 +948,7 @@ class MavlinkInspectorNode(Node):
         self.get_logger().info(f'RX command: {c}{param_str}')
 
         # Commands allowed when disarmed
-        UNARMED_ALLOWED = {'arm', 'disarm', 'set_mode', 'stop', 'pid_depth_off', 'surface', 'teleop_idle'}
+        UNARMED_ALLOWED = {'arm', 'disarm', 'set_mode', 'stop', 'pid_depth_off', 'surface', 'just_surface', 'teleop_idle'}
         if not self._armed and c not in UNARMED_ALLOWED:
             self.get_logger().warn(f'Rejecting "{c}" - vehicle not armed. Arm first.')
             self._publish_event('command_rejected', f'"{c}" rejected: vehicle not armed')
@@ -959,13 +965,25 @@ class MavlinkInspectorNode(Node):
             duration = 0
         end_time = time.time() + duration if duration > 0 else float('inf')
 
-        def set_movement(channels: dict, desc: str):
+        def set_movement(channels: dict, desc: str, bypass_ramp: bool = False):
+            """Set movement target channels.
+
+            Args:
+                channels: dict of CH_* → PWM values.
+                desc: human-readable description for event log.
+                bypass_ramp: if True, PWM is applied instantly (no ramp).
+                    Used by 'just_*' fallback commands for raw bang-bang control.
+            """
             # Don't let movement commands set CH_THROTTLE when depth PID is active
             # — the PID layer controls throttle exclusively for depth hold.
             with self._movement_lock:
                 if self._depth_pid is not None and CH_THROTTLE in channels:
                     channels = {k: v for k, v in channels.items() if k != CH_THROTTLE}
-                self._current_movement = {'channels': channels, 'end_time': end_time}
+                self._current_movement = {
+                    'channels': channels,
+                    'end_time': end_time,
+                    'bypass_ramp': bypass_ramp,
+                }
             self._publish_event('movement', desc)
 
         if c == 'stop':
@@ -1072,6 +1090,155 @@ class MavlinkInspectorNode(Node):
                 {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: NEUTRAL_PWM, CH_YAW: speed},
                 'Yaw right'
             )
+
+        # ── Instant (bang-bang) fallback commands ────────────────────────
+        # 'just_*' variants bypass the PWM ramp and apply target PWM
+        # instantly — raw open-loop control.  Use these as fallbacks
+        # when ramping causes issues during testing, or when you need
+        # immediate response without acceleration delay.
+        #
+        # Mirrors every movement command above but with bypass_ramp=True.
+        # Same speed/duration/end_time parsing applies.
+        elif c.startswith('just_'):
+            raw = c[5:]  # strip 'just_' prefix
+
+            if raw in ('move_forward', 'forward'):
+                set_movement(
+                    {CH_FORWARD: speed, CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM},
+                    f'[JUST] Moving forward (speed={speed})', bypass_ramp=True)
+
+            elif raw in ('move_back', 'back', 'backward'):
+                set_movement(
+                    {CH_FORWARD: NEUTRAL_PWM - (speed - NEUTRAL_PWM), CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM},
+                    '[JUST] Moving backward', bypass_ramp=True)
+
+            elif raw in ('move_left', 'left'):
+                set_movement(
+                    {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM - (speed - NEUTRAL_PWM), CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM},
+                    '[JUST] Moving left', bypass_ramp=True)
+
+            elif raw in ('move_right', 'right'):
+                set_movement(
+                    {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: speed, CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM},
+                    '[JUST] Moving right', bypass_ramp=True)
+
+            elif raw in ('move_up', 'up'):
+                set_movement(
+                    {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: speed, CH_YAW: NEUTRAL_PWM},
+                    '[JUST] Moving up', bypass_ramp=True)
+
+            elif raw in ('move_down', 'down'):
+                set_movement(
+                    {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: NEUTRAL_PWM - (speed - NEUTRAL_PWM), CH_YAW: NEUTRAL_PWM},
+                    '[JUST] Moving down', bypass_ramp=True)
+
+            elif raw == 'yaw_left':
+                set_movement(
+                    {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM - (speed - NEUTRAL_PWM)},
+                    '[JUST] Yaw left', bypass_ramp=True)
+
+            elif raw == 'yaw_right':
+                set_movement(
+                    {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: NEUTRAL_PWM, CH_YAW: speed},
+                    '[JUST] Yaw right', bypass_ramp=True)
+
+            elif raw == 'teleop':
+                clamp = lambda v: max(-PWM_RANGE, min(PWM_RANGE, int(v)))
+                fwd  = clamp(cmd.speed)
+                lat  = clamp(cmd.duration)
+                thr  = clamp(cmd.depth)
+                yaw  = clamp(cmd.angle)
+                channels = {
+                    CH_FORWARD:  NEUTRAL_PWM + fwd,
+                    CH_LATERAL:  NEUTRAL_PWM + lat,
+                    CH_THROTTLE: NEUTRAL_PWM + thr,
+                    CH_YAW:      NEUTRAL_PWM + yaw,
+                }
+                set_movement(channels,
+                    f'[JUST] Teleop (fwd={fwd} lat={lat} thr={thr} yaw={yaw})',
+                    bypass_ramp=True)
+
+            elif raw == 'surface':
+                # Instant surface — bypass ramp for immediate throttle
+                with self._movement_lock:
+                    self._current_movement = None
+                    self._yaw_to_heading = None
+                    self._depth_pid = None
+                self._alt_hold_target = None
+                if self._flight_mode == 'ALT_HOLD':
+                    self._alt_hold_target = -0.1
+                    self._set_target_depth(-0.1)
+                    self._publish_event('movement', '[JUST] Surfacing (ALT_HOLD to -0.1m)')
+                else:
+                    with self._movement_lock:
+                        self._current_movement = {
+                            'channels': {
+                                CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM,
+                                CH_THROTTLE: NEUTRAL_PWM + PWM_RANGE // 2,
+                                CH_YAW: NEUTRAL_PWM,
+                            },
+                            'end_time': time.time() + 10.0,
+                            'bypass_ramp': True,
+                        }
+                    self._publish_event('movement', '[JUST] Surfacing (MANUAL, instant throttle up 10s)')
+
+            # Compound diagonal: just_forward_right, just_back_left, etc.
+            elif '_' in raw and raw.startswith('move_'):
+                parts = raw[5:].split('_')
+                result = _build_diagonal_channels(parts, speed)
+                if result:
+                    ch, label = result
+                    n = len(parts)
+                    scaled = int((speed - NEUTRAL_PWM) / math.sqrt(n))
+                    set_movement(ch,
+                        f'[JUST] Moving {label} ({n}-axis, ±{abs(scaled)}pwm/axis, speed={speed})',
+                        bypass_ramp=True)
+                else:
+                    self.get_logger().warn(f'Invalid just compound direction: {c}')
+
+            # go_* with bypass: just_go_forward, just_go_forward_right, etc.
+            elif raw.startswith('go_'):
+                dir_str = raw[3:]
+                parts = dir_str.split('_')
+                HORIZONTAL = {'forward', 'back', 'backward', 'left', 'right'}
+                if not all(p in HORIZONTAL for p in parts):
+                    self.get_logger().warn(
+                        f'just_go commands only support horizontal directions, got: {dir_str}')
+                else:
+                    result = _build_diagonal_channels(parts, speed)
+                    if result is None:
+                        self.get_logger().warn(f'Invalid just_go direction: {c}')
+                    else:
+                        mv_channels, label = result
+                        mv_channels[CH_YAW] = NEUTRAL_PWM
+                        mv_channels[CH_THROTTLE] = NEUTRAL_PWM
+                        with self._movement_lock:
+                            if self._depth_pid is not None:
+                                mv_channels = {k: v for k, v in mv_channels.items() if k != CH_THROTTLE}
+                            self._current_movement = {
+                                'channels': mv_channels,
+                                'end_time': end_time,
+                                'bypass_ramp': True,
+                            }
+                            self._yaw_to_heading = {
+                                'target_deg': cmd.angle % 360,
+                                'gain_offset': abs(speed - NEUTRAL_PWM) or PWM_RANGE // 2,
+                                'tolerance_deg': 3.0,
+                                'use_pid': True,
+                                'kp': self._yaw_kp,
+                                'ki': self._yaw_ki,
+                                'kd': self._yaw_kd,
+                                'integral': 0.0,
+                                'last_error': 0.0,
+                                'last_time': time.time(),
+                                'max_integral': self._yaw_max_integral,
+                            }
+                        dur_str = f' {duration}s' if duration > 0 else ''
+                        self._publish_event('movement',
+                            f'[JUST] Go {label} → {cmd.angle:.0f}°{dur_str} (speed={speed})')
+
+            else:
+                self.get_logger().warn(f'Unknown just_ command: {c}')
 
         # ── Simultaneous movement + heading (go) ────────────────────────
         # The RC override tick already layers: movement → depth PID → yaw PID.

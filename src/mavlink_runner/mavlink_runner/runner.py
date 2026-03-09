@@ -100,6 +100,15 @@ Backward-compatible aliases:
   dive = depth  |  p_dive = ~depth  |  yaw = heading
   p_yaw = ~heading  |  p_turn = ~turn
 
+Instant (no-ramp) fallbacks:
+  just forward [gain%%] [N]s     Raw bang-bang (no accel/decel ramp)
+  just move left [gain%%] [N]s   Same as 'just left', with 'move' prefix
+  just forward-right [gain%%]    Instant diagonal
+  just heading left [gain%%]     Instant open-loop yaw
+  just go forward 90 60%%        Instant movement + PID heading
+  just surface                  Instant surface throttle
+  (Prefix any movement command with 'just' to bypass ramp)
+
 Other:
   help                 Show this help
   status               Vehicle status
@@ -245,7 +254,7 @@ class DuburiRunnerNode(Node):
     def _publish(self, cmd: DriverCommand) -> bool:
         """Publish command. Returns True if sent, False if rejected (not armed)."""
         c = cmd.command.lower()
-        UNARMED_ALLOWED = {'arm', 'disarm', 'set_mode', 'stop', 'pid_depth_off', 'surface'}
+        UNARMED_ALLOWED = {'arm', 'disarm', 'set_mode', 'stop', 'pid_depth_off', 'surface', 'just_surface'}
         if not self._armed and c not in UNARMED_ALLOWED:
             print(f'  [WARNING] Vehicle not armed! Arm first.')
             return False
@@ -275,6 +284,20 @@ class DuburiRunnerNode(Node):
 
         cmd = parts[0]
         args = parts[1:]
+
+        # ── 'just' prefix — instant (no-ramp) fallback ─────────────────
+        # Strips 'just' and prepends 'just_' to the DriverCommand name.
+        # e.g. 'just forward 50% 3s' → command='just_forward'
+        #      'just move left'      → command='just_move_left'
+        #      'just go forward 90'  → command='just_go_forward'
+        is_just = False
+        if cmd == 'just':
+            is_just = True
+            if not args:
+                print('Usage: just <command> — prefix any movement with "just" for no-ramp.')
+                return True, 0.0
+            cmd = args[0]
+            args = args[1:]
 
         # ── Resolve ~ prefix (PID) and backward-compatible aliases ────
         is_pid = False
@@ -315,6 +338,12 @@ class DuburiRunnerNode(Node):
             print('Stopping all thrusters.')
             return True, 0.0
 
+        # Helper: prepend 'just_' to command name if is_just is set
+        def _cmd_name(name: str) -> str:
+            return f'just_{name}' if is_just else name
+
+        _just_label = '[JUST] ' if is_just else ''
+
         if cmd == 'arm':
             print('Arming...')
             self._publish(DriverCommand(command='arm'))
@@ -332,6 +361,8 @@ class DuburiRunnerNode(Node):
             return True, 0.0
 
         # ── Depth commands (depth = ALT_HOLD, ~depth = PID) ─────────────
+        # Note: depth commands are firmware/PID controlled — 'just' prefix
+        # is not applicable (they don't use the ramp system).
         if cmd == 'depth':
             if is_pid:
                 # ~depth — software PID depth hold (auto STABILIZE)
@@ -368,8 +399,8 @@ class DuburiRunnerNode(Node):
                     return True, 0.0
 
         if cmd == 'surface':
-            self._publish(DriverCommand(command='surface'))
-            print('Surfacing...')
+            self._publish(DriverCommand(command=_cmd_name('surface')))
+            print(f'{_just_label}Surfacing...')
             return True, 2.0
 
         # ── Turn commands (relative — turn = bang-bang, ~turn = PID) ─────
@@ -415,13 +446,13 @@ class DuburiRunnerNode(Node):
                 print(f'       heading left/right [gain%] [Ns]')
                 return True, 0.0
             if args[0] == 'left':
-                if self._publish(DriverCommand(command='yaw_left', duration=duration, speed=int(gain))):
-                    print(f'Rotate left{f" {gain}%" if gain != self._default_speed else ""}{f" {duration}s" if duration else ""}')
+                if self._publish(DriverCommand(command=_cmd_name('yaw_left'), duration=duration, speed=int(gain))):
+                    print(f'{_just_label}Rotate left{f" {gain}%" if gain != self._default_speed else ""}{f" {duration}s" if duration else ""}')
                     return True, duration
                 return True, 0.0
             elif args[0] == 'right':
-                if self._publish(DriverCommand(command='yaw_right', duration=duration, speed=int(gain))):
-                    print(f'Rotate right{f" {gain}%" if gain != self._default_speed else ""}{f" {duration}s" if duration else ""}')
+                if self._publish(DriverCommand(command=_cmd_name('yaw_right'), duration=duration, speed=int(gain))):
+                    print(f'{_just_label}Rotate right{f" {gain}%" if gain != self._default_speed else ""}{f" {duration}s" if duration else ""}')
                     return True, duration
                 return True, 0.0
             else:
@@ -463,19 +494,19 @@ class DuburiRunnerNode(Node):
                     'forward': 'move_forward', 'back': 'move_back', 'backward': 'move_back',
                     'up': 'move_up', 'down': 'move_down',
                 }
-                c = DriverCommand(command=cmd_map[direction], duration=duration, speed=int(gain))
+                c = DriverCommand(command=_cmd_name(cmd_map[direction]), duration=duration, speed=int(gain))
                 if self._publish(c):
                     extra = []
                     if gain != self._default_speed:
                         extra.append(f'{gain}%')
                     if duration:
                         extra.append(f'{duration}s')
-                    print(f'Moving {direction}' + (' ' + ' '.join(extra) if extra else '') + (' (indefinite)' if not duration else ''))
+                    print(f'{_just_label}Moving {direction}' + (' ' + ' '.join(extra) if extra else '') + (' (indefinite)' if not duration else ''))
                     return True, duration
                 return True, 0.0
             else:
                 # Try compound direction: forward-right, back-left-up, etc.
-                ok, wait = self._try_compound_move(direction, gain, duration)
+                ok, wait = self._try_compound_move(direction, gain, duration, is_just=is_just)
                 if ok is not None:
                     return True, wait
                 print(f'Unknown direction: {direction}')
@@ -501,20 +532,20 @@ class DuburiRunnerNode(Node):
                 'forward': 'move_forward', 'back': 'move_back', 'backward': 'move_back',
                 'up': 'move_up', 'down': 'move_down',
             }
-            c = DriverCommand(command=cmd_map[cmd], duration=duration, speed=int(gain))
+            c = DriverCommand(command=_cmd_name(cmd_map[cmd]), duration=duration, speed=int(gain))
             if self._publish(c):
                 extra = []
                 if gain != self._default_speed:
                     extra.append(f'{gain}%')
                 if duration:
                     extra.append(f'{duration}s')
-                print(f'Moving {cmd}' + (' ' + ' '.join(extra) if extra else '') + (' (indefinite)' if not duration else ''))
+                print(f'{_just_label}Moving {cmd}' + (' ' + ' '.join(extra) if extra else '') + (' (indefinite)' if not duration else ''))
                 return True, duration
             return True, 0.0
 
         # ── Compound bare shorthand: forward-right 50% 5s ───────────────
         if '-' in cmd:
-            ok, wait = self._try_compound_move(cmd, gain, duration)
+            ok, wait = self._try_compound_move(cmd, gain, duration, is_just=is_just)
             if ok is not None:
                 return True, wait
 
@@ -558,11 +589,13 @@ class DuburiRunnerNode(Node):
     # ── Compound direction helper ────────────────────────────────────────
     _HORIZONTAL_DIRS = {'forward', 'back', 'backward', 'left', 'right'}
 
-    def _try_compound_move(self, direction: str, gain: float, duration: float
+    def _try_compound_move(self, direction: str, gain: float, duration: float,
+                           is_just: bool = False
                            ) -> tuple[bool, float] | tuple[None, float]:
         """Try to parse a hyphenated compound direction (e.g. forward-right).
 
         Only horizontal directions are supported (forward/back + left/right).
+        If is_just=True, prepends 'just_' to the command name for no-ramp.
         Returns (True/False, wait_seconds) on valid compound, or (None, 0) if
         the direction string is not a valid compound.
         """
@@ -570,6 +603,8 @@ class DuburiRunnerNode(Node):
         if len(parts) != 2 or not all(d in self._HORIZONTAL_DIRS for d in parts):
             return None, 0.0
         cmd_name = 'move_' + '_'.join(p.replace('backward', 'back') for p in parts)
+        if is_just:
+            cmd_name = f'just_{cmd_name}'
         c = DriverCommand(command=cmd_name, duration=duration, speed=int(gain))
         if self._publish(c):
             extra = []
@@ -577,7 +612,8 @@ class DuburiRunnerNode(Node):
                 extra.append(f'{gain}%')
             if duration:
                 extra.append(f'{duration}s')
-            print(f'Moving {direction}' + (' ' + ' '.join(extra) if extra else '')
+            label = '[JUST] ' if is_just else ''
+            print(f'{label}Moving {direction}' + (' ' + ' '.join(extra) if extra else '')
                   + (' (indefinite)' if not duration else ''))
             return True, duration
         return True, 0.0
