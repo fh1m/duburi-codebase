@@ -31,6 +31,7 @@ from mavlink_driver.driver_client import (
     arm,
     disarm,
     go_combo,
+    move_at,
     move_combo,
     move_forward,
     move_back,
@@ -62,6 +63,7 @@ from mavlink_driver.driver_client import (
     just_yaw_left,
     just_yaw_right,
     just_move_combo,
+    just_move_at,
     just_go_combo,
     just_surface,
 )
@@ -419,9 +421,25 @@ class MissionExecutorNode(Node):
                 # Preserve 'just' prefix: 'just move forward' → dispatch 'just forward'
                 if not args:
                     return None
+                if args[0] == 'at':
+                    # move at <angle> [duration] [speed]
+                    if len(args) < 2:
+                        return None
+                    bearing = float(args[1])
+                    dur = float(args[2]) if len(args) > 2 else 0.0
+                    spd = int(args[3]) if len(args) > 3 else 50
+                    return just_move_at(bearing, duration=dur, speed=spd) if is_just else move_at(bearing, duration=dur, speed=spd)
                 if is_just:
                     return self._parse_file_command('just', [args[0]] + args[1:])
                 return self._parse_file_command(args[0], args[1:])
+            elif cmd == 'at':
+                # at <angle> [duration] [speed]
+                if not args:
+                    return None
+                bearing = float(args[0])
+                dur = float(args[1]) if len(args) > 1 else 0.0
+                spd = int(args[2]) if len(args) > 2 else 50
+                return just_move_at(bearing, duration=dur, speed=spd) if is_just else move_at(bearing, duration=dur, speed=spd)
             elif cmd == 'go':
                 # go <direction> <heading> [duration] [speed]
                 # Supports: go forward 90 5 60, go forward-right 45 5 60

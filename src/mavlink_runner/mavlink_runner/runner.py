@@ -57,6 +57,12 @@ Diagonal Movement:
   forward-right [gain%%] [N]s          Shorthand
   Combos: forward-right, forward-left, back-right, back-left
 
+Body-frame Vector:
+  at <angle°> [gain%%] [N]s    Move at arbitrary bearing (body-relative)
+  move at <angle°> [gain%%]    Same with 'move' prefix
+  0°=forward, 90°=right, 180°=back, 270°=left
+  e.g. at 45 60%% 3s          → diagonal forward-right at 60%%
+
 Depth Control:
   depth <m>            ArduSub ALT_HOLD firmware depth (e.g. depth 0.5)
   ~depth               PID hold current depth (auto STABILIZE)
@@ -104,6 +110,7 @@ Instant (no-ramp) fallbacks:
   just forward [gain%%] [N]s     Raw bang-bang (no accel/decel ramp)
   just move left [gain%%] [N]s   Same as 'just left', with 'move' prefix
   just forward-right [gain%%]    Instant diagonal
+  just at 45 60%% 3s             Instant body-frame vector
   just heading left [gain%%]     Instant open-loop yaw
   just go forward 90 60%%        Instant movement + PID heading
   just surface                  Instant surface throttle
@@ -474,9 +481,34 @@ class DuburiRunnerNode(Node):
         if cmd == 'move':
             if not args:
                 print('Usage: move <direction> [gain%] [N]s or move depth <m>')
+                print('       move at <angle°> [gain%] [Ns]  — body-frame vector')
                 return True, 0.0
             direction = args[0].lower()
-            if direction == 'depth':
+            if direction == 'at':
+                # Body-frame vector: move at <angle> [gain%] [Ns]
+                if len(args) < 2:
+                    print('Usage: move at <angle°> [gain%] [Ns]')
+                    print('  0°=forward, 90°=right, 180°=back, 270°=left')
+                    return True, 0.0
+                try:
+                    bearing = float(args[1])
+                except ValueError:
+                    print('Invalid angle (use degrees e.g. 45)')
+                    return True, 0.0
+                c = DriverCommand(command=_cmd_name('move_at'),
+                                  angle=bearing, duration=duration, speed=int(gain))
+                if self._publish(c):
+                    extra = []
+                    if gain != self._default_speed:
+                        extra.append(f'{gain}%')
+                    if duration:
+                        extra.append(f'{duration}s')
+                    print(f'{_just_label}Moving at {bearing}°'
+                          + (' ' + ' '.join(extra) if extra else '')
+                          + (' (indefinite)' if not duration else ''))
+                    return True, duration
+                return True, 0.0
+            elif direction == 'depth':
                 if len(args) < 2:
                     print('Usage: move depth <m>  (same as: depth <m>)')
                     return True, 0.0
@@ -524,6 +556,31 @@ class DuburiRunnerNode(Node):
                     print('Closing grabber')
             else:
                 print('Usage: grabber open | grabber close')
+            return True, 0.0
+
+        # ── Body-frame vector shorthand: at <angle°> [gain%] [Ns] ────────
+        if cmd == 'at':
+            if not args:
+                print('Usage: at <angle°> [gain%] [Ns]')
+                print('  0°=forward, 90°=right, 180°=back, 270°=left')
+                return True, 0.0
+            try:
+                bearing = float(args[0])
+            except ValueError:
+                print('Invalid angle (use degrees e.g. 45)')
+                return True, 0.0
+            c = DriverCommand(command=_cmd_name('move_at'),
+                              angle=bearing, duration=duration, speed=int(gain))
+            if self._publish(c):
+                extra = []
+                if gain != self._default_speed:
+                    extra.append(f'{gain}%')
+                if duration:
+                    extra.append(f'{duration}s')
+                print(f'{_just_label}Moving at {bearing}°'
+                      + (' ' + ' '.join(extra) if extra else '')
+                      + (' (indefinite)' if not duration else ''))
+                return True, duration
             return True, 0.0
 
         if cmd in ('left', 'right', 'forward', 'back', 'backward', 'up', 'down'):

@@ -986,44 +986,49 @@ class MavlinkInspectorNode(Node):
                 }
             self._publish_event('movement', desc)
 
+        # offset from neutral — computed once, applied with sign below.
+        # Positive offset = above neutral (forward/right/up/yaw-right).
+        # Negative sign flips direction (back/left/down/yaw-left).
+        offset = speed - NEUTRAL_PWM  # e.g. 1700-1500 = 200
+
         if c == 'stop':
             self._stop_all()
 
         elif c in ('move_forward', 'forward'):
             set_movement(
-                {CH_FORWARD: speed, CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM},
+                {CH_FORWARD: NEUTRAL_PWM + offset, CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM},
                 f'Moving forward (speed={speed})'
             )
 
         elif c in ('move_back', 'back', 'backward'):
             set_movement(
-                {CH_FORWARD: NEUTRAL_PWM - (speed - NEUTRAL_PWM), CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM},
+                {CH_FORWARD: NEUTRAL_PWM - offset, CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM},
                 'Moving backward'
             )
 
         elif c in ('move_left', 'left'):
             set_movement(
-                {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM - (speed - NEUTRAL_PWM), CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM},
+                {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM - offset, CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM},
                 'Moving left'
             )
 
         elif c in ('move_right', 'right'):
             set_movement(
-                {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: speed, CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM},
+                {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM + offset, CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM},
                 'Moving right'
             )
 
         elif c in ('move_up', 'up'):
             # ArduSub: >1500 = UP (ascend)
             set_movement(
-                {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: speed, CH_YAW: NEUTRAL_PWM},
+                {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: NEUTRAL_PWM + offset, CH_YAW: NEUTRAL_PWM},
                 'Moving up'
             )
 
         elif c in ('move_down', 'down'):
             # ArduSub: <1500 = DOWN (descend)
             set_movement(
-                {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: NEUTRAL_PWM - (speed - NEUTRAL_PWM), CH_YAW: NEUTRAL_PWM},
+                {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: NEUTRAL_PWM - offset, CH_YAW: NEUTRAL_PWM},
                 'Moving down'
             )
 
@@ -1042,6 +1047,20 @@ class MavlinkInspectorNode(Node):
                     f'Moving {label} ({n}-axis, ±{abs(scaled)}pwm/axis, speed={speed})')
             else:
                 self.get_logger().warn(f'Invalid compound direction: {c}')
+
+        # ── Body-frame vector movement ──────────────────────────────────
+        # move_at <angle>: decomposes a bearing (0-360°, body-relative) into
+        # forward + lateral channels using cos/sin.  0° = pure forward,
+        # 90° = pure right, 180° = pure backward, 270° = pure left.
+        elif c == 'move_at':
+            bearing_deg = cmd.angle
+            rad = math.radians(bearing_deg)
+            fwd_pwm = NEUTRAL_PWM + int(offset * math.cos(rad))
+            lat_pwm = NEUTRAL_PWM + int(offset * math.sin(rad))
+            set_movement(
+                {CH_FORWARD: fwd_pwm, CH_LATERAL: lat_pwm, CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM},
+                f'Moving at {bearing_deg}° (fwd={fwd_pwm} lat={lat_pwm})'
+            )
 
         elif c == 'yaw_angle':
             # Legacy: set_attitude_target (may not work in MANUAL)
@@ -1081,13 +1100,13 @@ class MavlinkInspectorNode(Node):
 
         elif c == 'yaw_left':
             set_movement(
-                {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM - (speed - NEUTRAL_PWM)},
+                {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM - offset},
                 'Yaw left'
             )
 
         elif c == 'yaw_right':
             set_movement(
-                {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: NEUTRAL_PWM, CH_YAW: speed},
+                {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM + offset},
                 'Yaw right'
             )
 
@@ -1104,43 +1123,53 @@ class MavlinkInspectorNode(Node):
 
             if raw in ('move_forward', 'forward'):
                 set_movement(
-                    {CH_FORWARD: speed, CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM},
+                    {CH_FORWARD: NEUTRAL_PWM + offset, CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM},
                     f'[JUST] Moving forward (speed={speed})', bypass_ramp=True)
 
             elif raw in ('move_back', 'back', 'backward'):
                 set_movement(
-                    {CH_FORWARD: NEUTRAL_PWM - (speed - NEUTRAL_PWM), CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM},
+                    {CH_FORWARD: NEUTRAL_PWM - offset, CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM},
                     '[JUST] Moving backward', bypass_ramp=True)
 
             elif raw in ('move_left', 'left'):
                 set_movement(
-                    {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM - (speed - NEUTRAL_PWM), CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM},
+                    {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM - offset, CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM},
                     '[JUST] Moving left', bypass_ramp=True)
 
             elif raw in ('move_right', 'right'):
                 set_movement(
-                    {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: speed, CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM},
+                    {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM + offset, CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM},
                     '[JUST] Moving right', bypass_ramp=True)
 
             elif raw in ('move_up', 'up'):
                 set_movement(
-                    {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: speed, CH_YAW: NEUTRAL_PWM},
+                    {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: NEUTRAL_PWM + offset, CH_YAW: NEUTRAL_PWM},
                     '[JUST] Moving up', bypass_ramp=True)
 
             elif raw in ('move_down', 'down'):
                 set_movement(
-                    {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: NEUTRAL_PWM - (speed - NEUTRAL_PWM), CH_YAW: NEUTRAL_PWM},
+                    {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: NEUTRAL_PWM - offset, CH_YAW: NEUTRAL_PWM},
                     '[JUST] Moving down', bypass_ramp=True)
 
             elif raw == 'yaw_left':
                 set_movement(
-                    {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM - (speed - NEUTRAL_PWM)},
+                    {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM - offset},
                     '[JUST] Yaw left', bypass_ramp=True)
 
             elif raw == 'yaw_right':
                 set_movement(
-                    {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: NEUTRAL_PWM, CH_YAW: speed},
+                    {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM, CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM + offset},
                     '[JUST] Yaw right', bypass_ramp=True)
+
+            elif raw == 'move_at':
+                bearing_deg = cmd.angle
+                rad = math.radians(bearing_deg)
+                fwd_pwm = NEUTRAL_PWM + int(offset * math.cos(rad))
+                lat_pwm = NEUTRAL_PWM + int(offset * math.sin(rad))
+                set_movement(
+                    {CH_FORWARD: fwd_pwm, CH_LATERAL: lat_pwm, CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM},
+                    f'[JUST] Moving at {bearing_deg}° (fwd={fwd_pwm} lat={lat_pwm})',
+                    bypass_ramp=True)
 
             elif raw == 'teleop':
                 clamp = lambda v: max(-PWM_RANGE, min(PWM_RANGE, int(v)))

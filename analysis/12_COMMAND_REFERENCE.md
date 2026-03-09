@@ -12,19 +12,20 @@ the interactive **Runner CLI**, **mission file** syntax, and the **Python API**
 2. [Movement Commands (Ramped)](#2-movement-commands-ramped)
 3. [Instant Fallback Commands (just\_\*)](#3-instant-fallback-commands-just_)
 4. [Diagonal / Compound Movement](#4-diagonal--compound-movement)
-5. [Depth Control](#5-depth-control)
-6. [Heading / Yaw Control](#6-heading--yaw-control)
-7. [Relative Turn Commands](#7-relative-turn-commands)
-8. [Simultaneous Move + Heading (go)](#8-simultaneous-move--heading-go)
-9. [Surface / Stop / Arm / Disarm / Mode](#9-surface--stop--arm--disarm--mode)
-10. [Actuators (Grabber)](#10-actuators-grabber)
-11. [Teleop (Joystick)](#11-teleop-joystick)
-12. [Chained Commands & Missions](#12-chained-commands--missions)
-13. [Mission File Syntax](#13-mission-file-syntax)
-14. [Python API (driver_client.py)](#14-python-api-driver_clientpy)
-15. [Naming Convention Summary](#15-naming-convention-summary)
-16. [Fallback Matrix](#16-fallback-matrix)
-17. [ROS Parameters](#17-ros-parameters)
+5. [Body-Frame Vector Movement (move\_at)](#5-body-frame-vector-movement-move_at)
+6. [Depth Control](#6-depth-control)
+7. [Heading / Yaw Control](#7-heading--yaw-control)
+8. [Relative Turn Commands](#8-relative-turn-commands)
+9. [Simultaneous Move + Heading (go)](#9-simultaneous-move--heading-go)
+10. [Surface / Stop / Arm / Disarm / Mode](#10-surface--stop--arm--disarm--mode)
+11. [Actuators (Grabber)](#11-actuators-grabber)
+12. [Teleop (Joystick)](#12-teleop-joystick)
+13. [Chained Commands & Missions](#13-chained-commands--missions)
+14. [Mission File Syntax](#14-mission-file-syntax)
+15. [Python API (driver_client.py)](#15-python-api-driver_clientpy)
+16. [Naming Convention Summary](#16-naming-convention-summary)
+17. [Fallback Matrix](#17-fallback-matrix)
+18. [ROS Parameters](#18-ros-parameters)
 
 ---
 
@@ -211,7 +212,70 @@ just_move_combo('forward-right', duration=5.0, speed=60)  # Instant
 
 ---
 
-## 5. Depth Control
+## 5. Body-Frame Vector Movement (move\_at)
+
+Move at any bearing relative to the AUV's body. The angle is decomposed into
+forward and lateral channels using `cos(θ)` and `sin(θ)`, providing continuous
+360° directional control instead of only 8 discrete directions.
+
+**Bearing convention (body-relative):**
+- 0° = pure forward
+- 90° = pure right (starboard)
+- 180° = pure backward
+- 270° = pure left (port)
+- 45° = forward-right diagonal (equivalent to `forward-right` but via trig)
+
+### Runner CLI Syntax
+
+```
+at <angle°> [<gain>%] [<dur>s]         Shorthand
+move at <angle°> [<gain>%] [<dur>s]    With 'move' prefix
+just at <angle°> [<gain>%] [<dur>s]    Instant (no ramp)
+```
+
+### Examples
+
+```
+Duburi > at 45 60% 3s           # Forward-right at 60% for 3s
+Duburi > at 135 50%             # Back-right at 50% indefinitely
+Duburi > move at 270 80% 5s    # Pure left at 80% for 5s
+Duburi > just at 0 100%        # Instant full-speed forward
+```
+
+### Mission File Syntax
+
+```
+at 45 3 60         # bearing=45°, dur=3s, speed=60%
+move at 90 5 50    # bearing=90°, dur=5s, speed=50%
+just at 180 2 70   # instant, bearing=180°, dur=2s, speed=70%
+```
+
+### Python API
+
+```python
+from mavlink_driver.driver_client import move_at, just_move_at
+
+move_at(bearing=45.0, duration=3.0, speed=60)   # 45° vector
+move_at(bearing=90.0, duration=5.0, speed=50)   # Pure right
+just_move_at(bearing=0.0, duration=3.0, speed=100)  # Instant forward
+```
+
+### How It Works
+
+```
+offset = speed_pwm − 1500
+CH_FORWARD = 1500 + offset × cos(bearing)
+CH_LATERAL = 1500 + offset × sin(bearing)
+```
+
+The resultant vector magnitude equals the requested speed. At cardinal
+directions (0°, 90°, 180°, 270°) the behavior is identical to the
+corresponding `move_*` command. At 45° it matches `forward-right` with
+automatic √2 scaling via the trig decomposition.
+
+---
+
+## 6. Depth Control
 
 Two approaches: firmware ALT_HOLD or software PID.
 
@@ -271,7 +335,7 @@ pid_depth_off()      # Disable PID
 
 ---
 
-## 6. Heading / Yaw Control
+## 7. Heading / Yaw Control
 
 ### Absolute Heading (Bang-Bang)
 
@@ -333,7 +397,7 @@ just_yaw_left(duration=3.0, speed=50)  # Spin left (instant)
 
 ---
 
-## 7. Relative Turn Commands
+## 8. Relative Turn Commands
 
 Turn left/right by a number of degrees from current heading.
 Requires telemetry (current heading) to compute target.
@@ -379,7 +443,7 @@ pid_turn_left(current_heading=180.0, angle=90.0, speed=50)
 
 ---
 
-## 8. Simultaneous Move + Heading (go)
+## 9. Simultaneous Move + Heading (go)
 
 Move in a direction while simultaneously PID-rotating to a target heading.
 Movement uses Layer 2 (ramped); yaw uses PID Layer 4 (smooth).
@@ -426,7 +490,7 @@ just_go_combo('forward-right', angle=45, duration=3.0, speed=70)
 
 ---
 
-## 9. Surface / Stop / Arm / Disarm / Mode
+## 10. Surface / Stop / Arm / Disarm / Mode
 
 ### Surface
 
@@ -483,7 +547,7 @@ set_mode('MANUAL')
 
 ---
 
-## 10. Actuators (Grabber)
+## 11. Actuators (Grabber)
 
 Controls servo-based grabber via AUX output.
 
@@ -503,7 +567,7 @@ close_grabber()
 
 ---
 
-## 11. Teleop (Joystick)
+## 12. Teleop (Joystick)
 
 Used by the teleop driver node (not typed manually). Single command
 carries all 4 axes simultaneously via repurposed message fields.
@@ -523,7 +587,7 @@ teleop_idle   # Joystick centered — clears movement, ramp decelerates naturall
 
 ---
 
-## 12. Chained Commands & Missions
+## 13. Chained Commands & Missions
 
 ### Chained Commands (Runner CLI)
 
@@ -546,7 +610,7 @@ Duburi > list missions      # List available mission files
 
 ---
 
-## 13. Mission File Syntax
+## 14. Mission File Syntax
 
 Mission files are text files with one command per line. Placed in `missions/`.
 
@@ -598,7 +662,7 @@ disarm
 
 ---
 
-## 14. Python API (driver_client.py)
+## 15. Python API (driver_client.py)
 
 All functions return a `DriverCommand` message. Publish it to
 `/driver/command` topic, or use `mission_executor.py`'s `_publish()`.
@@ -614,6 +678,7 @@ All functions return a `DriverCommand` message. Publish it to
 | `move_up(dur, spd)` | `move_up` | Movement (ramped) |
 | `move_down(dur, spd)` | `move_down` | Movement (ramped) |
 | `move_combo(dir, dur, spd)` | `move_<d1>_<d2>` | Diagonal (ramped) |
+| `move_at(bearing, dur, spd)` | `move_at` | Body-frame vector (ramped) |
 | `yaw_left(dur, spd)` | `yaw_left` | Open-loop yaw (ramped) |
 | `yaw_right(dur, spd)` | `yaw_right` | Open-loop yaw (ramped) |
 | `yaw_to_heading(angle, spd)` | `yaw_to_heading` | Bang-bang yaw (Layer 4) |
@@ -646,6 +711,7 @@ All functions return a `DriverCommand` message. Publish it to
 | `just_yaw_left(dur, spd)` | `just_yaw_left` | Instant yaw left |
 | `just_yaw_right(dur, spd)` | `just_yaw_right` | Instant yaw right |
 | `just_move_combo(dir, dur, spd)` | `just_move_<d1>_<d2>` | Instant diagonal |
+| `just_move_at(bearing, dur, spd)` | `just_move_at` | Instant vector |
 | `just_go_forward(angle, dur, spd)` | `just_go_forward` | Instant go forward |
 | `just_go_back(angle, dur, spd)` | `just_go_back` | Instant go back |
 | `just_go_left(angle, dur, spd)` | `just_go_left` | Instant go left |
@@ -655,7 +721,7 @@ All functions return a `DriverCommand` message. Publish it to
 
 ---
 
-## 15. Naming Convention Summary
+## 16. Naming Convention Summary
 
 ```
 Layer   CLI Prefix   API Prefix     Behavior
@@ -671,6 +737,7 @@ Instant just         just_*()       Raw bang-bang (no ramp, no PID)
 Movement (Layer 2, ramped):
   move_forward, move_back, move_left, move_right, move_up, move_down
   move_forward_right, move_back_left, etc. (diagonals)
+  move_at (body-frame vector, any bearing 0-360°)
   yaw_left, yaw_right (open-loop rotation)
   teleop (joystick input)
   go_forward, go_forward_right, etc. (movement + PID heading)
@@ -682,6 +749,7 @@ Instant (Layer 2, bypass_ramp=True):
   just_surface
   just_go_forward, just_go_forward_right, etc.
   just_move_forward_right, etc. (compound)
+  just_move_at (body-frame vector, no ramp)
 
 PID (Layers 3-4, inherently smooth — no ramp applied):
   pid_depth (Layer 3 — CH_THROTTLE)
@@ -699,7 +767,7 @@ Control:
 
 ---
 
-## 16. Fallback Matrix
+## 17. Fallback Matrix
 
 Every command has a working fallback for when the primary mechanism fails.
 
@@ -719,7 +787,7 @@ Every command has a working fallback for when the primary mechanism fails.
 
 ---
 
-## 17. ROS Parameters
+## 18. ROS Parameters
 
 Tunable at launch or runtime via `ros2 param set`.
 

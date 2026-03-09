@@ -193,6 +193,16 @@ def move_combo(direction: str, duration: float = 0, speed: int = 50) -> DriverCo
     return make_command(cmd_name, duration=duration, speed=speed)
 
 
+# Body-frame vector movement
+def move_at(bearing: float, duration: float = 0, speed: int = 50) -> DriverCommand:
+    """Move at arbitrary bearing (body-frame, 0°=forward, 90°=right).
+
+    Decomposes into forward + lateral channels via cos/sin.
+    bearing: angle in degrees (0-360, body-relative).
+    """
+    return make_command('move_at', angle=bearing, duration=duration, speed=speed)
+
+
 # Simultaneous movement + yaw (go) commands
 def go_combo(direction: str, angle: float, duration: float = 0, speed: int = 50) -> DriverCommand:
     """Compound diagonal movement + PID yaw to heading.
@@ -287,6 +297,11 @@ def just_move_combo(direction: str, duration: float = 0, speed: int = 50) -> Dri
     parts = direction.replace('backward', 'back').split('-')
     cmd_name = 'just_move_' + '_'.join(parts)
     return make_command(cmd_name, duration=duration, speed=speed)
+
+
+def just_move_at(bearing: float, duration: float = 0, speed: int = 50) -> DriverCommand:
+    """Instant move at arbitrary bearing (no ramp)."""
+    return make_command('just_move_at', angle=bearing, duration=duration, speed=speed)
 
 
 def just_go_forward(angle: float, duration: float = 0, speed: int = 50) -> DriverCommand:
