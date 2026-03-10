@@ -1,0 +1,42 @@
+# ── Competition Configuration ────────────────────────────────────────
+# Starting point for competition tuning.
+# Copy and adjust gains based on venue conditions.
+#
+# Usage:
+#   ros2 launch mavlink_inspector duburi_control.launch.py \
+#       params_file:=$(ros2 pkg prefix mavlink_inspector)/share/mavlink_inspector/config/competition.yaml
+
+mavlink_inspector:
+  ros__parameters:
+    connection_port: "/dev/ttyACM0"
+    baud: 115200
+    yaw_source: "attitude"
+
+    # Full ramp speed for competition responsiveness
+    ramp_rate: 800
+
+    # Depth PID — start with pool-tuned, adjust on-site
+    depth_kp: 800.0
+    depth_ki: 50.0
+    depth_kd: 100.0
+    depth_max_integral: 1.0
+    depth_tolerance: 0.08
+
+    # Yaw PID — may need higher gains in current/waves
+    yaw_kp: 2.0
+    yaw_ki: 0.05
+    yaw_kd: 0.5
+    yaw_max_integral: 50.0
+
+    pid_max_rate: 50
+
+    # Enable voltage compensation for consistent thrust
+    # Set to your battery's nominal voltage (e.g. 14.8 for 4S)
+    nominal_voltage: 14.8
+
+    surface_depth: 0.0
+    ack_timeout: 3.0
+
+mavlink_logger:
+  ros__parameters:
+    log_directory: "~/auv_logs"

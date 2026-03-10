@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
 """
-MAVLink Inspector - Main Pixhawk connection hub for BRACU Duburi 4.2.
+MAVLink Inspector — Thin orchestrator for BRACU Duburi 4.2.
 
-Owns the MAVLink connection to Pixhawk via /dev/ttyACM0.
-Publishes vehicle state and events. Subscribes to driver commands and executes them.
+Owns the ROS 2 node and wires together the focused modules:
+  - ConnectionManager  — serial link, heartbeat, reconnect
+  - TelemetryParser    — MAVLink messages → vehicle state
+  - RcController       — RC override with velocity ramp
+  - PidController      — depth & yaw PID loops
+  - CommandHandler     — DriverCommand dispatch
+
+All external APIs (topics, parameters, messages) are unchanged.
 """
 
 from __future__ import annotations
@@ -12,9 +18,7 @@ import math
 import os
 import threading
 import time
-from pathlib import Path
 
-# Use MAVLink 2
 os.environ['MAVLINK20'] = '1'
 
 import rclpy
@@ -23,272 +27,133 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy
 from pymavlink import mavutil
 from pymavlink.quaternion import QuaternionBase
 
-from duburi_interfaces.msg import DriverCommand, DriverCommandFeedback, MavlinkEvent, VehicleDiagnostics, VehicleState
+from duburi_interfaces.msg import (
+    DriverCommand, DriverCommandFeedback, MavlinkEvent,
+    VehicleDiagnostics, VehicleState,
+)
 
-
-# Duburi 4.2 channel mapping (ArduSub)
-# Ch 1: Pitch, Ch 2: Roll, Ch 3: Throttle (depth), Ch 4: Yaw
-# Ch 5: Forward, Ch 6: Lateral (left/right)
-# Ch 7-8: Reserved (camera, grabber, etc.)
-CH_FORWARD = 5
-CH_LATERAL = 6
-CH_THROTTLE = 3
-CH_YAW = 4
-CH_PITCH = 1
-CH_ROLL = 2
-
-NEUTRAL_PWM = 1500
-PWM_RANGE = 400  # 1100-1900, so ±400 from 1500
-
-
-# Direction component → (channel, sign) for compound diagonal movement.
-# Only horizontal axes are supported for diagonals — vertical movement
-# (up/down) should always use depth PID (p_dive) or ALT_HOLD (dive)
-# for reliable, smooth control.
-DIRECTION_COMPONENTS = {
-    'forward':  (CH_FORWARD,  +1),
-    'back':     (CH_FORWARD,  -1),
-    'backward': (CH_FORWARD,  -1),
-    'left':     (CH_LATERAL,  -1),
-    'right':    (CH_LATERAL,  +1),
-}
-
-
-def percent_to_pwm(percent: float) -> int:
-    """Convert -100..100 percent to absolute PWM (1100-1900, centered at 1500)."""
-    percent = max(-100, min(100, percent))
-    return int(1500 + (percent / 100) * PWM_RANGE)
-
-
-def _build_diagonal_channels(parts: list[str], speed_pwm: int) -> tuple[dict, str] | None:
-    """Build channel dict for horizontal diagonal movement with √2 scaling.
-
-    Only accepts horizontal directions (forward/back/left/right).
-    For 2-axis diagonals, each axis gets speed/√2 ≈ 71% per channel
-    so the resultant vector magnitude equals the requested speed.
-
-    Returns (channels_dict, label) or None if invalid.
-    """
-    channels_map: dict[int, int] = {}  # ch → sign
-    for part in parts:
-        if part not in DIRECTION_COMPONENTS:
-            return None
-        ch, sign = DIRECTION_COMPONENTS[part]
-        if ch in channels_map:  # conflicting axes (e.g. forward+back)
-            return None
-        channels_map[ch] = sign
-    if not channels_map or len(channels_map) > 2:
-        return None  # Max 2 horizontal axes
-    n = len(channels_map)
-    offset = speed_pwm - NEUTRAL_PWM  # e.g. 1700−1500 = 200
-    scaled = int(offset / math.sqrt(n)) if n > 1 else offset
-    channels = {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM,
-                CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM}
-    for ch, sign in channels_map.items():
-        channels[ch] = NEUTRAL_PWM + sign * scaled
-    label = '-'.join(parts)
-    return channels, label
+from .connection_manager import ConnectionManager
+from .telemetry_parser import TelemetryParser
+from .rc_controller import (
+    RcController, NEUTRAL_CHANNELS, NEUTRAL_PWM, PWM_RANGE,
+    CH_FORWARD, CH_LATERAL, CH_THROTTLE, CH_YAW,
+)
+from .command_handler import CommandHandler
 
 
 class MavlinkInspectorNode(Node):
-    """Main MAVLink inspector node - owns Pixhawk connection."""
+    """Main MAVLink inspector node — owns Pixhawk connection."""
 
     def __init__(self):
         super().__init__('mavlink_inspector')
-        self._connection_port = self.declare_parameter('connection_port', '/dev/ttyACM0').value
-        self._baud = self.declare_parameter('baud', 115200).value
         self._boot_time = time.time()
 
-        # Connection state
-        self._master = None
-        self._connected = False
-        self._last_heartbeat = 0
-        self._heartbeat_timeout = 3.0  # seconds without heartbeat before declaring lost
-        self._heartbeat_lost_notified = False
+        # ── ROS parameters ───────────────────────────────────────────
+        conn_port = self.declare_parameter(
+            'connection_port', '/dev/ttyACM0').value
+        baud = self.declare_parameter('baud', 115200).value
+        yaw_source = self.declare_parameter('yaw_source', 'attitude').value
 
-        # Reconnection state
-        self._reconnecting = False
-        self._reconnect_backoff = 2.0  # initial retry delay (seconds)
-        self._reconnect_backoff_max = 15.0
-        self._reconnect_backoff_current = 2.0
-        # Ports to scan when configured port isn't found
-        self._fallback_ports = [
-            '/dev/ttyACM0', '/dev/ttyACM1', '/dev/ttyACM2', '/dev/ttyACM3',
-            '/dev/ttyUSB0', '/dev/ttyUSB1',
-        ]
+        self._ramp_rate = self.declare_parameter('ramp_rate', 800).value
 
-        # Cached state
-        self._armed = False
-        self._flight_mode = 'UNKNOWN'
-        self._depth = 0.0
-        self._yaw = 0.0
-        self._pitch = 0.0
-        self._roll = 0.0
-        self._voltage = 0.0
-        self._current = 0.0
-        self._prev_armed = None
-        self._prev_mode = None
-        self._prev_depth = 0.0   # for derivative-on-measurement (depth PID)
-        self._prev_yaw = 0.0     # for derivative-on-measurement (yaw PID)
-
-        # BUG6 FIX: Yaw source selection — AHRS2 and ATTITUDE both update yaw
-        # but at different rates, causing jitter. Configurable: 'attitude' (default),
-        # 'ahrs2', or 'both' (legacy, not recommended).
-        self._yaw_source = self.declare_parameter('yaw_source', 'attitude').value
-
-        # Diagnostics state (lower priority, published at 2 Hz)
-        self._heading_rate = 0.0      # deg/s
-        self._pressure = 0.0          # hPa
-        self._temperature = 0.0       # °C
-        self._servo_output = [0] * 8  # PWM per motor channel
-        self._rc_channels = [0] * 8   # RC readback
-        self._cpu_load = 0.0          # %
-
-        # Movement state: RC must be sent continuously (ArduSub timeout ~3s)
-        self._current_movement = None  # {ch_*: pwm, end_time}
-        self._movement_lock = threading.Lock()
-        # Yaw-to-heading: use thrusters to reach target (not set_attitude_target)
-        self._yaw_to_heading = None  # {target_deg, gain_offset, tolerance_deg, ...}
-
-        # ── Acceleration / deceleration ramp (Design Issue 1) ────────────
-        # Movement commands set target PWM instantly, but actual PWM sent to
-        # thrusters is ramped at `ramp_rate` PWM/second to produce trapezoidal
-        # velocity profiles.  This prevents mechanical stress, current spikes,
-        # and jerky motion from instant PWM jumps.
-        #
-        # How it works:
-        #   - _ramped_channels tracks the ACTUAL PWM being sent per channel.
-        #   - Each 20Hz tick, actual moves toward target by ramp_rate * dt.
-        #   - When movement expires, target becomes neutral → natural decel.
-        #   - stop command bypasses ramp (instant neutral for safety).
-        #
-        # NOT applied to PID layers (depth, yaw, future vision).  PID output
-        # is inherently smooth (proportional to error).  Ramping PID output
-        # would add phase lag and degrade disturbance rejection.
-        #
-        # Default 800 PWM/s → 0.5s full-range ramp (0 to ±400 PWM).
-        # 50% speed (±200 offset) ramps in ~0.25s.
-        self._ramped_channels = {}  # {channel_id: current_actual_pwm (float)}
-        self._ramp_rate = self.declare_parameter('ramp_rate', 800).value  # PWM/second
-
-        # PID yaw gains (tunable via ROS params)
+        # Yaw PID gains
         self._yaw_kp = self.declare_parameter('yaw_kp', 2.0).value
         self._yaw_ki = self.declare_parameter('yaw_ki', 0.05).value
         self._yaw_kd = self.declare_parameter('yaw_kd', 0.5).value
-        self._yaw_max_integral = self.declare_parameter('yaw_max_integral', 50.0).value
+        self._yaw_max_integral = self.declare_parameter(
+            'yaw_max_integral', 50.0).value
 
-        # ── Software depth PID (via RC throttle channel, works in any mode) ──
-        self._depth_pid = None  # {target_m, kp, ki, kd, integral, last_error, last_time, max_integral}
-        # Depth PID gains (tunable via ROS params)
-        # POOL TODO: Tune these gains underwater. If AUV oscillates around target,
-        #   reduce Kp first (try 300→200). If it settles slowly, increase Kp.
-        #   Ki handles steady-state drift — reduce if integral windup is visible.
-        #   Kd damps overshoot — increase if AUV yo-yos past target.
-        # POOL-TUNED defaults (from 2026-03-09 pool session):
-        #   Kp 500→800: 500 was too gentle — AUV didn't fight depth disturbances.
-        #   Ki 25→50:   better buoyancy compensation (max I = 50*1.0 = 50 PWM = 12.5%).
-        #   Kd 200→100: reduced because EMA-filtered derivative is smoother;
-        #               200 with raw derivative caused pulsing (derivative spikes).
-        #   max_integral 0.5→1.0: allows Ki to compensate buoyancy drift properly.
-        #   tolerance 0.05→0.08: 8cm deadband to suppress sensor-noise throttle jitter.
+        # Depth PID gains (POOL-TUNED defaults)
         self._depth_kp = self.declare_parameter('depth_kp', 800.0).value
         self._depth_ki = self.declare_parameter('depth_ki', 50.0).value
         self._depth_kd = self.declare_parameter('depth_kd', 100.0).value
-        self._depth_max_integral = self.declare_parameter('depth_max_integral', 1.0).value
-        self._depth_tolerance = self.declare_parameter('depth_tolerance', 0.08).value  # metres
+        self._depth_max_integral = self.declare_parameter(
+            'depth_max_integral', 1.0).value
+        self._depth_tolerance = self.declare_parameter(
+            'depth_tolerance', 0.08).value
 
-        # ── PID output rate limiting (DESIGN 7) ───────────────────────────
-        # Limits how fast PID output can change per tick, preventing
-        # thruster hunting from rapid PWM oscillation.
-        # Separate from velocity ramp (Design 1): ramp is for commanded speed,
-        # rate limiting is for PID output smoothing.
-        self._pid_max_rate = self.declare_parameter('pid_max_rate', 50).value  # PWM units per tick
-        self._last_depth_pid_output = 0  # track for rate limiting
-        self._last_yaw_pid_output = 0    # track for rate limiting
+        self._pid_max_rate = self.declare_parameter(
+            'pid_max_rate', 50).value
+        self._nominal_voltage = self.declare_parameter(
+            'nominal_voltage', 0.0).value
+        self._surface_depth = self.declare_parameter(
+            'surface_depth', 0.0).value
+        self._ack_timeout = self.declare_parameter(
+            'ack_timeout', 3.0).value
 
-        # ── EMA-filtered depth rate for PID derivative (POOL FIX 2) ──────
-        # Raw depth_rate from consecutive AHRS2 samples oscillates because
-        # AHRS2 arrives at ~10Hz while PID runs at 20Hz. EMA smoothing
-        # (α=0.3) removes this noise while preserving dynamic response.
-        self._filtered_depth_rate = 0.0
+        # ── Modules ──────────────────────────────────────────────────
+        self._conn = ConnectionManager(
+            port=conn_port,
+            baud=baud,
+            logger=self.get_logger(),
+            on_event=self._publish_event,
+        )
+        self._telemetry = TelemetryParser(yaw_source=yaw_source)
+        self._rc = RcController(ramp_rate=self._ramp_rate)
+        self._cmd_handler = CommandHandler(self)
 
-        # ── Battery voltage compensation (MISSING 3) ───────────────────
-        # Scales movement PWM offset by (nominal / actual) voltage to
-        # maintain consistent thrust despite battery discharge.
-        # Set to 0.0 to disable. Typical 4S LiPo nominal = 14.8V.
-        self._nominal_voltage = self.declare_parameter('nominal_voltage', 0.0).value  # 0=disabled
+        # ── Movement state ───────────────────────────────────────────
+        self._current_movement = None   # {channels, end_time, bypass_ramp, command}
+        self._movement_lock = threading.Lock()
 
-        # ── Surface depth offset (POOL FIX 3) ────────────────────────────
-        # Barometer may read ~-0.1m at the water surface (not exactly 0).
-        # User-specified depths are relative to the water surface, so we
-        # compute target_m = surface_depth - abs(user_depth).
-        # Auto-calibrated on first arm, or set manually via ROS param /
-        # 'calibrate_depth' command.
-        self._surface_depth = self.declare_parameter('surface_depth', 0.0).value
+        # ── Depth PID state ──────────────────────────────────────────
+        self._depth_pid = None          # PidController or None
+        self._depth_pid_target = None   # target depth (m, negative)
+        self._depth_pid_last_time = 0.0
 
-        # ── ALT_HOLD depth target (for periodic re-send) ──
-        # POOL TODO: Verify ALT_HOLD mode actually engages with our Pixhawk 2.4.8
-        #   firmware. If `dive` command has no effect, firmware may not support
-        #   SET_POSITION_TARGET_GLOBAL_INT — fall back to `p_dive` (software PID).
-        self._alt_hold_target = None  # Target depth (negative m) to re-send in ALT_HOLD
+        # ── Yaw heading state ────────────────────────────────────────
+        self._yaw_pid = None            # PidController or None (PID mode)
+        self._yaw_target = None         # target heading degrees or None
+        self._yaw_tolerance = 3.0
+        self._yaw_bang_offset = None    # PWM offset (bang-bang mode)
+        self._yaw_command = ''          # command name for feedback
+        self._yaw_pid_last_time = 0.0
 
-        # ── Command ACK tracking ──
-        # Tracks COMMAND_LONG messages awaiting COMMAND_ACK from Pixhawk.
-        # Each entry: {mav_cmd_id: {'sent_at': float, 'desc': str, 'event': Event, 'result': int|None}}
-        self._pending_acks = {}  # type: dict[int, dict]
+        # ── ALT_HOLD depth target ────────────────────────────────────
+        self._alt_hold_target = None
+
+        # ── Command ACK tracking ─────────────────────────────────────
+        self._pending_acks: dict[int, dict] = {}
         self._pending_acks_lock = threading.Lock()
-        self._ack_timeout = self.declare_parameter('ack_timeout', 3.0).value  # seconds
-        # Mode change verification
-        self._pending_mode_change = None  # {'target': str, 'sent_at': float}
+        self._pending_mode_change = None
 
-        # Publishers
+        # ── Publishers ───────────────────────────────────────────────
+        reliable_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE, depth=10)
+        reliable_1 = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE, depth=1)
+
         self._event_pub = self.create_publisher(
-            MavlinkEvent, '/mavlink/events', QoSProfile(
-                reliability=ReliabilityPolicy.RELIABLE, depth=10
-            )
-        )
+            MavlinkEvent, '/mavlink/events', reliable_qos)
         self._state_pub = self.create_publisher(
-            VehicleState, '/mavlink/vehicle_state', QoSProfile(
-                reliability=ReliabilityPolicy.RELIABLE, depth=1
-            )
-        )
+            VehicleState, '/mavlink/vehicle_state', reliable_1)
         self._diag_pub = self.create_publisher(
-            VehicleDiagnostics, '/mavlink/diagnostics', QoSProfile(
-                reliability=ReliabilityPolicy.RELIABLE, depth=1
-            )
-        )
-        # DESIGN 6: Command feedback publisher
+            VehicleDiagnostics, '/mavlink/diagnostics', reliable_1)
         self._feedback_pub = self.create_publisher(
-            DriverCommandFeedback, '/driver/feedback', QoSProfile(
-                reliability=ReliabilityPolicy.RELIABLE, depth=10
-            )
-        )
+            DriverCommandFeedback, '/driver/feedback', reliable_qos)
 
-        # Subscriber for driver commands
-        self._cmd_sub = self.create_subscription(
-            DriverCommand, '/driver/command', self._on_driver_command,
-            QoSProfile(reliability=ReliabilityPolicy.RELIABLE, depth=10)
-        )
+        # ── Subscriber ───────────────────────────────────────────────
+        self.create_subscription(
+            DriverCommand, '/driver/command',
+            self._cmd_handler.handle, reliable_qos)
 
-        # Timers
-        self._read_timer = self.create_timer(0.02, self._read_mavlink)  # 50 Hz
-        self._state_timer = self.create_timer(0.1, self._publish_state)  # 10 Hz
-        self._heartbeat_timer = self.create_timer(1.0, self._send_heartbeat)
-        # RC override at 20 Hz - ArduSub requires constant rate or failsafe (~3s timeout)
-        self._rc_override_timer = self.create_timer(0.05, self._send_rc_override)
-        # Diagnostics at 2 Hz
-        self._diag_timer = self.create_timer(0.5, self._publish_diagnostics)
-        # Re-send ALT_HOLD depth target at 2 Hz (ArduSub may forget if not refreshed)
-        self._depth_target_timer = self.create_timer(0.5, self._resend_depth_target)
-        # Check for timed-out command ACKs at 2 Hz
-        self._ack_timeout_timer = self.create_timer(0.5, self._check_ack_timeouts)
+        # ── Timers ───────────────────────────────────────────────────
+        self.create_timer(0.02, self._read_mavlink)       # 50 Hz
+        self.create_timer(0.1, self._publish_state)       # 10 Hz
+        self.create_timer(1.0, self._conn.send_heartbeat) # 1 Hz
+        self.create_timer(0.05, self._send_rc_override)   # 20 Hz
+        self.create_timer(0.5, self._publish_diagnostics) # 2 Hz
+        self.create_timer(0.5, self._resend_depth_target) # 2 Hz
+        self.create_timer(0.5, self._check_ack_timeouts)  # 2 Hz
 
-        # Start connection in background
-        self._connect_thread = threading.Thread(target=self._connect, daemon=True)
-        self._connect_thread.start()
+        # ── Start connection ─────────────────────────────────────────
+        self._conn.start_background()
 
-    def _publish_event(self, event_type: str, description: str, raw_data: str = ''):
-        """Publish a MAVLink event. Safe to call during shutdown."""
+    # ── Event / feedback helpers ─────────────────────────────────────
+
+    def _publish_event(self, event_type: str, description: str,
+                       raw_data: str = ''):
+        """Publish a MAVLink event.  Safe during shutdown."""
         try:
             if not rclpy.ok():
                 return
@@ -299,12 +164,13 @@ class MavlinkInspectorNode(Node):
             msg.description = description
             msg.raw_data = raw_data
             self._event_pub.publish(msg)
-            self.get_logger().info(f"[{event_type}] {description}")
+            self.get_logger().info(f'[{event_type}] {description}')
         except Exception:
             pass
 
-    def _publish_feedback(self, command: str, status: str, error: float = 0.0, detail: str = ''):
-        """Publish command feedback (DESIGN 6). Safe to call during shutdown."""
+    def _publish_feedback(self, command: str, status: str,
+                          error: float = 0.0, detail: str = ''):
+        """Publish command feedback (DESIGN 6).  Safe during shutdown."""
         try:
             if not rclpy.ok():
                 return
@@ -319,388 +185,238 @@ class MavlinkInspectorNode(Node):
         except Exception:
             pass
 
-    # ── MAVLink command name/result helpers ────────────────────────────
-
-    @staticmethod
-    def _mav_cmd_name(cmd_id: int) -> str:
-        """Human-readable name for a MAV_CMD id."""
-        try:
-            entry = mavutil.mavlink.enums['MAV_CMD'][cmd_id]
-            # Strip the MAV_CMD_ prefix for brevity
-            name = entry.name
-            if name.startswith('MAV_CMD_'):
-                name = name[8:]
-            return name
-        except (KeyError, AttributeError):
-            return f'CMD_{cmd_id}'
-
-    @staticmethod
-    def _mav_result_name(result: int) -> str:
-        """Human-readable name for a MAV_RESULT value."""
-        _RESULT_MAP = {
-            0: 'ACCEPTED',
-            1: 'TEMPORARILY_REJECTED',
-            2: 'DENIED',
-            3: 'UNSUPPORTED',
-            4: 'FAILED',
-            5: 'IN_PROGRESS',
-            6: 'CANCELLED',
-        }
-        return _RESULT_MAP.get(result, f'RESULT_{result}')
-
-    def _close_master(self):
-        """Safely close and null the MAVLink connection."""
-        if self._master is not None:
-            try:
-                self._master.close()
-            except Exception:
-                pass
-            self._master = None
-
-    def _find_pixhawk_port(self) -> str | None:
-        """Find the Pixhawk serial port. Tries configured port first, then scans fallbacks."""
-        # Try configured port first
-        if Path(self._connection_port).exists():
-            return self._connection_port
-        # Scan fallback ports
-        for port in self._fallback_ports:
-            if port != self._connection_port and Path(port).exists():
-                self.get_logger().info(f'Configured port {self._connection_port} not found, trying {port}')
-                return port
-        return None
-
-    def _connect(self):
-        """Connect to Pixhawk (runs in thread). Auto-detects port, handles backoff."""
-        self._reconnecting = True
-        try:
-            # Always clean up stale connection first
-            self._close_master()
-
-            port = self._find_pixhawk_port()
-            if port is None:
-                raise ConnectionError(
-                    f'No Pixhawk found on {self._connection_port} or fallbacks {self._fallback_ports}'
-                )
-
-            self.get_logger().info(f'Connecting to Pixhawk at {port}...')
-            self._master = mavutil.mavlink_connection(port, self._baud)
-            self._master.wait_heartbeat(timeout=10)
-            self._connected = True
-            self._last_heartbeat = time.time()
-            self._heartbeat_lost_notified = False
-            self._reconnect_backoff_current = self._reconnect_backoff  # reset backoff
-            # Update connection_port to the port that actually worked
-            self._connection_port = port
-            self._publish_event('connected', f'Pixhawk connected on {port}')
-            self.get_logger().info(f'Pixhawk connected and active on {port}.')
-        except Exception as e:
-            self.get_logger().error(f'Failed to connect: {e}')
-            self._publish_event('connection_failed', str(e))
-            self._connected = False
-            # Clean up on failure so stale fd doesn't block next attempt
-            self._close_master()
-            # Increase backoff for next attempt
-            self._reconnect_backoff_current = min(
-                self._reconnect_backoff_current * 2, self._reconnect_backoff_max
-            )
-        finally:
-            self._reconnecting = False
-
-    def _send_heartbeat(self):
-        """Send GCS heartbeat and check connection health."""
-        # --- Reconnection logic ---
-        if not self._connected:
-            if not self._reconnecting:
-                delay = self._reconnect_backoff_current
-                self.get_logger().info(
-                    f'Not connected. Reconnecting in {delay:.0f}s...'
-                )
-                # Schedule reconnect after backoff delay in a thread
-                def _delayed_reconnect():
-                    time.sleep(delay)
-                    if not self._connected and not self._reconnecting:
-                        self._connect()
-                threading.Thread(target=_delayed_reconnect, daemon=True).start()
-            return
-
-        if self._master is None:
-            return
-
-        # --- Heartbeat loss detection ---
-        now = time.time()
-        if self._last_heartbeat > 0 and (now - self._last_heartbeat) > self._heartbeat_timeout:
-            if not self._heartbeat_lost_notified:
-                self._heartbeat_lost_notified = True
-                elapsed = now - self._last_heartbeat
-                self._publish_event(
-                    'heartbeat_lost',
-                    f'No Pixhawk heartbeat for {elapsed:.1f}s (timeout={self._heartbeat_timeout}s)'
-                )
-                self.get_logger().warn('Pixhawk heartbeat lost!')
-            # If heartbeat lost for too long, mark disconnected to trigger reconnect
-            if (now - self._last_heartbeat) > self._heartbeat_timeout * 3:
-                self.get_logger().error('Heartbeat lost too long — marking disconnected for reconnect.')
-                self._connected = False
-                self._publish_event('connection_lost', 'Heartbeat timeout exceeded, will reconnect')
-            return  # Don't send heartbeat to a dead link
-
-        # --- Send GCS heartbeat ---
-        try:
-            self._master.mav.heartbeat_send(
-                mavutil.mavlink.MAV_TYPE_ONBOARD_CONTROLLER,
-                mavutil.mavlink.MAV_AUTOPILOT_INVALID, 0, 0, 0
-            )
-        except Exception as e:
-            self.get_logger().warn(f'Heartbeat send failed: {e}')
-            self._connected = False
-
-    def _read_mavlink(self):
-        """Read and process MAVLink messages."""
-        if not self._connected or self._master is None:
-            return
-        try:
-            msg = self._master.recv_match(blocking=False)
-            while msg is not None:
-                self._process_message(msg)
-                msg = self._master.recv_match(blocking=False)
-        except Exception as e:
-            self.get_logger().error(f'Read error: {e}')
-            self._connected = False
-            self._publish_event('connection_lost', str(e))
-
-    def _process_message(self, msg):
-        """Process a received MAVLink message."""
-        msg_type = msg.get_type()
-        if msg_type == 'HEARTBEAT':
-            self._last_heartbeat = time.time()
-            # Heartbeat restored after loss
-            if self._heartbeat_lost_notified:
-                self._heartbeat_lost_notified = False
-                self._publish_event('heartbeat_restored', 'Pixhawk heartbeat restored')
-                self.get_logger().info('Pixhawk heartbeat restored.')
-            self._armed = (msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED) != 0
-            mode_id = msg.custom_mode
-            self._flight_mode = self._get_mode_name(mode_id)
-            if self._prev_armed is not None and self._prev_armed != self._armed:
-                ev = 'armed' if self._armed else 'disarmed'
-                self._publish_event(ev, f'Motors {"ARMED" if self._armed else "DISARMED"}')
-                # POOL FIX 4: Clear all control state on disarm so PID/yaw
-                # lock doesn't persist across disarm→arm cycles.
-                if not self._armed:
-                    with self._movement_lock:
-                        self._current_movement = None
-                        self._yaw_to_heading = None
-                        self._depth_pid = None
-                    self._ramped_channels.clear()
-                    self._alt_hold_target = None
-                    self._last_depth_pid_output = 0
-                    self._last_yaw_pid_output = 0
-                    self._filtered_depth_rate = 0.0
-            self._prev_armed = self._armed
-            if self._prev_mode is not None and self._prev_mode != self._flight_mode:
-                self._publish_event('mode_change', f'Flight mode: {self._flight_mode}')
-            self._prev_mode = self._flight_mode
-        elif msg_type == 'AHRS2':
-            # AHRS2: secondary AHRS. Depth always comes from here.
-            # BUG6 FIX: Yaw only from AHRS2 if yaw_source='ahrs2' or 'both'.
-            self._prev_depth = self._depth  # store previous for derivative-on-measurement
-            self._depth = msg.altitude
-            if self._yaw_source in ('ahrs2', 'both'):
-                self._prev_yaw = self._yaw
-                self._yaw = math.degrees(msg.yaw) % 360
-            self._pitch = math.degrees(msg.pitch)
-            self._roll = math.degrees(msg.roll)
-        elif msg_type == 'ATTITUDE':
-            # ATTITUDE: primary attitude (ArduSub standard for heading).
-            # BUG6 FIX: Yaw only from ATTITUDE if yaw_source='attitude' or 'both'.
-            yaw_rad = msg.yaw
-            if yaw_rad < 0:
-                yaw_rad += 2 * math.pi
-            if self._yaw_source in ('attitude', 'both'):
-                self._prev_yaw = self._yaw
-                self._yaw = math.degrees(yaw_rad) % 360
-            self._heading_rate = math.degrees(msg.yawspeed)
-        elif msg_type == 'SYS_STATUS':
-            self._voltage = msg.voltage_battery / 1000.0 if msg.voltage_battery != 0xFFFF else 0
-            self._current = msg.current_battery / 100.0 if msg.current_battery != -1 else 0
-            self._cpu_load = msg.load / 10.0  # SYS_STATUS.load is in 0.1% units
-        elif msg_type == 'SCALED_PRESSURE':
-            self._pressure = msg.press_abs      # hPa
-            self._temperature = msg.temperature / 100.0  # cdegC → °C
-        elif msg_type == 'SERVO_OUTPUT_RAW':
-            self._servo_output = [
-                msg.servo1_raw, msg.servo2_raw, msg.servo3_raw, msg.servo4_raw,
-                msg.servo5_raw, msg.servo6_raw, msg.servo7_raw, msg.servo8_raw,
-            ]
-        elif msg_type == 'RC_CHANNELS':
-            self._rc_channels = [
-                msg.chan1_raw, msg.chan2_raw, msg.chan3_raw, msg.chan4_raw,
-                msg.chan5_raw, msg.chan6_raw, msg.chan7_raw, msg.chan8_raw,
-            ]
-        elif msg_type == 'COMMAND_ACK':
-            cmd_id = msg.command
-            result = msg.result
-            cmd_name = self._mav_cmd_name(cmd_id)
-            result_name = self._mav_result_name(result)
-
-            # Match against pending ACK registry
-            with self._pending_acks_lock:
-                pending = self._pending_acks.pop(cmd_id, None)
-
-            desc = pending['desc'] if pending else cmd_name
-
-            # Build human-readable result message
-            if result == 0:  # ACCEPTED
-                ack_msg = f'{desc}: ACCEPTED'
-                ack_type = 'command_accepted'
-            elif result == 1:  # TEMPORARILY_REJECTED
-                ack_msg = f'{desc}: TEMPORARILY REJECTED (retry later)'
-                ack_type = 'command_rejected'
-            elif result == 2:  # DENIED
-                ack_msg = f'{desc}: DENIED (bad params or state)'
-                ack_type = 'command_denied'
-            elif result == 3:  # UNSUPPORTED
-                ack_msg = f'{desc}: UNSUPPORTED by firmware'
-                ack_type = 'command_denied'
-            elif result == 4:  # FAILED
-                ack_msg = f'{desc}: FAILED'
-                ack_type = 'command_failed'
-            elif result == 5:  # IN_PROGRESS
-                progress = getattr(msg, 'progress', 255)
-                pct = f' ({progress}%)' if progress != 255 else ''
-                ack_msg = f'{desc}: IN PROGRESS{pct}'
-                ack_type = 'command_ack'
-                # Re-register so we get the final result too
-                if pending:
-                    with self._pending_acks_lock:
-                        self._pending_acks[cmd_id] = pending
-                    pending = None  # don't resolve event yet
-            elif result == 6:  # CANCELLED
-                ack_msg = f'{desc}: CANCELLED'
-                ack_type = 'command_cancelled'
-            else:
-                ack_msg = f'{desc}: {result_name}'
-                ack_type = 'command_ack'
-
-            self._publish_event(ack_type, ack_msg,
-                                raw_data=str(msg.to_dict()))
-
-            # Resolve the pending event so callers waiting on it unblock
-            if pending is not None:
-                pending['result'] = result
-                pending['event'].set()
-
-    def _get_mode_name(self, mode_id: int) -> str:
-        """Get mode name from ID."""
-        if self._master is None:
-            return 'UNKNOWN'
-        mapping = self._master.mode_mapping()
-        for name, mid in mapping.items():
-            if mid == mode_id:
-                return name
-        return f'MODE_{mode_id}'
+    # ── State publishing ─────────────────────────────────────────────
 
     def _publish_state(self):
-        """Publish current vehicle state. Safe to call during shutdown."""
         try:
             if not rclpy.ok():
                 return
+            t = self._telemetry
             msg = VehicleState()
             msg.header.stamp = self.get_clock().now().to_msg()
             msg.header.frame_id = 'base_link'
-            msg.armed = self._armed
-            msg.flight_mode = self._flight_mode
-            msg.depth = float(self._depth)
-            msg.yaw = float(self._yaw)
-            msg.pitch = float(self._pitch)
-            msg.roll = float(self._roll)
-            msg.voltage = float(self._voltage)
-            msg.current = float(self._current)
+            msg.armed = t.armed
+            msg.flight_mode = t.flight_mode
+            msg.depth = float(t.depth)
+            msg.yaw = float(t.yaw)
+            msg.pitch = float(t.pitch)
+            msg.roll = float(t.roll)
+            msg.voltage = float(t.voltage)
+            msg.current = float(t.current)
             self._state_pub.publish(msg)
         except Exception:
             pass
 
     def _publish_diagnostics(self):
-        """Publish diagnostics snapshot (2 Hz)."""
         try:
             if not rclpy.ok():
                 return
+            t = self._telemetry
             msg = VehicleDiagnostics()
             msg.header.stamp = self.get_clock().now().to_msg()
             msg.header.frame_id = 'base_link'
-            msg.heading_rate = float(self._heading_rate)
-            msg.pressure = float(self._pressure)
-            msg.temperature = float(self._temperature)
-            msg.servo_output = [int(v) for v in self._servo_output]
-            msg.rc_channels = [int(v) for v in self._rc_channels]
-            msg.cpu_load = float(self._cpu_load)
+            msg.heading_rate = float(t.heading_rate)
+            msg.pressure = float(t.pressure)
+            msg.temperature = float(t.temperature)
+            msg.servo_output = [int(v) for v in t.servo_output]
+            msg.rc_channels = [int(v) for v in t.rc_channels]
+            msg.cpu_load = float(t.cpu_load)
             self._diag_pub.publish(msg)
         except Exception:
             pass
 
-    def _send_rc_channels(self, channels: dict[int, int]):
-        """Send a single RC_CHANNELS_OVERRIDE with all specified channels.
+    # ── MAVLink reading ──────────────────────────────────────────────
 
-        Args:
-            channels: {channel_id (1-18): pwm_value} dict.
-                      Unspecified channels default to 65535 (no change).
-                      PWM values are clamped to 1100-1900.
-        """
-        if not self._connected or self._master is None:
+    def _read_mavlink(self):
+        for msg in self._conn.read_messages():
+            self._process_message(msg)
+
+    def _process_message(self, msg):
+        msg_type = msg.get_type()
+
+        # ── Connection health from heartbeat ─────────────────────────
+        if msg_type == 'HEARTBEAT':
+            self._conn.last_heartbeat = time.time()
+            if self._conn.heartbeat_lost_notified:
+                self._conn.heartbeat_lost_notified = False
+                self._publish_event('heartbeat_restored',
+                                    'Pixhawk heartbeat restored')
+                self.get_logger().info('Pixhawk heartbeat restored.')
+
+        # ── COMMAND_ACK — own ACK tracking ───────────────────────────
+        if msg_type == 'COMMAND_ACK':
+            self._handle_command_ack(msg)
             return
-        rc = [65535] * 18
-        for ch, pwm in channels.items():
-            if ch < 1 or ch > 18:
-                self.get_logger().warn(f'Invalid RC channel {ch}, skipping')
-                continue
-            rc[ch - 1] = int(max(1100, min(1900, pwm)))
+
+        # ── All other messages → telemetry parser ────────────────────
+        events = self._telemetry.process(msg, self._conn.master)
+        for ev_type, ev_desc, ev_raw in events:
+            self._publish_event(ev_type, ev_desc, ev_raw)
+            # POOL FIX 4: clear control state on disarm
+            if ev_type == 'disarmed':
+                self._clear_all_control()
+
+    # ── Control state management ─────────────────────────────────────
+
+    def _clear_all_control(self):
+        """Clear all movement, PID, and heading control state."""
+        with self._movement_lock:
+            self._current_movement = None
+            self._depth_pid = None
+            self._depth_pid_target = None
+            self._yaw_pid = None
+            self._yaw_target = None
+            self._yaw_bang_offset = None
+        self._rc.clear_ramp()
+        self._alt_hold_target = None
+
+    def _stop_all(self):
+        """Stop all thrusters — safety override (bypasses ramp)."""
+        self._clear_all_control()
+        self._rc.send_rc(NEUTRAL_CHANNELS, self._conn.master,
+                         self.get_logger())
+        self._publish_event('movement', 'Stop - all thrusters neutral')
+
+    @staticmethod
+    def _angle_error(current: float, target: float) -> float:
+        """Shortest-path angle error in [−180, 180] degrees."""
+        err = (target - current) % 360
+        if err > 180:
+            err -= 360
+        return err
+
+    # ── RC override (20 Hz) — 4-layer channel builder ────────────────
+
+    def _send_rc_override(self):
+        if not self._conn.connected or self._conn.master is None:
+            return
+
+        now = time.time()
+
+        # Snapshot state under lock
+        with self._movement_lock:
+            mv = self._current_movement
+            depth_pid = self._depth_pid
+            depth_target = self._depth_pid_target
+            yaw_pid = self._yaw_pid
+            yaw_target = self._yaw_target
+            yaw_tolerance = self._yaw_tolerance
+            yaw_bang = self._yaw_bang_offset
+
+        # ── Movement expiry ──────────────────────────────────────────
+        if mv is not None and now >= mv['end_time']:
+            expired_cmd = mv.get('command', 'unknown')
+            with self._movement_lock:
+                self._current_movement = None
+            self._publish_event('movement', 'Movement duration expired')
+            self._publish_feedback(expired_cmd, 'completed',
+                                   detail='duration expired')
+            mv = None
+
+        # ── Layer 1+2: neutral + movement (with ramp) ────────────────
+        bypass = mv.get('bypass_ramp', False) if mv else False
+        channels = dict(NEUTRAL_CHANNELS)
+        self._rc.apply_movement(channels, mv, bypass)
+
+        # ── Layer 3: depth PID (overrides CH_THROTTLE) ───────────────
+        if depth_pid is not None and depth_target is not None:
+            dt = now - self._depth_pid_last_time if self._depth_pid_last_time > 0 else 0.05
+            self._depth_pid_last_time = now
+            if dt <= 0:
+                dt = 0.05
+
+            t = self._telemetry
+            error = depth_target - t.depth
+            raw_rate = (t.depth - t.prev_depth) / dt
+            output = depth_pid.compute(error, dt,
+                                       measurement_rate=raw_rate)
+
+            if depth_pid.in_deadband:
+                channels[CH_THROTTLE] = NEUTRAL_PWM
+            else:
+                channels[CH_THROTTLE] = NEUTRAL_PWM + output
+
+        # ── Layer 4: yaw heading (overrides CH_YAW) ──────────────────
+        if yaw_target is not None:
+            err = self._angle_error(self._telemetry.yaw, yaw_target)
+
+            if abs(err) <= yaw_tolerance:
+                # Target reached
+                with self._movement_lock:
+                    self._yaw_pid = None
+                    self._yaw_target = None
+                    self._yaw_bang_offset = None
+                self._publish_event(
+                    'movement', f'Heading reached: {yaw_target}°')
+                self._publish_feedback(
+                    self._yaw_command or 'yaw_to_heading', 'reached',
+                    error=err, detail=f'heading={yaw_target}°')
+
+            elif yaw_pid is not None:
+                # PID mode
+                dt_y = now - self._yaw_pid_last_time if self._yaw_pid_last_time > 0 else 0.05
+                self._yaw_pid_last_time = now
+                if dt_y <= 0:
+                    dt_y = 0.05
+                output = yaw_pid.compute(
+                    err, dt_y,
+                    measurement_rate=self._telemetry.heading_rate)
+                channels[CH_YAW] = NEUTRAL_PWM + output
+
+            elif yaw_bang is not None:
+                # Bang-bang mode
+                channels[CH_YAW] = NEUTRAL_PWM + (
+                    yaw_bang if err > 0 else -yaw_bang)
+
+        # ── Send combined channels ───────────────────────────────────
+        if not self._rc.send_rc(channels, self._conn.master,
+                                self.get_logger()):
+            self._conn.connected = False
+
+    # ── MAVLink command infrastructure ───────────────────────────────
+
+    @staticmethod
+    def _mav_cmd_name(cmd_id: int) -> str:
         try:
-            self._master.mav.rc_channels_override_send(
-                self._master.target_system, self._master.target_component, *rc
-            )
-        except Exception as e:
-            self.get_logger().error(f'RC override send failed: {e}')
-            self._connected = False
+            name = mavutil.mavlink.enums['MAV_CMD'][cmd_id].name
+            return name[8:] if name.startswith('MAV_CMD_') else name
+        except (KeyError, AttributeError):
+            return f'CMD_{cmd_id}'
 
-    def _set_single_rc_channel(self, channel_id: int, pwm: int):
-        """Set a single RC channel (for one-off commands like servo/grabber).
+    @staticmethod
+    def _mav_result_name(result: int) -> str:
+        _MAP = {
+            0: 'ACCEPTED', 1: 'TEMPORARILY_REJECTED', 2: 'DENIED',
+            3: 'UNSUPPORTED', 4: 'FAILED', 5: 'IN_PROGRESS',
+            6: 'CANCELLED',
+        }
+        return _MAP.get(result, f'RESULT_{result}')
 
-        For periodic RC override, use _send_rc_channels() instead.
-        """
-        self._send_rc_channels({channel_id: pwm})
-
-    # ── Command ACK infrastructure ────────────────────────────────────
-
-    def _send_command_long(self, mav_cmd: int, p1=0, p2=0, p3=0, p4=0,
-                           p5=0, p6=0, p7=0, description: str = '',
+    def _send_command_long(self, mav_cmd: int,
+                           p1=0, p2=0, p3=0, p4=0, p5=0, p6=0, p7=0,
+                           description: str = '',
                            confirmation: int = 0) -> threading.Event | None:
-        """Send a COMMAND_LONG and register it for ACK tracking.
-
-        Returns a threading.Event that will be set when the ACK arrives
-        (or on timeout). Caller can optionally wait on it.
-        Returns None if not connected.
-        """
-        if not self._connected or self._master is None:
+        """Send COMMAND_LONG and register for ACK tracking."""
+        if not self._conn.connected or self._conn.master is None:
             return None
         desc = description or self._mav_cmd_name(mav_cmd)
         self.get_logger().info(
             f'TX COMMAND_LONG  {desc}  '
-            f'cmd={mav_cmd} p1={p1} p2={p2} p3={p3} p4={p4} p5={p5} p6={p6} p7={p7}'
-        )
+            f'cmd={mav_cmd} p1={p1} p2={p2} p3={p3} '
+            f'p4={p4} p5={p5} p6={p6} p7={p7}')
+
         ack_event = threading.Event()
         with self._pending_acks_lock:
             self._pending_acks[mav_cmd] = {
-                'sent_at': time.time(),
-                'desc': desc,
-                'event': ack_event,
-                'result': None,
+                'sent_at': time.time(), 'desc': desc,
+                'event': ack_event, 'result': None,
             }
         try:
-            self._master.mav.command_long_send(
-                self._master.target_system, self._master.target_component,
+            self._conn.master.mav.command_long_send(
+                self._conn.master.target_system,
+                self._conn.master.target_component,
                 mav_cmd, confirmation,
-                p1, p2, p3, p4, p5, p6, p7
-            )
+                p1, p2, p3, p4, p5, p6, p7)
         except Exception as e:
             self.get_logger().error(f'command_long_send failed: {e}')
             with self._pending_acks_lock:
@@ -708,8 +424,52 @@ class MavlinkInspectorNode(Node):
             return None
         return ack_event
 
+    def _handle_command_ack(self, msg):
+        cmd_id = msg.command
+        result = msg.result
+        cmd_name = self._mav_cmd_name(cmd_id)
+        result_name = self._mav_result_name(result)
+
+        with self._pending_acks_lock:
+            pending = self._pending_acks.pop(cmd_id, None)
+
+        desc = pending['desc'] if pending else cmd_name
+
+        if result == 0:
+            ack_msg, ack_type = f'{desc}: ACCEPTED', 'command_accepted'
+        elif result == 1:
+            ack_msg = f'{desc}: TEMPORARILY REJECTED (retry later)'
+            ack_type = 'command_rejected'
+        elif result == 2:
+            ack_msg = f'{desc}: DENIED (bad params or state)'
+            ack_type = 'command_denied'
+        elif result == 3:
+            ack_msg = f'{desc}: UNSUPPORTED by firmware'
+            ack_type = 'command_denied'
+        elif result == 4:
+            ack_msg, ack_type = f'{desc}: FAILED', 'command_failed'
+        elif result == 5:
+            progress = getattr(msg, 'progress', 255)
+            pct = f' ({progress}%)' if progress != 255 else ''
+            ack_msg = f'{desc}: IN PROGRESS{pct}'
+            ack_type = 'command_ack'
+            if pending:
+                with self._pending_acks_lock:
+                    self._pending_acks[cmd_id] = pending
+                pending = None  # don't resolve yet
+        elif result == 6:
+            ack_msg, ack_type = f'{desc}: CANCELLED', 'command_cancelled'
+        else:
+            ack_msg, ack_type = f'{desc}: {result_name}', 'command_ack'
+
+        self._publish_event(ack_type, ack_msg,
+                            raw_data=str(msg.to_dict()))
+
+        if pending is not None:
+            pending['result'] = result
+            pending['event'].set()
+
     def _check_ack_timeouts(self):
-        """Check for COMMAND_LONG ACKs that never arrived."""
         now = time.time()
         timed_out = []
         with self._pending_acks_lock:
@@ -718,1108 +478,122 @@ class MavlinkInspectorNode(Node):
                     timed_out.append((cmd_id, info))
             for cmd_id, _ in timed_out:
                 self._pending_acks.pop(cmd_id, None)
+
         for cmd_id, info in timed_out:
-            desc = info['desc']
             self._publish_event(
                 'command_timeout',
-                f'{desc}: NO RESPONSE (timeout {self._ack_timeout:.0f}s)',
-            )
-            info['result'] = -1  # sentinel for timeout
+                f'{info["desc"]}: NO RESPONSE '
+                f'(timeout {self._ack_timeout:.0f}s)')
+            info['result'] = -1
             info['event'].set()
 
-        # ── Mode change verification ──
+        # Mode change verification
         pmc = self._pending_mode_change
         if pmc is not None:
-            if self._flight_mode == pmc['target']:
+            if self._telemetry.flight_mode == pmc['target']:
                 self._publish_event('mode_verified',
                     f'Mode change confirmed: {pmc["target"]}')
                 self._pending_mode_change = None
             elif now - pmc['sent_at'] > self._ack_timeout:
-                self._publish_event('mode_timeout',
+                self._publish_event(
+                    'mode_timeout',
                     f'Mode change to {pmc["target"]} NOT confirmed '
-                    f'(current: {self._flight_mode})')
+                    f'(current: {self._telemetry.flight_mode})')
                 self._pending_mode_change = None
 
+    # ── Vehicle control helpers ──────────────────────────────────────
+
     def _set_target_attitude(self, roll: float, pitch: float, yaw: float):
-        """Set target attitude (degrees)."""
-        if not self._connected or self._master is None:
+        if not self._conn.connected or self._conn.master is None:
             return
-        self._master.mav.set_attitude_target_send(
+        self._conn.master.mav.set_attitude_target_send(
             int(1e3 * (time.time() - self._boot_time)),
-            self._master.target_system, self._master.target_component,
+            self._conn.master.target_system,
+            self._conn.master.target_component,
             mavutil.mavlink.ATTITUDE_TARGET_TYPEMASK_THROTTLE_IGNORE,
             QuaternionBase([math.radians(a) for a in (roll, pitch, yaw)]),
-            0, 0, 0, 0
-        )
+            0, 0, 0, 0)
 
     def _set_target_depth(self, depth: float):
-        """Set target depth (negative = below surface) via SET_POSITION_TARGET_GLOBAL_INT.
-
-        Requires ALT_HOLD mode. Use the proper typemask as documented:
-        https://www.ardusub.com/developers/pymavlink.html#set-target-depthattitude
-
-        POOL TODO: Confirm that sending depth as negative altitude works with our
-        barometer. ArduSub uses barometric pressure → altitude 0=surface, negative=down.
-        If depth reads wrong, check AHRS.altitude vs VFR_HUD.alt.
-        """
-        if not self._connected or self._master is None:
+        if not self._conn.connected or self._conn.master is None:
             return
-        # Proper typemask: ignore everything except Z position
         type_mask = (
             mavutil.mavlink.POSITION_TARGET_TYPEMASK_X_IGNORE |
             mavutil.mavlink.POSITION_TARGET_TYPEMASK_Y_IGNORE |
-            # NOT Z_IGNORE — we use Z (depth)
             mavutil.mavlink.POSITION_TARGET_TYPEMASK_VX_IGNORE |
             mavutil.mavlink.POSITION_TARGET_TYPEMASK_VY_IGNORE |
             mavutil.mavlink.POSITION_TARGET_TYPEMASK_VZ_IGNORE |
             mavutil.mavlink.POSITION_TARGET_TYPEMASK_AX_IGNORE |
             mavutil.mavlink.POSITION_TARGET_TYPEMASK_AY_IGNORE |
             mavutil.mavlink.POSITION_TARGET_TYPEMASK_AZ_IGNORE |
-            # NOT FORCE_SET
             mavutil.mavlink.POSITION_TARGET_TYPEMASK_YAW_IGNORE |
             mavutil.mavlink.POSITION_TARGET_TYPEMASK_YAW_RATE_IGNORE
         )
-        self._master.mav.set_position_target_global_int_send(
+        self._conn.master.mav.set_position_target_global_int_send(
             int(1e3 * (time.time() - self._boot_time)),
-            self._master.target_system,
-            self._master.target_component,
+            self._conn.master.target_system,
+            self._conn.master.target_component,
             mavutil.mavlink.MAV_FRAME_GLOBAL_INT,
             type_mask,
-            0, 0, depth,  # lat, lon (ignored), alt (depth)
-            0, 0, 0,      # velocities (ignored)
-            0, 0, 0,      # accelerations (ignored)
-            0, 0           # yaw, yaw_rate (ignored)
-        )
+            0, 0, depth, 0, 0, 0, 0, 0, 0, 0, 0)
 
     def _resend_depth_target(self):
-        """Re-send ALT_HOLD depth target periodically so ArduSub maintains the setpoint.
-
-        POOL TODO: Check if 2Hz re-send rate (0.5s timer) is sufficient. If
-        ArduSub drops the target between sends, increase to 5Hz (0.2s timer).
-        """
-        if self._alt_hold_target is not None and self._connected:
+        if self._alt_hold_target is not None and self._conn.connected:
             self._set_target_depth(self._alt_hold_target)
 
-    # Neutral channels dict — reused for idle/stop sends
-    _NEUTRAL_CHANNELS = {
-        CH_PITCH: NEUTRAL_PWM, CH_ROLL: NEUTRAL_PWM,
-        CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM,
-        CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM,
-    }
-
-    def _stop_all(self):
-        """Stop all thrusters (neutral) in a single RC message.
-
-        Safety override: bypasses the ramp and sends neutral IMMEDIATELY.
-        When the operator says stop, the AUV stops NOW — no gradual decel.
-        """
-        with self._movement_lock:
-            self._current_movement = None
-            self._yaw_to_heading = None
-            self._depth_pid = None
-        self._ramped_channels.clear()  # reset ramp — instant neutral
-        self._alt_hold_target = None
-        self._send_rc_channels(self._NEUTRAL_CHANNELS)
-        self._publish_event('movement', 'Stop - all thrusters neutral')
-
-    def _angle_error(self, current: float, target: float) -> float:
-        """Shortest-path angle error in [-180, 180] degrees."""
-        err = (target - current) % 360
-        if err > 180:
-            err -= 360
-        return err
-
-    def _send_rc_override(self):
-        """Send RC override continuously — ArduSub failsafes (disarms) if RC stops.
-
-        Builds a single channel dict per tick with layered priority:
-          1. Base: neutral on all channels
-          2. Active movement (sets forward, lateral, throttle, yaw)
-          3. Depth PID (overrides CH_THROTTLE)
-          4. Yaw-to-heading PID/bang-bang (overrides CH_YAW)
-        Sends one RC_CHANNELS_OVERRIDE per tick (~20 Hz).
-        """
-        if not self._connected or self._master is None:
-            return
-
-        now = time.time()
-        with self._movement_lock:
-            mv = self._current_movement
-            y2h = self._yaw_to_heading
-            dh = self._depth_pid
-
-        # ── Movement expiry (MISSING 4: smooth transitions) ────────────
-        # Instead of snapping to neutral on expiry, we clear the movement
-        # targets. The ramp layer (below) will then decelerate smoothly
-        # toward neutral because targets default to NEUTRAL_PWM when
-        # mv is None. This avoids abrupt thruster transients.
-        if mv is not None and now >= mv['end_time']:
-            expired_cmd = mv.get('command', 'unknown')
-            with self._movement_lock:
-                self._current_movement = None
-            self._publish_event('movement', 'Movement duration expired')
-            self._publish_feedback(expired_cmd, 'completed', detail='duration expired')
-            mv = None  # targets will default to neutral → ramp decelerates
-
-        # ── Layer 1: base neutral ────────────────────────────────────────
-        channels = dict(self._NEUTRAL_CHANNELS)
-
-        # ── Layer 2: active movement (ramped or instant) ──────────────
-        # By default, actual PWM ramps toward target at ramp_rate PWM/s
-        # to produce trapezoidal velocity profiles (smooth accel/decel).
-        #
-        # Commands prefixed with 'just_' set bypass_ramp=True in the
-        # movement dict, which skips ramping and applies PWM instantly.
-        # This serves as a fallback when ramping causes issues during
-        # testing — the raw bang-bang behavior is always available.
-        #
-        # PID layers (3, 4) always write directly — inherently smooth.
-        # stop command clears _ramped_channels for instant halt (safety).
-        bypass_ramp = mv.get('bypass_ramp', False) if mv is not None else False
-        RAMP_CHANNELS = (CH_FORWARD, CH_LATERAL, CH_THROTTLE, CH_YAW)
-        targets = mv.get('channels', {}) if mv is not None else {}
-
-        if bypass_ramp:
-            # Instant (bang-bang) — copy target PWM directly, sync ramp state
-            for ch in RAMP_CHANNELS:
-                val = float(targets.get(ch, NEUTRAL_PWM))
-                self._ramped_channels[ch] = val
-                channels[ch] = int(round(val))
-        else:
-            # Ramped — move actual PWM toward target by ramp_rate * dt per tick
-            ramp_rate = self._ramp_rate
-            dt = 0.05  # 20Hz tick period
-            max_step = ramp_rate * dt  # max PWM change per tick
-            for ch in RAMP_CHANNELS:
-                target = float(targets.get(ch, NEUTRAL_PWM))
-                current = self._ramped_channels.get(ch, float(NEUTRAL_PWM))
-                diff = target - current
-                if abs(diff) <= max_step:
-                    current = target  # close enough — snap to avoid jitter
-                else:
-                    current += max_step if diff > 0 else -max_step
-                self._ramped_channels[ch] = current
-                channels[ch] = int(round(current))
-
-        # ── Layer 3: depth PID (overrides CH_THROTTLE) ───────────────────
-        if dh is not None:
-            depth_error = dh['target_m'] - self._depth
-            dt = now - dh.get('last_time', now)
-            if dt <= 0:
-                dt = 0.05  # fallback to one tick
-
-            # POOL FIX 2: Deadband — suppress PID output when within
-            # tolerance to prevent thruster pulsing from sensor noise.
-            # Without this, ±1-2cm baro noise causes rapid sign-flipping
-            # on the throttle channel → audible motor pulsing at target.
-            if abs(depth_error) < self._depth_tolerance:
-                # Within deadband: neutral throttle.  Preserve integral
-                # so buoyancy compensation isn't lost on re-entry.
-                channels[CH_THROTTLE] = NEUTRAL_PWM
-                # Smoothly decay the rate-limiter state toward 0
-                max_rate = self._pid_max_rate
-                prev = self._last_depth_pid_output
-                if abs(prev) <= max_rate:
-                    self._last_depth_pid_output = 0
-                else:
-                    self._last_depth_pid_output = (
-                        prev - max_rate if prev > 0 else prev + max_rate)
-                with self._movement_lock:
-                    if self._depth_pid is not None:
-                        self._depth_pid['last_time'] = now
-            else:
-                # ── Active PID computation (outside deadband) ────────────
-
-                # Proportional
-                p_out = dh['kp'] * depth_error
-
-                # BUG7 FIX: Conditional integration — only accumulate when
-                # PID output is not saturated (prevents windup).
-                last_output = dh.get('last_output', 0.0)
-                integral = dh.get('integral', 0.0)
-                if abs(last_output) < PWM_RANGE:  # not saturated → integrate
-                    integral += depth_error * dt
-                max_i = dh.get('max_integral', self._depth_max_integral)
-                integral = max(-max_i, min(max_i, integral))
-                i_out = dh['ki'] * integral
-
-                # POOL FIX 2: EMA-filtered derivative on measurement.
-                # Raw depth_rate from consecutive AHRS2 samples alternates
-                # between actual-change and zero (AHRS2 ~10Hz, PID ~20Hz),
-                # producing derivative spikes → thruster pulsing.
-                # EMA (α=0.3) smooths this while preserving dynamic response.
-                raw_depth_rate = (self._depth - self._prev_depth) / dt
-                alpha = 0.3
-                self._filtered_depth_rate = (
-                    alpha * raw_depth_rate
-                    + (1.0 - alpha) * self._filtered_depth_rate
-                )
-                d_out = -dh['kd'] * self._filtered_depth_rate
-
-                # Total PID → throttle PWM
-                # ArduSub throttle: >1500 = UP, <1500 = DOWN
-                # Error negative (need deeper) → PWM<1500 → DOWN ✓
-                # Error positive (too deep)    → PWM>1500 → UP   ✓
-                pid_output = p_out + i_out + d_out
-                throttle_offset = max(-PWM_RANGE, min(PWM_RANGE, int(pid_output)))
-
-                # DESIGN 7: Rate-limit PID output to prevent thruster hunting.
-                max_rate = self._pid_max_rate
-                prev = self._last_depth_pid_output
-                throttle_offset = max(prev - max_rate,
-                                      min(prev + max_rate, throttle_offset))
-                self._last_depth_pid_output = throttle_offset
-
-                channels[CH_THROTTLE] = NEUTRAL_PWM + throttle_offset
-
-                # Update PID state
-                with self._movement_lock:
-                    if self._depth_pid is not None:
-                        self._depth_pid['integral'] = integral
-                        self._depth_pid['last_error'] = depth_error
-                        self._depth_pid['last_time'] = now
-                        self._depth_pid['last_output'] = throttle_offset
-
-        # ── Layer 4: yaw-to-heading (overrides CH_YAW) ──────────────────
-        if y2h is not None:
-            err = self._angle_error(self._yaw, y2h['target_deg'])
-            if abs(err) <= y2h.get('tolerance_deg', 5.0):
-                with self._movement_lock:
-                    self._yaw_to_heading = None
-                self._publish_event('movement', f'Heading reached: {y2h["target_deg"]}°')
-                self._publish_feedback('yaw_to_heading', 'reached', error=err,
-                                       detail=f'heading={y2h["target_deg"]}°')
-            elif y2h.get('use_pid', False):
-                # ── PID yaw controller ──
-                now_t = time.time()
-                dt = now_t - y2h.get('last_time', now_t)
-                if dt <= 0:
-                    dt = 0.05
-
-                p_out = y2h['kp'] * err
-                integral = y2h.get('integral', 0.0) + err * dt
-                max_i = y2h.get('max_integral', self._yaw_max_integral)
-                integral = max(-max_i, min(max_i, integral))
-                i_out = y2h['ki'] * integral
-
-                # BUG1 FIX: Derivative on measurement instead of error.
-                # Old: d_out = kd * (error - last_error) / dt  — derivative kick on setpoint change.
-                # New: d_out = -kd * yaw_rate (from ATTITUDE msg, deg/s).
-                # Uses the gyro-measured heading rate directly — much smoother than
-                # differencing discrete position samples, and immune to setpoint jumps.
-                d_out = -y2h['kd'] * self._heading_rate
-
-                pid_output = p_out + i_out + d_out
-                # BUG2 FIX: Scale PID output by user's speed parameter.
-                # Previously gain_offset was stored but ignored for PID mode.
-                # Now speed acts as a max output clamp: PID output is clamped to
-                # ±gain_offset instead of ±PWM_RANGE. Lower speed% = gentler turns.
-                max_pwm = y2h.get('gain_offset', PWM_RANGE)
-                pwm_offset = max(-max_pwm, min(max_pwm, int(pid_output)))
-
-                # DESIGN 7: Rate-limit yaw PID output.
-                max_rate = self._pid_max_rate
-                prev_yaw = self._last_yaw_pid_output
-                pwm_offset = max(prev_yaw - max_rate, min(prev_yaw + max_rate, pwm_offset))
-                self._last_yaw_pid_output = pwm_offset
-
-                channels[CH_YAW] = NEUTRAL_PWM + pwm_offset
-
-                with self._movement_lock:
-                    if self._yaw_to_heading is not None:
-                        self._yaw_to_heading['integral'] = integral
-                        self._yaw_to_heading['last_error'] = err
-                        self._yaw_to_heading['last_time'] = now_t
-            else:
-                # ── Bang-bang yaw controller ──
-                offset = y2h['gain_offset']
-                channels[CH_YAW] = NEUTRAL_PWM + (offset if err > 0 else -offset)
-
-        # ── Send combined channels ───────────────────────────────────────
-        self._send_rc_channels(channels)
-
-    def _on_driver_command(self, cmd: DriverCommand):
-        """Handle incoming driver command."""
-        if not self._connected or self._master is None:
-            self.get_logger().warn('Ignoring command - not connected')
-            return
-        c = cmd.command.lower()
-
-        # Log every incoming command with relevant parameters
-        params = []
-        if cmd.mode:
-            params.append(f'mode={cmd.mode}')
-        if cmd.depth != 0.0:
-            params.append(f'depth={cmd.depth}')
-        if cmd.angle != 0.0:
-            params.append(f'angle={cmd.angle}')
-        if cmd.duration > 0:
-            params.append(f'dur={cmd.duration}s')
-        if cmd.speed != 0:
-            params.append(f'speed={cmd.speed}')
-        param_str = f'  ({", ".join(params)})' if params else ''
-        self.get_logger().info(f'RX command: {c}{param_str}')
-
-        # Commands allowed when disarmed
-        UNARMED_ALLOWED = {'arm', 'disarm', 'set_mode', 'stop', 'pid_depth_off', 'surface', 'just_surface', 'teleop_idle', 'calibrate_depth'}
-        if not self._armed and c not in UNARMED_ALLOWED:
-            self.get_logger().warn(f'Rejecting "{c}" - vehicle not armed. Arm first.')
-            self._publish_event('command_rejected', f'"{c}" rejected: vehicle not armed')
-            self._publish_feedback(c, 'rejected', detail='vehicle not armed')
-            return
-
-        # Speed: 0-100 = percent (use percent_to_pwm), else PWM offset from 1500
-        raw_speed = cmd.speed if cmd.speed != 0 else 50
-        if 0 < raw_speed <= 100:
-            speed = percent_to_pwm(raw_speed)
-        else:
-            speed = NEUTRAL_PWM + max(-PWM_RANGE, min(PWM_RANGE, int(raw_speed)))
-        duration = cmd.duration
-        if duration < 0:
-            duration = 0
-        end_time = time.time() + duration if duration > 0 else float('inf')
-
-        def set_movement(channels: dict, desc: str, bypass_ramp: bool = False):
-            """Set movement target channels (DESIGN 5: only the axes the command owns).
-
-            Args:
-                channels: dict of CH_* → PWM values.  Each command sets only
-                    the channels it controls (e.g. forward → CH_FORWARD,
-                    move_up → CH_THROTTLE, yaw_left → CH_YAW).
-                desc: human-readable description for event log.
-                bypass_ramp: if True, PWM is applied instantly (no ramp).
-                    Used by 'just_*' fallback commands for raw bang-bang control.
-            """
-            with self._movement_lock:
-                self._current_movement = {
-                    'channels': channels,
-                    'end_time': end_time,
-                    'bypass_ramp': bypass_ramp,
-                    'command': c,  # track for feedback on expiry
-                }
-            self._publish_event('movement', desc)
-            self._publish_feedback(c, 'accepted', detail=desc)
-
-        # offset from neutral — computed once, applied with sign below.
-        # Positive offset = above neutral (forward/right/up/yaw-right).
-        # Negative sign flips direction (back/left/down/yaw-left).
-        offset = speed - NEUTRAL_PWM  # e.g. 1700-1500 = 200
-
-        # MISSING 3: Battery voltage compensation — scale offset so that thrust
-        # stays consistent as battery discharges. When nominal_voltage > 0 and
-        # actual voltage is available, multiply offset by (nominal / actual).
-        if self._nominal_voltage > 0 and self._voltage > 1.0:
-            offset = int(offset * self._nominal_voltage / self._voltage)
-
-        if c == 'stop':
-            self._stop_all()
-            self._publish_feedback(c, 'accepted', detail='All thrusters neutral')
-
-        elif c in ('move_forward', 'forward'):
-            set_movement(
-                {CH_FORWARD: NEUTRAL_PWM + offset, CH_LATERAL: NEUTRAL_PWM},
-                f'Moving forward (speed={speed})'
-            )
-
-        elif c in ('move_back', 'back', 'backward'):
-            set_movement(
-                {CH_FORWARD: NEUTRAL_PWM - offset, CH_LATERAL: NEUTRAL_PWM},
-                'Moving backward'
-            )
-
-        elif c in ('move_left', 'left'):
-            set_movement(
-                {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM - offset},
-                'Moving left'
-            )
-
-        elif c in ('move_right', 'right'):
-            set_movement(
-                {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM + offset},
-                'Moving right'
-            )
-
-        elif c in ('move_up', 'up'):
-            # ArduSub: >1500 = UP (ascend) — only sets throttle axis
-            set_movement(
-                {CH_THROTTLE: NEUTRAL_PWM + offset},
-                'Moving up'
-            )
-
-        elif c in ('move_down', 'down'):
-            # ArduSub: <1500 = DOWN (descend) — only sets throttle axis
-            set_movement(
-                {CH_THROTTLE: NEUTRAL_PWM - offset},
-                'Moving down'
-            )
-
-        # ── Compound diagonal movement ──────────────────────────────────
-        # Handles 2-axis horizontal diagonals: move_forward_right,
-        # move_back_left, etc.  Speed is scaled by 1/√2 so the
-        # resultant vector keeps the requested magnitude.
-        elif c.startswith('move_') and '_' in c[5:]:
-            parts = c[5:].split('_')  # e.g. ['forward', 'right']
-            result = _build_diagonal_channels(parts, speed)
-            if result:
-                channels, label = result
-                # DESIGN 5: filter to horizontal axes only (diagonal builder
-                # returns all 4 channels with neutral defaults for throttle/yaw)
-                channels = {k: v for k, v in channels.items()
-                            if k in (CH_FORWARD, CH_LATERAL)}
-                n = len(parts)
-                scaled = int((speed - NEUTRAL_PWM) / math.sqrt(n))
-                set_movement(channels,
-                    f'Moving {label} ({n}-axis, ±{abs(scaled)}pwm/axis, speed={speed})')
-            else:
-                self.get_logger().warn(f'Invalid compound direction: {c}')
-
-        # ── Body-frame vector movement ──────────────────────────────────
-        # move_at <angle>: decomposes a bearing (0-360°, body-relative) into
-        # forward + lateral channels using cos/sin.  0° = pure forward,
-        # 90° = pure right, 180° = pure backward, 270° = pure left.
-        elif c == 'move_at':
-            bearing_deg = cmd.angle
-            rad = math.radians(bearing_deg)
-            fwd_pwm = NEUTRAL_PWM + int(offset * math.cos(rad))
-            lat_pwm = NEUTRAL_PWM + int(offset * math.sin(rad))
-            set_movement(
-                {CH_FORWARD: fwd_pwm, CH_LATERAL: lat_pwm},
-                f'Moving at {bearing_deg}° (fwd={fwd_pwm} lat={lat_pwm})'
-            )
-
-        elif c == 'yaw_angle':
-            # Legacy: set_attitude_target (may not work in MANUAL)
-            self._set_target_attitude(0, 0, cmd.angle)
-            self._publish_event('movement', f'Setting heading to {cmd.angle}°')
-            self._publish_feedback(c, 'accepted', detail=f'target={cmd.angle}° (attitude target)')
-
-        elif c == 'yaw_to_heading':
-            # Bang-bang: use thrusters to rotate to target heading (works in MANUAL)
-            gain_offset = abs(speed - NEUTRAL_PWM) or PWM_RANGE // 2
-            # POOL FIX 1: Stop active movement so yaw doesn't fight forward/
-            # lateral inertia from preceding commands.  Snap ramp to neutral
-            # so thrust stops immediately (not just ramp-decel).
-            with self._movement_lock:
-                self._current_movement = None
-                self._yaw_to_heading = {
-                    'target_deg': cmd.angle % 360,
-                    'gain_offset': min(PWM_RANGE, gain_offset),
-                    'tolerance_deg': 5.0,
-                    'use_pid': False,
-                }
-            self._ramped_channels[CH_FORWARD] = float(NEUTRAL_PWM)
-            self._ramped_channels[CH_LATERAL] = float(NEUTRAL_PWM)
-            self._publish_event('movement', f'Yaw to heading {cmd.angle}° (bang-bang)')
-            self._publish_feedback(c, 'accepted', detail=f'target={cmd.angle % 360}° bang-bang')
-
-        elif c == 'pid_yaw_to_heading':
-            # PID: use thrusters with proportional-integral-derivative control
-            gain_offset = abs(speed - NEUTRAL_PWM) or PWM_RANGE // 2
-            # POOL FIX 1: Stop active movement so yaw PID doesn't fight
-            # forward/lateral inertia from preceding commands.
-            with self._movement_lock:
-                self._current_movement = None
-                self._yaw_to_heading = {
-                    'target_deg': cmd.angle % 360,
-                    'gain_offset': min(PWM_RANGE, gain_offset),
-                    'tolerance_deg': 3.0,
-                    'use_pid': True,
-                    'kp': self._yaw_kp,
-                    'ki': self._yaw_ki,
-                    'kd': self._yaw_kd,
-                    'integral': 0.0,
-                    'last_error': 0.0,
-                    'last_time': time.time(),
-                    'max_integral': self._yaw_max_integral,
-                }
-            self._ramped_channels[CH_FORWARD] = float(NEUTRAL_PWM)
-            self._ramped_channels[CH_LATERAL] = float(NEUTRAL_PWM)
-            self._last_yaw_pid_output = 0  # reset rate-limiter for fresh start
-            self._publish_event('movement', f'PID yaw to heading {cmd.angle}° (Kp={self._yaw_kp} Ki={self._yaw_ki} Kd={self._yaw_kd})')
-            self._publish_feedback(c, 'accepted', detail=f'target={cmd.angle % 360}° PID')
-
-        elif c == 'yaw_left':
-            set_movement(
-                {CH_YAW: NEUTRAL_PWM - offset},
-                'Yaw left'
-            )
-
-        elif c == 'yaw_right':
-            set_movement(
-                {CH_YAW: NEUTRAL_PWM + offset},
-                'Yaw right'
-            )
-
-        # ── Instant (bang-bang) fallback commands ────────────────────────
-        # 'just_*' variants bypass the PWM ramp and apply target PWM
-        # instantly — raw open-loop control.  Use these as fallbacks
-        # when ramping causes issues during testing, or when you need
-        # immediate response without acceleration delay.
-        #
-        # Mirrors every movement command above but with bypass_ramp=True.
-        # Same speed/duration/end_time parsing applies.
-        elif c.startswith('just_'):
-            raw = c[5:]  # strip 'just_' prefix
-
-            if raw in ('move_forward', 'forward'):
-                set_movement(
-                    {CH_FORWARD: NEUTRAL_PWM + offset, CH_LATERAL: NEUTRAL_PWM},
-                    f'[JUST] Moving forward (speed={speed})', bypass_ramp=True)
-
-            elif raw in ('move_back', 'back', 'backward'):
-                set_movement(
-                    {CH_FORWARD: NEUTRAL_PWM - offset, CH_LATERAL: NEUTRAL_PWM},
-                    '[JUST] Moving backward', bypass_ramp=True)
-
-            elif raw in ('move_left', 'left'):
-                set_movement(
-                    {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM - offset},
-                    '[JUST] Moving left', bypass_ramp=True)
-
-            elif raw in ('move_right', 'right'):
-                set_movement(
-                    {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM + offset},
-                    '[JUST] Moving right', bypass_ramp=True)
-
-            elif raw in ('move_up', 'up'):
-                set_movement(
-                    {CH_THROTTLE: NEUTRAL_PWM + offset},
-                    '[JUST] Moving up', bypass_ramp=True)
-
-            elif raw in ('move_down', 'down'):
-                set_movement(
-                    {CH_THROTTLE: NEUTRAL_PWM - offset},
-                    '[JUST] Moving down', bypass_ramp=True)
-
-            elif raw == 'yaw_left':
-                set_movement(
-                    {CH_YAW: NEUTRAL_PWM - offset},
-                    '[JUST] Yaw left', bypass_ramp=True)
-
-            elif raw == 'yaw_right':
-                set_movement(
-                    {CH_YAW: NEUTRAL_PWM + offset},
-                    '[JUST] Yaw right', bypass_ramp=True)
-
-            elif raw == 'move_at':
-                bearing_deg = cmd.angle
-                rad = math.radians(bearing_deg)
-                fwd_pwm = NEUTRAL_PWM + int(offset * math.cos(rad))
-                lat_pwm = NEUTRAL_PWM + int(offset * math.sin(rad))
-                set_movement(
-                    {CH_FORWARD: fwd_pwm, CH_LATERAL: lat_pwm},
-                    f'[JUST] Moving at {bearing_deg}° (fwd={fwd_pwm} lat={lat_pwm})',
-                    bypass_ramp=True)
-
-            elif raw == 'teleop':
-                clamp = lambda v: max(-PWM_RANGE, min(PWM_RANGE, int(v)))
-                fwd  = clamp(cmd.speed)
-                lat  = clamp(cmd.duration)
-                thr  = clamp(cmd.depth)
-                yaw  = clamp(cmd.angle)
-                channels = {
-                    CH_FORWARD:  NEUTRAL_PWM + fwd,
-                    CH_LATERAL:  NEUTRAL_PWM + lat,
-                    CH_THROTTLE: NEUTRAL_PWM + thr,
-                    CH_YAW:      NEUTRAL_PWM + yaw,
-                }
-                set_movement(channels,
-                    f'[JUST] Teleop (fwd={fwd} lat={lat} thr={thr} yaw={yaw})',
-                    bypass_ramp=True)
-
-            elif raw == 'surface':
-                # Instant surface — bypass ramp for immediate throttle
-                with self._movement_lock:
-                    self._current_movement = None
-                    self._yaw_to_heading = None
-                    self._depth_pid = None
-                self._alt_hold_target = None
-                if self._flight_mode == 'ALT_HOLD':
-                    self._alt_hold_target = -0.1
-                    self._set_target_depth(-0.1)
-                    self._publish_event('movement', '[JUST] Surfacing (ALT_HOLD to -0.1m)')
-                else:
-                    with self._movement_lock:
-                        self._current_movement = {
-                            'channels': {
-                                CH_THROTTLE: NEUTRAL_PWM + PWM_RANGE // 2,
-                            },
-                            'end_time': time.time() + 10.0,
-                            'bypass_ramp': True,
-                            'command': c,  # track for feedback on expiry
-                        }
-                    self._publish_event('movement', '[JUST] Surfacing (MANUAL, instant throttle up 10s)')
-                self._publish_feedback(c, 'accepted', detail='surfacing (instant)')
-
-            # Compound diagonal: just_forward_right, just_back_left, etc.
-            elif '_' in raw and raw.startswith('move_'):
-                parts = raw[5:].split('_')
-                result = _build_diagonal_channels(parts, speed)
-                if result:
-                    ch, label = result
-                    # DESIGN 5: filter to horizontal axes only
-                    ch = {k: v for k, v in ch.items()
-                          if k in (CH_FORWARD, CH_LATERAL)}
-                    n = len(parts)
-                    scaled = int((speed - NEUTRAL_PWM) / math.sqrt(n))
-                    set_movement(ch,
-                        f'[JUST] Moving {label} ({n}-axis, ±{abs(scaled)}pwm/axis, speed={speed})',
-                        bypass_ramp=True)
-                else:
-                    self.get_logger().warn(f'Invalid just compound direction: {c}')
-
-            # go_* with bypass: just_go_forward, just_go_forward_right, etc.
-            elif raw.startswith('go_'):
-                dir_str = raw[3:]
-                parts = dir_str.split('_')
-                HORIZONTAL = {'forward', 'back', 'backward', 'left', 'right'}
-                if not all(p in HORIZONTAL for p in parts):
-                    self.get_logger().warn(
-                        f'just_go commands only support horizontal directions, got: {dir_str}')
-                else:
-                    result = _build_diagonal_channels(parts, speed)
-                    if result is None:
-                        self.get_logger().warn(f'Invalid just_go direction: {c}')
-                    else:
-                        mv_channels, label = result
-                        # DESIGN 5: only keep fwd/lat from diagonal builder
-                        mv_channels = {k: v for k, v in mv_channels.items()
-                                       if k in (CH_FORWARD, CH_LATERAL)}
-                        with self._movement_lock:
-                            self._current_movement = {
-                                'channels': mv_channels,
-                                'end_time': end_time,
-                                'bypass_ramp': True,
-                        'command': c,  # track for feedback on expiry
-                                'use_pid': True,
-                                'kp': self._yaw_kp,
-                                'ki': self._yaw_ki,
-                                'kd': self._yaw_kd,
-                                'integral': 0.0,
-                                'last_error': 0.0,
-                                'last_time': time.time(),
-                                'max_integral': self._yaw_max_integral,
-                            }
-                        dur_str = f' {duration}s' if duration > 0 else ''
-                        self._publish_event('movement',
-                            f'[JUST] Go {label} → {cmd.angle:.0f}°{dur_str} (speed={speed})')
-                        self._publish_feedback(c, 'accepted',
-                            detail=f'Go {label} → {cmd.angle:.0f}°')
-
-            else:
-                self.get_logger().warn(f'Unknown just_ command: {c}')
-
-        # ── Simultaneous movement + heading (go) ────────────────────────
-        # The RC override tick already layers: movement → depth PID → yaw PID.
-        # These 'go_*' commands set BOTH _current_movement (direction channels)
-        # AND _yaw_to_heading (PID yaw) simultaneously so the AUV moves in a
-        # direction while rotating to a target heading.
-        # Supports single (go_forward) and compound (go_forward_right) directions.
-        # Only horizontal axes (forward/back/left/right) — vertical is
-        # controlled by depth PID; yaw is controlled by heading PID.
-        elif c.startswith('go_'):
-            dir_str = c[3:]  # e.g. 'forward' or 'forward_right'
-            parts = dir_str.split('_')
-            # Filter to horizontal-only directions for go commands
-            HORIZONTAL = {'forward', 'back', 'backward', 'left', 'right'}
-            if not all(p in HORIZONTAL for p in parts):
-                self.get_logger().warn(
-                    f'go commands only support horizontal directions '
-                    f'(forward/back/left/right), got: {dir_str}. '
-                    f'Use p_dive for depth control.')
-            else:
-                result = _build_diagonal_channels(parts, speed)
-                if result is None:
-                    self.get_logger().warn(f'Invalid go direction: {c}')
-                else:
-                    mv_channels, label = result
-                    # DESIGN 5: only keep fwd/lat from diagonal builder
-                    mv_channels = {k: v for k, v in mv_channels.items()
-                                   if k in (CH_FORWARD, CH_LATERAL)}
-                    with self._movement_lock:
-                        self._current_movement = {
-                            'channels': mv_channels,
-                            'end_time': end_time,
-                            'command': c,  # track for feedback on expiry
-                        }
-                        self._yaw_to_heading = {
-                            'target_deg': cmd.angle % 360,
-                            'gain_offset': abs(speed - NEUTRAL_PWM) or PWM_RANGE // 2,
-                            'tolerance_deg': 3.0,
-                            'use_pid': True,
-                            'kp': self._yaw_kp,
-                            'ki': self._yaw_ki,
-                            'kd': self._yaw_kd,
-                            'integral': 0.0,
-                            'last_error': 0.0,
-                            'last_time': time.time(),
-                            'max_integral': self._yaw_max_integral,
-                        }
-                    dur_str = f' {duration}s' if duration > 0 else ''
-                    self._publish_event('movement',
-                        f'Go {label} → {cmd.angle:.0f}°{dur_str} (speed={speed})')
-                    self._publish_feedback(c, 'accepted',
-                        detail=f'Go {label} → {cmd.angle:.0f}°')
-
-        elif c in ('depth', 'set_depth'):
-            d = float(cmd.depth)
-            # POOL FIX 3: Account for surface depth offset
-            if abs(d) < 0.02:
-                d = self._depth  # hold current depth
-            else:
-                d = self._surface_depth - abs(d)  # e.g. -0.1 - 0.3 = -0.4
-            # Auto-switch to ALT_HOLD if not already (ArduSub firmware depth hold)
-            if self._flight_mode != 'ALT_HOLD':
-                self.get_logger().info('Auto-switching to ALT_HOLD for firmware depth hold')
-                self._set_mode('ALT_HOLD')
-                # BUG5 FIX: Was time.sleep(0.5) which blocks the ROS callback thread,
-                # delaying any commands arriving within 500ms. Instead, schedule the
-                # depth target to be sent by the resend timer (runs at 2 Hz, fires
-                # within 500ms). No blocking needed.
-            self._alt_hold_target = d  # Store for periodic re-send
-            self._set_target_depth(d)
-            # Disable software depth PID if active (ALT_HOLD replaces it)
-            with self._movement_lock:
-                self._depth_pid = None
-            self._publish_event('movement', f'ALT_HOLD depth target: {abs(d):.2f}m (raw={d:.3f})')
-
-        elif c == 'pid_depth':
-            # Software PID depth hold via RC throttle (works in any mode)
-            target = float(cmd.depth) if cmd.depth != 0.0 else 0.0
-            if abs(target) < 0.02:
-                target = self._depth  # "hold current depth" — use raw reading
-            else:
-                # POOL FIX 3: Account for surface depth offset.
-                # User says "0.3m" meaning 0.3m below water surface.
-                # surface_depth is barometer reading at surface (e.g. -0.1).
-                # target = surface_depth - abs(depth) = -0.1 - 0.3 = -0.4
-                target = self._surface_depth - abs(target)
-            self._alt_hold_target = None  # Disable ALT_HOLD re-send
-            self._filtered_depth_rate = 0.0  # reset derivative filter
-            self._last_depth_pid_output = 0   # reset rate limiter
-            with self._movement_lock:
-                self._depth_pid = {
-                    'target_m': target,
-                    'kp': self._depth_kp,
-                    'ki': self._depth_ki,
-                    'kd': self._depth_kd,
-                    'integral': 0.0,
-                    'last_error': 0.0,
-                    'last_time': time.time(),
-                    'max_integral': self._depth_max_integral,
-                }
-            self._publish_event('movement',
-                f'PID depth hold ON: target {abs(target):.2f}m (raw={target:.3f}) '
-                f'(Kp={self._depth_kp} Ki={self._depth_ki} Kd={self._depth_kd})')
-            self._publish_feedback(c, 'accepted',
-                detail=f'target={abs(target):.2f}m surface_offset={self._surface_depth:.3f}m')
-
-        elif c == 'pid_depth_off':
-            with self._movement_lock:
-                self._depth_pid = None
-            self._alt_hold_target = None
-            self._last_depth_pid_output = 0
-            self._filtered_depth_rate = 0.0
-            self._publish_event('movement', 'PID depth hold OFF')
-            self._publish_feedback(c, 'accepted', detail='depth PID disabled')
-
-        elif c == 'calibrate_depth':
-            # POOL FIX 3: Record current depth reading as the surface reference.
-            # Run this command while the AUV is floating at the surface.
-            self._surface_depth = self._depth
-            self.get_logger().info(
-                f'Surface depth calibrated: {self._surface_depth:.3f}m')
-            self._publish_event('calibration',
-                f'Surface depth set to {self._surface_depth:.3f}m')
-            self._publish_feedback(c, 'accepted',
-                detail=f'surface_depth={self._surface_depth:.3f}m')
-
-        elif c == 'surface':
-            # Surface: stop everything, then command to near-surface
-            # POOL TODO: Test surfacing from various depths (0.5m, 1m, 2m).
-            #   - ALT_HOLD: verify target -0.1m doesn't slam into surface.
-            #     If it does, change to -0.2m or add approach slowdown.
-            #   - MANUAL: verify 50% throttle for 10s is enough to reach surface
-            #     from max pool depth. Adjust PWM_RANGE//2 and duration.
-            with self._movement_lock:
-                self._current_movement = None
-                self._yaw_to_heading = None
-                self._depth_pid = None
-            self._alt_hold_target = None
-            if self._flight_mode == 'ALT_HOLD':
-                self._alt_hold_target = -0.1
-                self._set_target_depth(-0.1)
-                self._publish_event('movement', 'Surfacing (ALT_HOLD to -0.1m)')
-            else:
-                # In MANUAL, command throttle up briefly
-                with self._movement_lock:
-                    self._current_movement = {
-                        'channels': {
-                            CH_THROTTLE: NEUTRAL_PWM + PWM_RANGE // 2,  # Up (ArduSub: >1500 = ascend)
-                        },
-                        'end_time': time.time() + 10.0,  # Up for up to 10s
-                        'command': c,  # track for feedback on expiry
-                    }
-                self._publish_event('movement', 'Surfacing (MANUAL, throttle up 10s)')
-            self._publish_feedback(c, 'accepted', detail='surfacing')
-
-        elif c == 'arm':
-            # POOL FIX 3: Auto-calibrate surface depth on first arm
-            if self._surface_depth == 0.0 and abs(self._depth) > 0.01:
-                self._surface_depth = self._depth
-                self.get_logger().info(
-                    f'Auto-calibrated surface depth: {self._surface_depth:.3f}m')
-            self._arm_disarm(True)
-            self._publish_feedback(c, 'accepted',
-                detail=f'arm requested (surface_depth={self._surface_depth:.3f}m)')
-
-        elif c == 'disarm':
-            # POOL FIX 4: Clear all control state before disarming so
-            # PID/yaw lock doesn't persist across disarm→arm cycles.
-            self._stop_all()
-            self._arm_disarm(False)
-            self._publish_feedback(c, 'accepted', detail='disarm requested')
-
-        elif c == 'set_mode':
-            self._set_mode(cmd.mode)
-            self._publish_feedback(c, 'accepted', detail=f'mode={cmd.mode}')
-
-        elif c == 'open_grabber':
-            self._set_servo_pwm(1, 1100)
-            self._publish_event('actuator', 'Grabber open')
-            self._publish_feedback(c, 'accepted', detail='grabber open')
-
-        elif c == 'close_grabber':
-            self._set_servo_pwm(1, 1900)
-            self._publish_event('actuator', 'Grabber close')
-            self._publish_feedback(c, 'accepted', detail='grabber close')
-
-        # ── MISSING 2: Coordinated maneuver — cruise ────────────────────
-        # Simultaneously activates:
-        #   1. Movement at a body-frame bearing (like move_at)
-        #   2. Depth PID to hold target depth
-        #   3. Yaw PID to hold target heading
-        # Field encoding:
-        #   angle    → bearing (body-frame, 0°=forward, 90°=right)
-        #   depth    → target depth (positive metres, converted to negative)
-        #   speed    → movement speed (0-100%)
-        #   duration → movement duration (seconds)
-        #   mode     → target heading (degrees, 0-360)
-        elif c == 'cruise':
-            bearing_deg = cmd.angle
-            rad = math.radians(bearing_deg)
-            fwd_pwm = NEUTRAL_PWM + int(offset * math.cos(rad))
-            lat_pwm = NEUTRAL_PWM + int(offset * math.sin(rad))
-            set_movement(
-                {CH_FORWARD: fwd_pwm, CH_LATERAL: lat_pwm},
-                f'Cruise bearing={bearing_deg}° heading={cmd.mode}° '
-                f'depth={cmd.depth}m speed={raw_speed}%'
-            )
-            # Activate depth PID
-            target_depth = float(cmd.depth) if cmd.depth != 0.0 else 0.0
-            if abs(target_depth) < 0.02:
-                target_depth = self._depth  # hold current depth
-            else:
-                target_depth = self._surface_depth - abs(target_depth)
-            self._alt_hold_target = None
-            self._filtered_depth_rate = 0.0
-            self._last_depth_pid_output = 0
-            with self._movement_lock:
-                self._depth_pid = {
-                    'target_m': target_depth,
-                    'kp': self._depth_kp,
-                    'ki': self._depth_ki,
-                    'kd': self._depth_kd,
-                    'integral': 0.0,
-                    'last_error': 0.0,
-                    'last_time': time.time(),
-                    'max_integral': self._depth_max_integral,
-                }
-            # Activate yaw PID to target heading
-            try:
-                heading_deg = float(cmd.mode) % 360
-            except (ValueError, TypeError):
-                heading_deg = self._yaw % 360  # hold current heading
-            gain_offset = abs(speed - NEUTRAL_PWM) or PWM_RANGE // 2
-            with self._movement_lock:
-                self._yaw_to_heading = {
-                    'target_deg': heading_deg,
-                    'gain_offset': min(PWM_RANGE, gain_offset),
-                    'tolerance_deg': 3.0,
-                    'use_pid': True,
-                    'kp': self._yaw_kp,
-                    'ki': self._yaw_ki,
-                    'kd': self._yaw_kd,
-                    'integral': 0.0,
-                    'last_error': 0.0,
-                    'last_time': time.time(),
-                    'max_integral': self._yaw_max_integral,
-                }
-            self._publish_event('movement',
-                f'Cruise: bearing={bearing_deg}° heading={heading_deg}° '
-                f'depth={abs(target_depth):.2f}m speed={raw_speed}% dur={duration}s')
-
-        # Similarly, just_cruise bypasses the movement ramp
-        elif c == 'just_cruise':
-            bearing_deg = cmd.angle
-            rad = math.radians(bearing_deg)
-            fwd_pwm = NEUTRAL_PWM + int(offset * math.cos(rad))
-            lat_pwm = NEUTRAL_PWM + int(offset * math.sin(rad))
-            set_movement(
-                {CH_FORWARD: fwd_pwm, CH_LATERAL: lat_pwm},
-                f'[JUST] Cruise bearing={bearing_deg}° heading={cmd.mode}° '
-                f'depth={cmd.depth}m speed={raw_speed}%',
-                bypass_ramp=True
-            )
-            # Activate depth PID
-            target_depth = float(cmd.depth) if cmd.depth != 0.0 else 0.0
-            if abs(target_depth) < 0.02:
-                target_depth = self._depth
-            else:
-                target_depth = self._surface_depth - abs(target_depth)
-            self._alt_hold_target = None
-            self._filtered_depth_rate = 0.0
-            self._last_depth_pid_output = 0
-            with self._movement_lock:
-                self._depth_pid = {
-                    'target_m': target_depth,
-                    'kp': self._depth_kp,
-                    'ki': self._depth_ki,
-                    'kd': self._depth_kd,
-                    'integral': 0.0,
-                    'last_error': 0.0,
-                    'last_time': time.time(),
-                    'max_integral': self._depth_max_integral,
-                }
-            # Activate yaw PID to target heading
-            try:
-                heading_deg = float(cmd.mode) % 360
-            except (ValueError, TypeError):
-                heading_deg = self._yaw % 360
-            gain_offset = abs(speed - NEUTRAL_PWM) or PWM_RANGE // 2
-            with self._movement_lock:
-                self._yaw_to_heading = {
-                    'target_deg': heading_deg,
-                    'gain_offset': min(PWM_RANGE, gain_offset),
-                    'tolerance_deg': 3.0,
-                    'use_pid': True,
-                    'kp': self._yaw_kp,
-                    'ki': self._yaw_ki,
-                    'kd': self._yaw_kd,
-                    'integral': 0.0,
-                    'last_error': 0.0,
-                    'last_time': time.time(),
-                    'max_integral': self._yaw_max_integral,
-                }
-            self._publish_event('movement',
-                f'[JUST] Cruise: bearing={bearing_deg}° heading={heading_deg}° '
-                f'depth={abs(target_depth):.2f}m speed={raw_speed}% dur={duration}s')
-
-        # ── BUG3 FIX: Multi-axis teleop command ─────────────────────────
-        # Single command carries all 4 axes simultaneously via repurposed
-        # msg fields.  Prevents the old pattern where separate per-axis
-        # DriverCommands stomped _current_movement.
-        #
-        # Field encoding (all PWM offsets from 1500, clamped ±PWM_RANGE):
-        #   speed    → forward  (>0 = forward, <0 = backward)
-        #   duration → lateral  (>0 = right,   <0 = left)
-        #   depth    → throttle (>0 = up,      <0 = down)
-        #   angle    → yaw      (>0 = CCW/left, <0 = CW/right)
-        elif c == 'teleop':
-            clamp = lambda v: max(-PWM_RANGE, min(PWM_RANGE, int(v)))
-            fwd  = clamp(cmd.speed)
-            lat  = clamp(cmd.duration)
-            thr  = clamp(cmd.depth)
-            yaw  = clamp(cmd.angle)
-            channels = {
-                CH_FORWARD:  NEUTRAL_PWM + fwd,
-                CH_LATERAL:  NEUTRAL_PWM + lat,
-                CH_THROTTLE: NEUTRAL_PWM + thr,
-                CH_YAW:      NEUTRAL_PWM + yaw,
-            }
-            set_movement(channels, f'Teleop (fwd={fwd} lat={lat} thr={thr} yaw={yaw})')
-
-        # BUG4 FIX: Gentle stop for teleop — clears _current_movement but
-        # preserves _depth_pid and _yaw_to_heading.  Unlike 'stop' which
-        # nukes everything, this only neutralises the movement overlay.
-        elif c == 'teleop_idle':
-            with self._movement_lock:
-                self._current_movement = None
-            # Don't publish event — teleop_idle is sent every tick when
-            # joystick is centred.  Logging each one would flood events.
-
-        else:
-            self.get_logger().warn(f'Unknown command: {c}')
-            self._publish_feedback(c, 'rejected', detail='unknown command')
-
-    def _set_servo_pwm(self, servo_n: int, microseconds: int):
-        """Set servo PWM (AUX output).
-
-        Note: ArduSub may not send COMMAND_ACK for DO_SET_SERVO, so we send
-        directly without ACK tracking to avoid false timeout warnings.
-        """
-        if not self._connected or self._master is None:
-            return
-        self.get_logger().info(
-            f'TX COMMAND_LONG  DO_SET_SERVO  ch={servo_n + 8} pwm={microseconds}'
-        )
-        self._master.mav.command_long_send(
-            self._master.target_system, self._master.target_component,
-            mavutil.mavlink.MAV_CMD_DO_SET_SERVO, 0,
-            servo_n + 8, microseconds, 0, 0, 0, 0, 0
-        )
-
     def _arm_disarm(self, do_arm: bool):
-        """Arm or disarm the vehicle.
-
-        Confirmation comes from heartbeat flags (armed bit) which is already
-        processed in _process_message → HEARTBEAT handler.  We do NOT use
-        motors_armed_wait() because it calls recv_match() which races with our
-        _read_mavlink loop and consumes messages (including any COMMAND_ACK).
-        ArduSub on Pixhawk 2.4.8 does not reliably ACK arm/disarm, so we also
-        skip _send_command_long ACK tracking to avoid false timeouts.
-        """
-        if not self._connected or self._master is None:
+        if not self._conn.connected or self._conn.master is None:
             return
         action = 'Arming' if do_arm else 'Disarming'
         v = 1 if do_arm else 0
         self.get_logger().info(
-            f'TX COMMAND_LONG  COMPONENT_ARM_DISARM  arm={v}'
-        )
-        self._publish_event('arm' if do_arm else 'disarm', f'{action}...')
+            f'TX COMMAND_LONG  COMPONENT_ARM_DISARM  arm={v}')
+        self._publish_event('arm' if do_arm else 'disarm',
+                            f'{action}...')
         try:
-            self._master.mav.command_long_send(
-                self._master.target_system, self._master.target_component,
+            self._conn.master.mav.command_long_send(
+                self._conn.master.target_system,
+                self._conn.master.target_component,
                 mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM, 0,
-                v, 0, 0, 0, 0, 0, 0
-            )
+                v, 0, 0, 0, 0, 0, 0)
         except Exception as e:
-            self._publish_event('arm_failed' if do_arm else 'disarm_failed', str(e))
+            ev = 'arm_failed' if do_arm else 'disarm_failed'
+            self._publish_event(ev, str(e))
 
     def _set_mode(self, mode: str):
-        """Set flight mode. Uses COMMAND_LONG for ACK tracking + heartbeat verification."""
-        if not self._connected or self._master is None:
+        if not self._conn.connected or self._conn.master is None:
             return
         mode = (mode or 'MANUAL').upper()
-        if mode not in self._master.mode_mapping():
-            self.get_logger().error(f'Unknown mode: {mode}. Available: {list(self._master.mode_mapping().keys())}')
+        mapping = self._conn.master.mode_mapping()
+        if mode not in mapping:
+            self.get_logger().error(
+                f'Unknown mode: {mode}. '
+                f'Available: {list(mapping.keys())}')
             return
-        mode_id = self._master.mode_mapping()[mode]
-        # Use COMMAND_LONG + MAV_CMD_DO_SET_MODE for proper ACK tracking
-        # param1 = MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, param2 = custom_mode_id
+        mode_id = mapping[mode]
         self._send_command_long(
             mavutil.mavlink.MAV_CMD_DO_SET_MODE,
             p1=mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED,
             p2=mode_id,
-            description=f'SET_MODE {mode}',
-        )
-        # Register for heartbeat-based verification (belt + suspenders)
+            description=f'SET_MODE {mode}')
         self._pending_mode_change = {
-            'target': mode,
-            'sent_at': time.time(),
-        }
+            'target': mode, 'sent_at': time.time()}
         self._publish_event('mode_change', f'Setting mode to {mode}')
 
+    def _set_servo_pwm(self, servo_n: int, microseconds: int):
+        if not self._conn.connected or self._conn.master is None:
+            return
+        self.get_logger().info(
+            f'TX COMMAND_LONG  DO_SET_SERVO  '
+            f'ch={servo_n + 8} pwm={microseconds}')
+        self._conn.master.mav.command_long_send(
+            self._conn.master.target_system,
+            self._conn.master.target_component,
+            mavutil.mavlink.MAV_CMD_DO_SET_SERVO, 0,
+            servo_n + 8, microseconds, 0, 0, 0, 0, 0)
+
+
+# ── Entry point ──────────────────────────────────────────────────────
 
 def main(args=None):
     rclpy.init(args=args)
@@ -1829,14 +603,14 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
-        # Send neutral RC directly to MAVLink (bypass ROS publish)
+        # Send neutral RC directly (bypass ROS) for safety
         try:
-            if node._master and node._connected:
+            master = node._conn.master
+            if master and node._conn.connected:
                 rc = [NEUTRAL_PWM] * 8 + [65535] * 10
-                node._master.mav.rc_channels_override_send(
-                    node._master.target_system,
-                    node._master.target_component, *rc
-                )
+                master.mav.rc_channels_override_send(
+                    master.target_system,
+                    master.target_component, *rc)
         except Exception:
             pass
         try:

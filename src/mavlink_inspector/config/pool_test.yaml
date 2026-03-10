@@ -1,0 +1,38 @@
+# ── Pool Test Configuration ──────────────────────────────────────────
+# Optimised for shallow pool testing (1-2m depth, calm water).
+# Tuned from 2026-03-09 pool session.
+#
+# Usage:
+#   ros2 launch mavlink_inspector duburi_control.launch.py \
+#       params_file:=$(ros2 pkg prefix mavlink_inspector)/share/mavlink_inspector/config/pool_test.yaml
+
+mavlink_inspector:
+  ros__parameters:
+    connection_port: "/dev/ttyACM0"
+    baud: 115200
+    yaw_source: "attitude"
+
+    # Slower ramp for controlled pool testing
+    ramp_rate: 600
+
+    # Pool-tuned depth PID
+    depth_kp: 800.0
+    depth_ki: 50.0
+    depth_kd: 100.0
+    depth_max_integral: 1.0
+    depth_tolerance: 0.08
+
+    # Gentle yaw — pools have walls nearby
+    yaw_kp: 2.0
+    yaw_ki: 0.05
+    yaw_kd: 0.5
+    yaw_max_integral: 50.0
+
+    pid_max_rate: 50
+    nominal_voltage: 0.0
+    surface_depth: 0.0
+    ack_timeout: 3.0
+
+mavlink_logger:
+  ros__parameters:
+    log_directory: "~/auv_logs"
