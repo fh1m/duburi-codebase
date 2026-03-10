@@ -227,18 +227,19 @@ class ConnectionManager:
         """Read all pending MAVLink messages (non-blocking).
 
         Returns a list of messages.  Sets connected=False on read errors.
+        On mid-batch failure, returns messages already collected (preserving
+        partial telemetry rather than discarding it).
         """
         if not self._connected or self._master is None:
             return []
+        msgs = []
         try:
-            msgs = []
             msg = self._master.recv_match(blocking=False)
             while msg is not None:
                 msgs.append(msg)
                 msg = self._master.recv_match(blocking=False)
-            return msgs
         except Exception as e:
             self._log('error', f'Read error: {e}')
             self._connected = False
             self._on_event('connection_lost', str(e))
-            return []
+        return msgs
