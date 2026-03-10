@@ -1,24 +1,28 @@
-# BRACU Duburi 4.2 - Control & Perception Software
+# BRACU Duburi 4.2 — Control & Perception Software
 
-ROS 2 workspace for the BRACU Duburi AUV 4.2. Controls via Pixhawk 2.4.8 / ArduSub / pymavlink. Perception via YOLO object detection with GPU-accelerated inference.
+ROS 2 Humble workspace for the BRACU Duburi AUV 4.2. Controls the vehicle through a Pixhawk 2.4.8 running ArduSub via pymavlink. Perception via YOLOv8 object detection with CUDA-accelerated inference.
+
+**33 Python source files · 7 packages · ~5 600 lines**
 
 ---
 
 ## Table of Contents
 
 1. [Hardware](#hardware)
-2. [Packages](#packages)
+2. [Packages & Codebase Structure](#packages--codebase-structure)
 3. [Build & Quick Start](#build--quick-start)
 4. [Architecture](#architecture)
-5. [Using the Duburi CLI (Runner)](#using-the-duburi-cli-runner)
-6. [Planning Missions Without the Runner](#planning-missions-without-the-runner)
-7. [Logging](#logging)
-8. [Vision & Perception](#vision--perception)
-9. [Topics & Messages](#topics--messages)
-10. [Inspector Parameters](#inspector-parameters)
-11. [Analysis & Documentation](#analysis--documentation)
-12. [Dependencies](#dependencies)
-13. [License](#license)
+5. [Configuration Profiles](#configuration-profiles)
+6. [Using the Duburi CLI (Runner)](#using-the-duburi-cli-runner)
+7. [Planning Missions Without the Runner](#planning-missions-without-the-runner)
+8. [Logging](#logging)
+9. [Vision & Perception](#vision--perception)
+10. [Topics & Messages](#topics--messages)
+11. [Inspector Parameters](#inspector-parameters)
+12. [Troubleshooting](#troubleshooting)
+13. [Analysis & Documentation](#analysis--documentation)
+14. [Dependencies](#dependencies)
+15. [License](#license)
 
 ---
 
@@ -31,63 +35,133 @@ ROS 2 workspace for the BRACU Duburi AUV 4.2. Controls via Pixhawk 2.4.8 / ArduS
 | **Connection** | `/dev/ttyACM0` (serial, 115200 baud) |
 | **Thrusters** | Blue Robotics T200 |
 | **Channels** | Ch 1–4 lateral, Ch 5–8 depth |
-| **Barometer** | BAR30 |
+| **Barometer** | BAR30 (depth sensing) |
 | **Camera** | USB camera (V4L2 compatible) |
-| **GPU** | CUDA 12.8 (for YOLO inference) |
+| **Compute** | Ubuntu 22.04, CUDA 12.8 (for YOLO inference) |
 
 ---
 
-## Packages
+## Packages & Codebase Structure
 
-| Package | Description |
-|---------|-------------|
-| `duburi_interfaces` | Shared messages: `DriverCommand`, `MavlinkEvent`, `VehicleState`, `VehicleDiagnostics`, `DriverCommandFeedback`, `Detection`, `DetectionArray` |
-| `mavlink_inspector` | Main Pixhawk connection hub. Owns serial port, executes commands via MAVLink, publishes events and vehicle state |
-| `mavlink_driver` | Movement control: `mission_executor` (predefined missions), `teleop_driver` (Twist → DriverCommand) |
-| `mavlink_runner` | Interactive CLI with `Duburi >` prompt for quick testing and file-based missions |
-| `mavlink_logger` | Logs MAVLink activity to `logs/` (workspace-relative, session folders) |
-| `vision_manager` | Camera management: device enumeration, live testing, streaming (`/camera/image_raw`), checkerboard calibration |
-| `vision` | YOLO object detection: subscribes to camera, publishes `DetectionArray`, annotated images, terminal output |
+### Package Overview
+
+| Package | Modules | Lines | ROS Nodes | Description |
+|---------|---------|-------|-----------|-------------|
+| `duburi_interfaces` | — | — | — | Shared ROS 2 messages: `DriverCommand`, `VehicleState`, `VehicleDiagnostics`, `MavlinkEvent`, `DriverCommandFeedback`, `Detection`, `DetectionArray` |
+| `mavlink_inspector` | 7 | ~2 250 | `inspector` | MAVLink ↔ ROS bridge. Owns serial port, RC override, PID controllers, command dispatch, telemetry publishing |
+| `mavlink_driver` | 5 | ~1 040 | `mission_executor`, `teleop_driver` | High-level command API (`driver_client.py`), mission file execution, joystick/teleop input |
+| `mavlink_runner` | 4 | ~920 | `runner` | Interactive `Duburi >` CLI with history, status dashboard, file-based missions |
+| `mavlink_logger` | 1 | ~230 | `logger` | Logs all ROS topics to session-based CSV/JSON files |
+| `vision` | 3 | ~500 | `detector_node`, `detector_standalone` | YOLOv8 object detection with GPU acceleration |
+| `vision_manager` | 4 | ~810 | `camera_node`, `camera_enum`, `camera_test`, `camera_calibrate` | Camera streaming, enumeration, testing, checkerboard calibration |
+
+### Inspector Module Breakdown
+
+The inspector (the core MAVLink bridge) is decomposed into focused modules:
+
+```
+mavlink_inspector/
+├── inspector_node.py       (641 lines)  Thin orchestrator — timers, publishers, wiring
+├── command_handler.py      (440 lines)  DriverCommand dispatch table → handlers
+├── movement_commands.py    (399 lines)  MOVEMENTS registry — 30+ movement handlers
+├── connection_manager.py   (246 lines)  Serial lifecycle, heartbeat, reconnect with backoff
+├── rc_controller.py        (206 lines)  PWM math, channel constants, trapezoidal ramp
+├── pid_controller.py       (162 lines)  Generic PID — deadband, anti-windup, EMA derivative
+└── telemetry_parser.py     (159 lines)  MAVLink message dispatch → vehicle state
+```
+
+### Driver Module Breakdown
+
+```
+mavlink_driver/
+├── driver_client.py        (262 lines)  make_command() factory + all movement functions
+├── mission_parser.py       (245 lines)  parse_file_command() for mission files
+├── mission_executor.py     (318 lines)  Autonomous mission runner node
+├── just_commands.py        (115 lines)  just_* instant (no-ramp) movement variants
+└── teleop_driver.py        (104 lines)  Twist → DriverCommand with dead-zone
+```
+
+### Runner Module Breakdown
+
+```
+mavlink_runner/
+├── command_parser.py       (470 lines)  parse_command() full CLI parser
+├── runner.py               (268 lines)  Interactive REPL node with readline
+├── constants.py            (104 lines)  HELP_TEXT, MISSION_PATHS, HISTORY_FILE
+└── status_display.py        (75 lines)  ANSI dashboard (battery, heading, servos)
+```
+
+> **Full module map** with every class, function, and import path:
+> see [analysis/12_CODE_REFERENCE.md](analysis/12_CODE_REFERENCE.md)
 
 ---
 
 ## Build & Quick Start
 
+### Prerequisites
+
+```bash
+# ROS 2 Humble must be sourced
+source /opt/ros/humble/setup.bash
+
+# Python deps
+pip install pymavlink ultralytics opencv-python
+```
+
+### Build
+
 ```bash
 cd /home/duburi/workspaces/duburi_ws
-colcon build
+colcon build            # builds all 7 packages (~5s clean)
 source install/setup.bash
 ```
 
-**Typical workflow (controls only):**
+### Clean rebuild (if you get stale cache errors)
 
 ```bash
-# Terminal 1: Start inspector (connects to Pixhawk) – run first
+rm -rf build install log && colcon build
+source install/setup.bash
+```
+
+### Quick Start — Controls
+
+```bash
+# Terminal 1: Inspector (connects to Pixhawk) — start first, always
 ros2 run mavlink_inspector inspector
 
-# Terminal 2: Start Duburi CLI
+# Terminal 2: Interactive CLI
 ros2 run mavlink_runner runner
 
-# Terminal 3 (optional): Logger (logs to logs/<session>/)
+# Terminal 3 (optional): Logger
 ros2 run mavlink_logger logger
 ```
 
-**Typical workflow (perception):**
+### Quick Start — Perception
 
 ```bash
 # Terminal 1: Camera streaming
 ros2 run vision_manager camera_node --ros-args -p device_id:=0
 
-# Terminal 2: YOLO detection (GPU default)
+# Terminal 2: YOLO detection (GPU)
 ros2 run vision detector_node --ros-args -p enable_display:=True
 ```
 
-**Launch inspector + logger together:**
+### Launch files (multi-node)
 
 ```bash
+# Inspector + logger together
 ros2 launch mavlink_inspector duburi_control.launch.py
-# With options:
-ros2 launch mavlink_inspector duburi_control.launch.py connection_port:=/dev/ttyACM0 enable_logger:=true log_directory:=/path/to/auv_logs
+
+# With custom config profile
+ros2 launch mavlink_inspector duburi_control.launch.py \
+    params_file:=$(ros2 pkg prefix mavlink_inspector)/share/mavlink_inspector/config/pool_test.yaml
+
+# With individual overrides
+ros2 launch mavlink_inspector duburi_control.launch.py \
+    connection_port:=/dev/ttyACM1 enable_logger:=true
+
+# Camera + detector together
+ros2 launch vision vision.launch.py enable_display:=True confidence:=0.4
 ```
 
 ---
@@ -99,25 +173,80 @@ ros2 launch mavlink_inspector duburi_control.launch.py connection_port:=/dev/tty
 │                                                    │   │                                │
 │                 Pixhawk (/dev/ttyACM0)             │   │  USB Camera (/dev/videoN)      │
 │                         │                          │   │         │                      │
-│                 mavlink_inspector                   │   │   vision_manager               │
-│                         │                          │   │   (camera_node)                │
-│       /mavlink/events   │   /mavlink/vehicle_state │   │         │                      │
-│                         │                          │   │  /camera/image_raw             │
-│                /driver/command                     │   │  /camera/camera_info           │
+│           mavlink_inspector (7 modules)            │   │   vision_manager               │
+│           ┌─ connection_manager (serial I/O)       │   │   (camera_node)                │
+│           ├─ telemetry_parser (MAVLink → state)    │   │         │                      │
+│           ├─ command_handler (dispatch table)      │   │  /camera/image_raw             │
+│           ├─ movement_commands (MOVEMENTS registry)│   │  /camera/camera_info           │
+│           ├─ rc_controller (PWM ramp + channels)   │   │         │                      │
+│           ├─ pid_controller ×2 (depth + yaw)       │   │      vision                    │
+│           └─ inspector_node (orchestrator)          │   │   (detector_node)              │
 │                         │                          │   │         │                      │
-│     +-------------------+-------------------+      │   │      vision                    │
-│     │                   │                   │      │   │   (detector_node)              │
-│  mavlink_runner   mission_executor    teleop_driver│   │         │                      │
-│  (CLI, missions)  (Python missions)  (/cmd_vel)    │   │  /vision/detections            │
-│     │                   │                   │      │   │  /vision/annotated_image       │
-│     +-------------------+-------------------+      │   │                                │
+│       /mavlink/events   │   /mavlink/vehicle_state │   │  /vision/detections            │
+│                         │                          │   │  /vision/annotated_image       │
+│                /driver/command                     │   │                                │
 │                         │                          │   └────────────────────────────────┘
+│     +-------------------+-------------------+      │
+│     │                   │                   │      │       ┌──────────────────┐
+│  mavlink_runner   mission_executor    teleop_driver│       │ duburi_interfaces│
+│  (CLI, missions)  (autonomous)       (/cmd_vel)    │       │ (shared messages)│
+│     │                   │                   │      │       └──────────────────┘
+│     +-------------------+-------------------+      │
+│                         │                          │
 │                 mavlink_logger → logs/              │
-│                                                    │       ┌──────────────────┐
-└────────────────────────────────────────────────────┘       │ duburi_interfaces│
-                                                            │ (shared messages)│
-          Both sides share duburi_interfaces ◄──────────────│                  │
-          Future: planning node bridges them                └──────────────────┘
+└────────────────────────────────────────────────────┘
+          Both sides share duburi_interfaces
+```
+
+### Data Flow Summary
+
+1. **Inspector** connects to Pixhawk on `/dev/ttyACM0`, reads MAVLink at 50 Hz
+2. **TelemetryParser** converts MAVLink messages → `VehicleState` (published 10 Hz)
+3. **Upstream nodes** (runner, executor, teleop) publish `DriverCommand` to `/driver/command`
+4. **CommandHandler** routes commands through dispatch tables to movement handlers
+5. **RcController** applies trapezoidal velocity ramp at 20 Hz
+6. **PidController** (depth + yaw) overrides channels when active
+7. **Inspector** sends merged RC override to Pixhawk every 50ms
+
+---
+
+## Configuration Profiles
+
+Three YAML config profiles live in `src/mavlink_inspector/config/`:
+
+| Profile | File | Use Case |
+|---------|------|----------|
+| **defaults** | `defaults.yaml` | Standard parameters — all values documented |
+| **pool_test** | `pool_test.yaml` | Shallow pool — conservative PID, lower ramp rate |
+| **competition** | `competition.yaml` | Competition-tuned — aggressive PID, full thrust |
+
+### Using Profiles
+
+```bash
+# Use a profile at launch
+ros2 launch mavlink_inspector duburi_control.launch.py \
+    params_file:=src/mavlink_inspector/config/pool_test.yaml
+
+# Or with ros2 run
+ros2 run mavlink_inspector inspector --ros-args \
+    --params-file src/mavlink_inspector/config/pool_test.yaml
+
+# Override individual params on top of a profile
+ros2 run mavlink_inspector inspector --ros-args \
+    --params-file src/mavlink_inspector/config/defaults.yaml \
+    -p depth_kp:=600.0 -p depth_tolerance:=0.1
+```
+
+### Creating a Custom Profile
+
+Copy `defaults.yaml` and modify as needed:
+
+```bash
+cp src/mavlink_inspector/config/defaults.yaml src/mavlink_inspector/config/my_pool.yaml
+# Edit my_pool.yaml, then:
+colcon build --packages-select mavlink_inspector
+ros2 launch mavlink_inspector duburi_control.launch.py \
+    params_file:=src/mavlink_inspector/config/my_pool.yaml
 ```
 
 ---
@@ -880,7 +1009,9 @@ Normalized center coordinates (`center_x`, `center_y`) are designed for easy fut
 
 ## Inspector Parameters
 
-The inspector node accepts the following ROS parameters for tuning:
+The inspector node accepts the following ROS parameters for tuning. All defaults are defined in
+`src/mavlink_inspector/config/defaults.yaml` — see [Configuration Profiles](#configuration-profiles)
+for how to switch between pre-built profiles.
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
@@ -899,6 +1030,9 @@ The inspector node accepts the following ROS parameters for tuning:
 | `yaw_max_integral` | `50.0` | Yaw PID max integral accumulator |
 | `pid_max_rate` | `50` | Max PID output change per tick (PWM units). Prevents thruster hunting |
 | `nominal_voltage` | `0.0` | Battery voltage for compensation (0 = disabled). Set to full-charge voltage to maintain consistent thrust as battery depletes |
+| `surface_depth` | `0.0` | Target depth for `surface` command (metres) |
+| `ack_timeout` | `3.0` | Seconds to wait for MAVLink ACK before retrying arm/disarm |
+| `surface_throttle_duration` | `2.0` | Seconds of upward throttle after surface depth PID completes |
 
 ```bash
 # Override parameters at launch
@@ -917,24 +1051,72 @@ ros2 run mavlink_inspector inspector --ros-args \
 
 ---
 
+## Troubleshooting
+
+### Build Issues
+
+| Problem | Fix |
+|---------|-----|
+| **Stale build artefacts** | `rm -rf build/ install/ log/ && colcon build` |
+| **Symlink install permission errors** | Use `colcon build` without `--symlink-install` — the workspace uses merged installs |
+| **"Package not found" after rebuild** | Re-source: `source install/setup.bash` |
+| **CMake error on interfaces** | `colcon build --packages-select duburi_interfaces` first, then rebuild dependent packages |
+
+### Runtime Issues
+
+| Problem | Fix |
+|---------|-----|
+| **"No telemetry for Ns"** | Check Pixhawk USB cable. Run `ls /dev/ttyACM*` to verify port. Try `connection_port:=/dev/ttyACM1` |
+| **Arm command times out** | Pixhawk may require GPS fix or pre-arm checks. Check QGroundControl for pre-arm failures |
+| **PID oscillation** | Lower `depth_kp` / `yaw_kp`. Pool-tuned defaults are conservative — start there |
+| **Depth drift** | Verify BAR30 is connected. Check `~depth` is active (not bare `depth` with ALT_HOLD) |
+| **Import errors after refactor** | Run `colcon build` (not just the changed package). Circular imports were fixed in commit 87dab7e |
+| **Camera not found** | Run `ros2 run vision_manager camera_enum` to list V4L2 devices. Try `device_id:=1` |
+| **YOLO slow / CPU-only** | Verify PyTorch CUDA: `python3 -c "import torch; print(torch.cuda.is_available())"` |
+
+### Quick Diagnostics
+
+```bash
+# Check if inspector is publishing
+ros2 topic hz /mavlink/vehicle_state
+
+# See current vehicle state
+ros2 topic echo /mavlink/vehicle_state --once
+
+# Check all active topics
+ros2 topic list
+
+# Check node health
+ros2 node list
+ros2 node info /mavlink_inspector
+
+# Verify serial port
+ls -la /dev/ttyACM*
+dmesg | tail -20   # check USB connect/disconnect
+```
+
+---
+
 ## Analysis & Documentation
 
-The `analysis/` folder contains detailed technical documentation:
+The `analysis/` folder contains 15 detailed technical documents:
 
 | Document | Description |
 |----------|-------------|
 | `00_OVERVIEW.md` | High-level system overview |
 | `01_ARCHITECTURE.md` | Detailed architecture and data flow |
 | `02_DESIGN_DECISIONS.md` | Rationale for key design choices (12 decisions) |
-| `03_INSPECTOR_LINE_BY_LINE.md` | Inspector node code walkthrough |
+| `03_INSPECTOR_LINE_BY_LINE.md` | Inspector node code walkthrough (pre-refactor) |
 | `04_RUNNER_LINE_BY_LINE.md` | Runner CLI code walkthrough |
 | `05_DRIVER_LINE_BY_LINE.md` | Driver client library walkthrough |
 | `06_INTERFACES.md` | Message definitions and field semantics |
 | `07_ARDUSUB_CONSTRAINTS.md` | ArduSub firmware constraints and gotchas |
 | `08_AGENT_GUIDE.md` | Guide for AI agents working on this codebase |
 | `09_KNOWN_ISSUES_AND_GOTCHAS.md` | Known issues, edge cases, and fixes (21 entries) |
-| `10_DESIGN_ISSUES.md` | 7 architectural concerns with severity/effort ratings |
-| `11_DESK_TESTING_GUIDE.md` | Step-by-step desk testing procedures for bug fixes |
+| `10_DESIGN_ISSUES.md` | Post-refactor architectural analysis — 9 issues with severity/effort ratings |
+| `11_DESK_TESTING_GUIDE.md` | Step-by-step desk testing procedures |
+| `11_REFACTORING_PLAN.md` | 3-phase all-package refactoring plan |
+| `12_CODE_REFERENCE.md` | **Post-refactor module map** — all 33 files, 7 packages, with line counts and descriptions |
 | `12_COMMAND_REFERENCE.md` | Complete command reference with examples and field encoding |
 
 ---
@@ -942,14 +1124,27 @@ The `analysis/` folder contains detailed technical documentation:
 ## Dependencies
 
 ### Controls
-- **ROS 2** (Humble or later)
+- **ROS 2 Humble** on Ubuntu 22.04
 - **pymavlink:** `pip install pymavlink` or `sudo apt install python3-pymavlink`
+- **PyYAML:** included with ROS 2 (used for config loading)
 
 ### Perception
 - **OpenCV:** `pip install opencv-python` or `sudo apt install python3-opencv`
 - **Ultralytics YOLO:** `pip install ultralytics`
-- **PyTorch with CUDA:** Required for GPU inference (auto-detected by ultralytics)
+- **PyTorch with CUDA 12.8:** Required for GPU inference (auto-detected by ultralytics)
 - **v4l-utils (optional):** `sudo apt install v4l-utils` — for `camera_enum` detailed device info
+
+### Quick Install
+
+```bash
+# Controls
+pip install pymavlink
+
+# Perception (GPU)
+pip install opencv-python ultralytics
+# Verify CUDA
+python3 -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, Device: {torch.cuda.get_device_name(0)}')"
+```
 
 ---
 
