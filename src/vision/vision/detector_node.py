@@ -29,7 +29,6 @@ Architecture note:
 import time
 
 import cv2
-import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
@@ -37,6 +36,7 @@ from sensor_msgs.msg import Image
 from std_msgs.msg import Header
 
 from duburi_interfaces.msg import Detection, DetectionArray
+from vision.image_utils import ros_image_to_cv2, cv2_to_ros_image
 
 
 class DetectorNode(Node):
@@ -125,7 +125,7 @@ class DetectorNode(Node):
         """Process incoming image: run YOLO, publish detections, annotate."""
         # ── Convert ROS Image → numpy ────────────────────────────────
         try:
-            frame = self._ros_image_to_cv2(msg)
+            frame = ros_image_to_cv2(msg)
         except Exception as e:
             self.get_logger().error(f'Image conversion failed: {e}',
                                    throttle_duration_sec=5.0)
@@ -229,64 +229,12 @@ class DetectorNode(Node):
                         (10, 25), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
 
             if self.publish_annotated:
-                ann_msg = self._cv2_to_ros_image(annotated, msg.header)
+                ann_msg = cv2_to_ros_image(annotated, msg.header)
                 self.annotated_pub.publish(ann_msg)
 
             if self.enable_display:
                 cv2.imshow('Duburi Vision – YOLO Detections', annotated)
                 cv2.waitKey(1)
-
-    # ═════════════════════════════════════════════════════════════════
-    #  Image conversion helpers (no cv_bridge dependency)
-    # ═════════════════════════════════════════════════════════════════
-
-    def _ros_image_to_cv2(self, msg: Image) -> np.ndarray:
-        """Convert sensor_msgs/Image to OpenCV BGR numpy array."""
-        encoding = msg.encoding.lower()
-        dtype = np.uint8
-
-        if encoding in ('bgr8', 'rgb8', '8uc3'):
-            channels = 3
-        elif encoding in ('bgra8', 'rgba8', '8uc4'):
-            channels = 4
-        elif encoding in ('mono8', '8uc1'):
-            channels = 1
-        elif encoding in ('16uc1', 'mono16'):
-            channels = 1
-            dtype = np.uint16
-        else:
-            # Try treating as BGR
-            channels = 3
-
-        img = np.frombuffer(msg.data, dtype=dtype)
-        img = img.reshape((msg.height, msg.width, channels) if channels > 1
-                          else (msg.height, msg.width))
-
-        # Convert to BGR if needed
-        if encoding == 'rgb8':
-            img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-        elif encoding == 'rgba8':
-            img = cv2.cvtColor(img, cv2.COLOR_RGBA2BGR)
-        elif encoding == 'bgra8':
-            img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
-        elif encoding in ('mono8', '8uc1'):
-            img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
-
-        return img
-
-    def _cv2_to_ros_image(self, frame: np.ndarray, header: Header) -> Image:
-        """Convert OpenCV BGR frame to sensor_msgs/Image."""
-        msg = Image()
-        msg.header = Header()
-        msg.header.stamp = header.stamp
-        msg.header.frame_id = header.frame_id
-        msg.height = frame.shape[0]
-        msg.width = frame.shape[1]
-        msg.encoding = 'bgr8'
-        msg.is_bigendian = 0
-        msg.step = frame.shape[1] * 3
-        msg.data = frame.tobytes()
-        return msg
 
     def destroy_node(self):
         if self.enable_display:
