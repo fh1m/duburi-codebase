@@ -12,6 +12,11 @@ mavlink_inspector:
     baud: 115200
     yaw_source: "attitude"
 
+    # Connection health
+    heartbeat_timeout: 3.0
+    reconnect_backoff: 2.0
+    reconnect_max: 15.0
+
     # Slower ramp for controlled pool testing
     ramp_rate: 600
 
@@ -32,6 +37,7 @@ mavlink_inspector:
     nominal_voltage: 0.0
     surface_depth: 0.0
     ack_timeout: 3.0
+    surface_throttle_duration: 10.0
 
 mavlink_logger:
   ros__parameters:

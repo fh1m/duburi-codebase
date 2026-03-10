@@ -12,6 +12,11 @@ mavlink_inspector:
     baud: 115200
     yaw_source: "attitude"
 
+    # Connection health
+    heartbeat_timeout: 3.0
+    reconnect_backoff: 2.0
+    reconnect_max: 15.0
+
     # Full ramp speed for competition responsiveness
     ramp_rate: 800
 
@@ -36,6 +41,7 @@ mavlink_inspector:
 
     surface_depth: 0.0
     ack_timeout: 3.0
+    surface_throttle_duration: 10.0
 
 mavlink_logger:
   ros__parameters:

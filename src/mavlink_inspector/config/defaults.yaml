@@ -14,6 +14,11 @@ mavlink_inspector:
     connection_port: "/dev/ttyACM0"
     baud: 115200
 
+    # ── Connection health ──────────────────────────────────────────
+    heartbeat_timeout: 3.0       # seconds before heartbeat loss warning
+    reconnect_backoff: 2.0       # initial reconnect delay (doubles on failure)
+    reconnect_max: 15.0          # max reconnect delay (seconds)
+
     # ── Telemetry ──────────────────────────────────────────────────
     # Which MAVLink message supplies yaw: 'attitude', 'ahrs2', or 'both'
     yaw_source: "attitude"
@@ -53,6 +58,9 @@ mavlink_inspector:
 
     # ── Command ACK ────────────────────────────────────────────────
     ack_timeout: 3.0    # seconds to wait for COMMAND_ACK
+
+    # ── Surface command ────────────────────────────────────────────
+    surface_throttle_duration: 10.0  # seconds of throttle-up in MANUAL mode
 
 mavlink_logger:
   ros__parameters:

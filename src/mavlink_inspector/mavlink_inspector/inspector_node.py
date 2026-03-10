@@ -80,11 +80,24 @@ class MavlinkInspectorNode(Node):
             'surface_depth', 0.0).value
         self._ack_timeout = self.declare_parameter(
             'ack_timeout', 3.0).value
+        self._surface_throttle_duration = self.declare_parameter(
+            'surface_throttle_duration', 10.0).value
+
+        # Connection health (Design Issue 3: parameterized timing)
+        heartbeat_timeout = self.declare_parameter(
+            'heartbeat_timeout', 3.0).value
+        reconnect_backoff = self.declare_parameter(
+            'reconnect_backoff', 2.0).value
+        reconnect_max = self.declare_parameter(
+            'reconnect_max', 15.0).value
 
         # ── Modules ──────────────────────────────────────────────────
         self._conn = ConnectionManager(
             port=conn_port,
             baud=baud,
+            heartbeat_timeout=heartbeat_timeout,
+            reconnect_backoff=reconnect_backoff,
+            reconnect_max=reconnect_max,
             logger=self.get_logger(),
             on_event=self._publish_event,
         )

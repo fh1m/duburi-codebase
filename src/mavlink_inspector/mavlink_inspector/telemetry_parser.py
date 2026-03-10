@@ -43,6 +43,19 @@ class TelemetryParser:
         self._prev_armed: bool | None = None
         self._prev_mode: str | None = None
 
+        # ── Dispatch table (Design Issue 5) ──────────────────────────
+        # Uniform signature: handler(msg, master, events)
+        # Add new message types here — one method + one dict entry.
+        self._dispatch: dict[str, callable] = {
+            'HEARTBEAT':       self._handle_heartbeat,
+            'AHRS2':           self._handle_ahrs2,
+            'ATTITUDE':        self._handle_attitude,
+            'SYS_STATUS':      self._handle_sys_status,
+            'SCALED_PRESSURE': self._handle_scaled_pressure,
+            'SERVO_OUTPUT_RAW': self._handle_servo_output,
+            'RC_CHANNELS':     self._handle_rc_channels,
+        }
+
     # ── Public API ───────────────────────────────────────────────────
 
     def process(self, msg, master=None) -> list[tuple[str, str, str]]:
@@ -51,26 +64,13 @@ class TelemetryParser:
         Returns:
             List of ``(event_type, description, raw_data)`` tuples for
             state-transition events.  Empty list for sensor-only messages.
+
+        COMMAND_ACK is NOT dispatched here — the orchestrator handles it.
         """
         events: list[tuple[str, str, str]] = []
-        msg_type = msg.get_type()
-
-        if msg_type == 'HEARTBEAT':
-            self._handle_heartbeat(msg, master, events)
-        elif msg_type == 'AHRS2':
-            self._handle_ahrs2(msg)
-        elif msg_type == 'ATTITUDE':
-            self._handle_attitude(msg)
-        elif msg_type == 'SYS_STATUS':
-            self._handle_sys_status(msg)
-        elif msg_type == 'SCALED_PRESSURE':
-            self._handle_scaled_pressure(msg)
-        elif msg_type == 'SERVO_OUTPUT_RAW':
-            self._handle_servo_output(msg)
-        elif msg_type == 'RC_CHANNELS':
-            self._handle_rc_channels(msg)
-        # COMMAND_ACK handled by orchestrator
-
+        handler = self._dispatch.get(msg.get_type())
+        if handler is not None:
+            handler(msg, master, events)
         return events
 
     # ── Message handlers ─────────────────────────────────────────────
@@ -97,7 +97,7 @@ class TelemetryParser:
             )
         self._prev_mode = self.flight_mode
 
-    def _handle_ahrs2(self, msg):
+    def _handle_ahrs2(self, msg, _master, _events):
         # Depth always comes from AHRS2
         self.prev_depth = self.depth
         self.depth = msg.altitude
@@ -108,7 +108,7 @@ class TelemetryParser:
         self.pitch = math.degrees(msg.pitch)
         self.roll = math.degrees(msg.roll)
 
-    def _handle_attitude(self, msg):
+    def _handle_attitude(self, msg, _master, _events):
         yaw_rad = msg.yaw
         if yaw_rad < 0:
             yaw_rad += 2 * math.pi
@@ -118,7 +118,7 @@ class TelemetryParser:
             self.yaw = math.degrees(yaw_rad) % 360
         self.heading_rate = math.degrees(msg.yawspeed)
 
-    def _handle_sys_status(self, msg):
+    def _handle_sys_status(self, msg, _master, _events):
         self.voltage = (
             msg.voltage_battery / 1000.0
             if msg.voltage_battery != 0xFFFF else 0
@@ -129,17 +129,17 @@ class TelemetryParser:
         )
         self.cpu_load = msg.load / 10.0  # 0.1% units → %
 
-    def _handle_scaled_pressure(self, msg):
+    def _handle_scaled_pressure(self, msg, _master, _events):
         self.pressure = msg.press_abs           # hPa
         self.temperature = msg.temperature / 100.0  # cdegC → °C
 
-    def _handle_servo_output(self, msg):
+    def _handle_servo_output(self, msg, _master, _events):
         self.servo_output = [
             msg.servo1_raw, msg.servo2_raw, msg.servo3_raw, msg.servo4_raw,
             msg.servo5_raw, msg.servo6_raw, msg.servo7_raw, msg.servo8_raw,
         ]
 
-    def _handle_rc_channels(self, msg):
+    def _handle_rc_channels(self, msg, _master, _events):
         self.rc_channels = [
             msg.chan1_raw, msg.chan2_raw, msg.chan3_raw, msg.chan4_raw,
             msg.chan5_raw, msg.chan6_raw, msg.chan7_raw, msg.chan8_raw,
