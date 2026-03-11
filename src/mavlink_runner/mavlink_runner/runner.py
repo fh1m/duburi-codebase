@@ -25,7 +25,10 @@ import rclpy
 from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.qos import QoSProfile, ReliabilityPolicy
-from duburi_interfaces.msg import DriverCommand, MavlinkEvent, VehicleDiagnostics, VehicleState
+from duburi_interfaces.msg import (
+    DriverCommand, MavlinkEvent,
+    VehicleDiagnostics, VehicleState,
+)
 
 from .constants import MISSION_PATHS, HISTORY_FILE
 from .command_parser import parse_command
@@ -53,13 +56,13 @@ class DuburiRunnerNode(Node):
             QoSProfile(reliability=ReliabilityPolicy.RELIABLE, depth=1)
         )
         self._default_speed = 50
-        self._armed = False  # Track vehicle arm state
+        self._armed = False
         self._last_state = None   # type: VehicleState | None
         self._last_diag = None    # type: VehicleDiagnostics | None
-        self._last_state_time = 0.0  # monotonic timestamp of last VehicleState
-        self._inspector_warned = False  # avoid spamming warnings
+        self._last_state_time = 0.0
+        self._inspector_warned = False
+        self._last_reject_print = 0.0
 
-        # Health monitor: check every 3 s if inspector is alive
         self._health_timer = self.create_timer(3.0, self._check_inspector_health)
 
     def _on_event(self, msg: MavlinkEvent):
@@ -79,7 +82,10 @@ class DuburiRunnerNode(Node):
             elif etype == 'disarmed':
                 self._armed = False
         elif etype == 'command_rejected':
-            print(f'\r  [WARNING] {msg.description}. Arm first!')
+            now = time.monotonic()
+            if now - self._last_reject_print >= 5.0:
+                self._last_reject_print = now
+                print(f'\r  [WARNING] {msg.description}')
 
     def _on_state(self, msg: VehicleState):
         """Track vehicle arm state from telemetry."""
@@ -108,7 +114,11 @@ class DuburiRunnerNode(Node):
     def _publish(self, cmd: DriverCommand) -> bool:
         """Publish command. Returns True if sent, False if rejected (not armed)."""
         c = cmd.command.lower()
-        UNARMED_ALLOWED = {'arm', 'disarm', 'set_mode', 'stop', 'pid_depth_off', 'surface', 'just_surface', 'calibrate_depth'}
+        UNARMED_ALLOWED = {
+            'arm', 'disarm', 'set_mode', 'stop', 'pid_depth_off',
+            'surface', 'just_surface', 'calibrate_depth',
+            'vision_stop',  # stop alignment when disarmed
+        }
         if not self._armed and c not in UNARMED_ALLOWED:
             print(f'  [WARNING] Vehicle not armed! Arm first.')
             return False

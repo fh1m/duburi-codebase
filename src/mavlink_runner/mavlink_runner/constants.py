@@ -96,6 +96,18 @@ Instant (no-ramp) fallbacks:
   just surface                  Instant surface throttle
   (Prefix any movement command with 'just' to bypass ramp)
 
+Vision Alignment (requires arm + vision + alignment_controller):
+  lat-align [gain%%] [N]s [until]   Lateral align
+  dep-align / align / align-forward  Same pattern
+  until = stop when aligned; without it, run until timer (or indefinite)
+
+  ~lat-align [gain%%] [N]s [until]  PID versions
+  just-lat-align [gain%%] [N]s [until]  Bang-bang (no PID/Kalman)
+
+  vision-stop / vstop        Stop all vision alignment
+  e.g. lat-align 30%% until  Align at 30%% until aligned, then stop
+  e.g. lat-align 30%% 20s    Align max 20s (keeps aligning until timer)
+
 Other:
   help                 Show this help
   status               Vehicle status

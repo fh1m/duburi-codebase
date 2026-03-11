@@ -1,0 +1,33 @@
+# cameras.yaml – Multi-camera configuration for vision_inspector.
+#
+# Each entry defines a logical camera.  The manager will try device_ids
+# in order until one opens successfully.  If v4l2_name_pattern is set,
+# the manager resolves the device index by matching against
+# `v4l2-ctl --list-devices` output (useful when /dev/videoN numbers
+# shuffle across reboots).
+#
+# calibration_dir : directory to search for auto-named calibration files
+# calibration_file: explicit path – overrides auto-lookup
+
+cameras:
+  - name: forward
+    device_ids: [0, 2]
+    width: 640
+    height: 480
+    fps: 30
+    frame_id: forward_camera
+    # v4l2_name_pattern: "USB Camera"      # uncomment & adjust
+    calibration_dir: ""                     # default: ~/.ros/camera_calibrations
+    calibration_file: ""                    # leave empty for auto-lookup
+
+  # Uncomment when second camera is connected.
+  # /dev/video1 on this system is a metadata node, not a capture device.
+  # - name: downward
+  #   device_ids: [1, 3]
+  #   width: 640
+  #   height: 480
+  #   fps: 30
+  #   frame_id: downward_camera
+  #   # v4l2_name_pattern: "USB Camera"
+  #   calibration_dir: ""
+  #   calibration_file: ""

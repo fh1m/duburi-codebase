@@ -8,12 +8,11 @@ Checks /dev/video* devices, queries capabilities via V4L2/OpenCV, and reports:
   - Supported resolutions
   - Whether the device can capture video
 
-Usage (standalone):
-    ros2 run vision_manager camera_enum
+Usage:
+    ros2 run vision_inspector camera_enum
 """
 
 import glob
-import os
 import subprocess
 
 import cv2
@@ -51,7 +50,7 @@ def enumerate_cameras() -> list:
             'resolutions': [],
         }
 
-        # ── Try v4l2-ctl for detailed info ───────────────────────────
+        # ── Try v4l2-ctl for detailed info ───────────────────────
         try:
             result = subprocess.run(
                 ['v4l2-ctl', '--device', dev_path, '--info'],
@@ -68,7 +67,7 @@ def enumerate_cameras() -> list:
         except (FileNotFoundError, subprocess.TimeoutExpired):
             pass
 
-        # ── Try opening with OpenCV to verify ────────────────────────
+        # ── Try opening with OpenCV to verify ────────────────────
         cap = cv2.VideoCapture(idx, cv2.CAP_V4L2)
         if cap.isOpened():
             info['can_capture'] = True
@@ -84,7 +83,7 @@ def enumerate_cameras() -> list:
                     info['resolutions'].append(res)
             cap.release()
 
-        # ── Try v4l2-ctl for supported formats ───────────────────────
+        # ── Try v4l2-ctl for supported formats ───────────────────
         if not info['resolutions']:
             try:
                 result = subprocess.run(
@@ -94,7 +93,6 @@ def enumerate_cameras() -> list:
                 for line in result.stdout.splitlines():
                     line = line.strip()
                     if 'Size:' in line:
-                        # e.g. "Size: Discrete 640x480"
                         parts = line.split()
                         for p in parts:
                             if 'x' in p and p[0].isdigit():
@@ -129,7 +127,7 @@ def print_camera_table(cameras: list):
 
 
 class CameraEnumeratorNode(Node):
-    """ROS 2 node that enumerates cameras once on startup and logs the results."""
+    """ROS 2 node that enumerates cameras once on startup and logs results."""
 
     def __init__(self):
         super().__init__('camera_enumerator')
@@ -156,7 +154,6 @@ class CameraEnumeratorNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = CameraEnumeratorNode()
-    # Enumerate is a one-shot action; shutdown after printing
     node.destroy_node()
     rclpy.try_shutdown()
 

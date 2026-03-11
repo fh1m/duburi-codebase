@@ -465,5 +465,48 @@ def parse_command(node, line: str) -> tuple[bool, float]:
             return True, duration
         return True, 0.0
 
+    # ── Vision alignment commands ────────────────────────────────────
+    # lat-align / dep-align / align / align-forward [gain%] [N]s [until]
+    # "until" = stop when aligned; without it, run until timer expires (or indefinite)
+    # ~ prefix -> PID versions (pid_lat_align, etc.)
+    # just-* -> bang-bang, no PID, no Kalman
+    _vision_map = {
+        'lat-align': 'lat_align',
+        'dep-align': 'dep_align',
+        'align': 'align',
+        'align-forward': 'align_forward',
+        'just-lat-align': 'just_lat_align',
+        'just-dep-align': 'just_dep_align',
+        'just-align': 'just_align',
+        'just-align-forward': 'just_align_forward',
+    }
+    if cmd in _vision_map:
+        align_until = 'until' in args
+        driver_cmd_name = _vision_map[cmd]
+        if not driver_cmd_name.startswith('just_') and is_pid:
+            driver_cmd_name = 'pid_' + _vision_map[cmd]
+        mode_label = 'PID' if is_pid else ('just (bang-bang)' if 'just' in cmd else 'proportional')
+        c = DriverCommand(
+            command=driver_cmd_name,
+            speed=int(gain),
+            duration=duration,
+            status='until_aligned' if align_until else '',
+        )
+        if node._publish(c):
+            extra = []
+            if gain != node._default_speed:
+                extra.append(f'{gain}%')
+            if duration > 0:
+                extra.append(f'{duration}s')
+            if align_until:
+                extra.append('until')
+            print(f'Vision {cmd} ({mode_label})' + (' ' + ' '.join(extra) if extra else '') + ' -- alignment active')
+        return True, duration if duration > 0 else 0.0
+
+    if cmd in ('vision-stop', 'vstop'):
+        node._publish(DriverCommand(command='vision_stop'))
+        print('Vision alignment stopped.')
+        return True, 0.0
+
     print(f'Unknown command: {line}. Type "help" for commands.')
     return True, 0.0

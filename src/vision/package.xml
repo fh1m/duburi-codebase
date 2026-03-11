@@ -2,8 +2,12 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>vision</name>
-  <version>1.0.0</version>
-  <description>YOLO-based object detection for BRACU Duburi 4.2. Detects objects, draws bounding boxes, publishes detections.</description>
+  <version>1.1.0</version>
+  <description>
+    YOLO-based object detection, Kalman filter tracking, and visual servo
+    alignment controller for BRACU Duburi 4.2 (RoboSub).
+    PID and Kalman layers are independently toggleable for pool testing.
+  </description>
   <maintainer email="duburi@bracu.edu.bd">BRACU Duburi</maintainer>
   <license>Apache-2.0</license>
 
@@ -11,9 +15,12 @@
   <depend>std_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>duburi_interfaces</depend>
+  <depend>vision_inspector</depend>
+  <exec_depend>ament_index_python</exec_depend>
 
   <exec_depend>python3-opencv</exec_depend>
   <exec_depend>python3-numpy</exec_depend>
+  <!-- pip: ultralytics, supervision (not packaged in rosdep) -->
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

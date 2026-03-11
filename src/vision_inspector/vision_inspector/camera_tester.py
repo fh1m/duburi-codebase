@@ -2,12 +2,12 @@
 camera_tester.py – Interactive camera test tool for BRACU Duburi 4.2.
 
 Opens a camera, displays a live preview via OpenCV highgui, and reports
-frame rate, resolution, and basic health. Press 'q' to quit, 's' to save
+frame rate, resolution, and basic health.  Press 'q' to quit, 's' to save
 a snapshot, 'i' to print device info.
 
 Usage:
-    ros2 run vision_manager camera_test
-    ros2 run vision_manager camera_test --ros-args -p device_id:=1
+    ros2 run vision_inspector camera_test
+    ros2 run vision_inspector camera_test --ros-args -p device_id:=1
 """
 
 import time
@@ -35,8 +35,10 @@ class CameraTesterNode(Node):
         self.fps = self.get_parameter('fps').value
         self.duration = self.get_parameter('duration').value
 
-        self.get_logger().info(f'Testing /dev/video{self.device_id}  '
-                               f'{self.frame_w}x{self.frame_h}@{self.fps}fps')
+        self.get_logger().info(
+            f'Testing /dev/video{self.device_id}  '
+            f'{self.frame_w}x{self.frame_h}@{self.fps}fps'
+        )
 
     def run_test(self):
         """Run the camera test loop (blocking)."""
@@ -44,7 +46,7 @@ class CameraTesterNode(Node):
         if not cap.isOpened():
             self.get_logger().error(
                 f'Cannot open /dev/video{self.device_id}. '
-                'Run:  ros2 run vision_manager camera_enum  to list devices.'
+                'Run:  ros2 run vision_inspector camera_enum  to list devices.'
             )
             return False
 
@@ -62,6 +64,8 @@ class CameraTesterNode(Node):
         print(f'  Controls: [q]uit  [s]ave snapshot  [i]nfo\n')
 
         window_name = f'Duburi Camera Test – /dev/video{self.device_id}'
+        cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(window_name, actual_w, actual_h)
         frame_count = 0
         start_time = time.monotonic()
         fps_display = 0.0

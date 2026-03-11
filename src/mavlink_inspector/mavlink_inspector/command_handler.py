@@ -31,6 +31,18 @@ class CommandHandler:
     UNARMED_ALLOWED = frozenset({
         'arm', 'disarm', 'set_mode', 'stop', 'pid_depth_off',
         'surface', 'just_surface', 'teleop_idle', 'calibrate_depth',
+        'lat_align', 'dep_align', 'align', 'align_forward',
+        'pid_lat_align', 'pid_dep_align', 'pid_align', 'pid_align_forward',
+        'vision_stop',
+    })
+
+    # Commands handled by other nodes (vision alignment controller).
+    # Inspector logs them but does not dispatch or reject.
+    _PASSTHROUGH_COMMANDS = frozenset({
+        'lat_align', 'dep_align', 'align', 'align_forward',
+        'pid_lat_align', 'pid_dep_align', 'pid_align', 'pid_align_forward',
+        'just_lat_align', 'just_dep_align', 'just_align', 'just_align_forward',
+        'vision_stop',
     })
 
     def __init__(self, node):
@@ -118,6 +130,13 @@ class CommandHandler:
 
         # Log every incoming command
         self._log_command(c, cmd)
+
+        # Vision commands are handled by the alignment_controller node,
+        # not by the inspector.  Log and pass through silently.
+        if c in self._PASSTHROUGH_COMMANDS:
+            n.get_logger().info(f'Passthrough to vision: {c}')
+            n._publish_feedback(c, 'accepted', detail='routed to vision alignment controller')
+            return
 
         # Armed-state gate
         if not n._telemetry.armed and c not in self.UNARMED_ALLOWED:

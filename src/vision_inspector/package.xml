@@ -1,9 +1,9 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
-  <name>vision_manager</name>
+  <name>vision_inspector</name>
   <version>1.0.0</version>
-  <description>Camera management for BRACU Duburi 4.2. Handles device enumeration, testing, streaming, and calibration.</description>
+  <description>Camera orchestrator for BRACU Duburi 4.2. Multi-camera streaming, auto-reconnection, calibration management, recording, and diagnostic tools.</description>
   <maintainer email="duburi@bracu.edu.bd">BRACU Duburi</maintainer>
   <license>Apache-2.0</license>
 
