@@ -56,8 +56,8 @@ def generate_launch_description():
             "image_topic", default_value="/camera/forward/image_raw",
             description="Input image topic"),
         DeclareLaunchArgument(
-            "enable_display", default_value="True",
-            description="Show OpenCV preview window"),
+            "enable_display", default_value="False",
+            description="Show OpenCV preview window (False recommended on Jetson)"),
         DeclareLaunchArgument(
             "publish_annotated", default_value="True",
             description="Publish annotated image topic"),

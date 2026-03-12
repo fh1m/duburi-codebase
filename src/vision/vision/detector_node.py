@@ -22,6 +22,7 @@ Parameters:
 
 from __future__ import annotations
 
+import threading
 import time
 
 import cv2
@@ -64,6 +65,9 @@ class DetectorNode(Node):
         self.declare_parameter("target_class", C.DEFAULT_TARGET_CLASS)
         self.declare_parameter("show_alignment", True)
         self.declare_parameter("show_kalman", True)
+        self.declare_parameter("annotated_publish_rate", 10.0)
+        self.declare_parameter("log_rate", 2.0)
+        self.declare_parameter("display_rate", 20.0)
 
         self.model_path = self.get_parameter("model").value
         self.confidence = self.get_parameter("confidence").value
@@ -77,6 +81,9 @@ class DetectorNode(Node):
         self.target_class = self.get_parameter("target_class").value
         self.show_alignment = self.get_parameter("show_alignment").value
         self.show_kalman = self.get_parameter("show_kalman").value
+        self.annotated_publish_rate = self.get_parameter("annotated_publish_rate").value
+        self.log_rate = self.get_parameter("log_rate").value
+        self.display_rate = self.get_parameter("display_rate").value
 
         # ── Load YOLO model ──────────────────────────────────────────
         self.get_logger().info(
@@ -116,10 +123,16 @@ class DetectorNode(Node):
             self._label_annotator = sv.LabelAnnotator(
                 text_thickness=1, text_scale=0.5, text_padding=4,
             )
+            self._kf_box_pred = sv.BoxAnnotator(color=sv.Color.from_hex("#FF00FF"), thickness=2)
+            self._kf_box_corr = sv.BoxAnnotator(color=sv.Color.from_hex("#00FFFF"), thickness=2)
+            self._kf_label_annotator = sv.LabelAnnotator(text_scale=0.5, text_thickness=1)
             self.get_logger().info("Supervision annotators ready.")
         else:
             self._box_annotator = None
             self._label_annotator = None
+            self._kf_box_pred = None
+            self._kf_box_corr = None
+            self._kf_label_annotator = None
             self.get_logger().warn(
                 "supervision not installed -- falling back to ultralytics plot(). "
                 "Install with: pip install supervision"
@@ -147,12 +160,7 @@ class DetectorNode(Node):
         self._kf_trail: list[tuple[float, float]] = []
         self._kf_trail_max = 30
 
-        # ── Display window (created once) ─────────────────────────────
-        self._display_created = False
-        if self.enable_display:
-            cv2.namedWindow("Duburi Vision", cv2.WINDOW_NORMAL)
-            cv2.resizeWindow("Duburi Vision", 960, 540)
-            self._display_created = True
+        # Display window is created by the async display thread when needed
 
         # ── Stats ────────────────────────────────────────────────────
         self.frame_count = 0
@@ -160,6 +168,24 @@ class DetectorNode(Node):
         self.last_fps_time = time.monotonic()
         self.fps_frame_count = 0
         self.current_fps = 0.0
+        self._last_log_time = 0.0
+        self._last_annotated_publish_time = 0.0
+        self._last_display_time = 0.0
+        self._quit_requested = False
+
+        # ── Async display thread (decouples imshow from callback) ───────
+        self._display_frame: np.ndarray | None = None
+        self._display_lock = threading.Lock()
+        self._display_stop = threading.Event()
+        self._display_thread: threading.Thread | None = None
+        if self.enable_display:
+            self._display_thread = threading.Thread(
+                target=self._display_loop, daemon=True
+            )
+            self._display_thread.start()
+            self.get_logger().info(
+                f"Async display thread started at {self.display_rate} Hz."
+            )
 
         self.get_logger().info(
             f"Detector node started.  Subscribing to: {self.image_topic}  "
@@ -272,15 +298,31 @@ class DetectorNode(Node):
             self.last_fps_time = now
 
         if n > 0:
-            header = (
-                f"[{self.current_fps:.1f}fps] "
-                f"Frame #{self.frame_count}: {n} detection(s)"
-            )
-            log_msg = header + "\n" + "\n".join(detection_log_lines)
-            self.get_logger().info(log_msg)
+            now_log = time.monotonic()
+            if now_log - self._last_log_time >= 1.0 / max(self.log_rate, 0.1):
+                self._last_log_time = now_log
+                header = (
+                    f"[{self.current_fps:.1f}fps] "
+                    f"Frame #{self.frame_count}: {n} detection(s)"
+                )
+                log_msg = header + "\n" + "\n".join(detection_log_lines)
+                self.get_logger().info(log_msg)
 
-        # ── Annotated image ──────────────────────────────────────────
-        if self.publish_annotated or self.enable_display:
+        # ── Annotated image (skip when neither display nor publish needed) ─
+        now_ann = time.monotonic()
+        has_annotated_subscribers = self.annotated_pub.get_subscription_count() > 0
+        should_publish = (
+            self.publish_annotated
+            and has_annotated_subscribers
+            and (now_ann - self._last_annotated_publish_time >= 1.0 / max(self.annotated_publish_rate, 0.1))
+        )
+        should_display = (
+            self.enable_display
+            and (now_ann - self._last_display_time >= 1.0 / max(self.display_rate, 1.0))
+        )
+        should_annotate = should_display or should_publish
+
+        if should_annotate:
             annotated = self._annotate_frame(frame, result)
 
             cv2.putText(
@@ -293,24 +335,23 @@ class DetectorNode(Node):
                 2,
             )
 
-            # Alignment overlay: how much to move lat/dep (visual guide only)
-            if self.show_alignment and n > 0:
+            # Alignment overlay: only when alignment_controller is active and target visible
+            if self.show_alignment and n > 0 and self._last_alignment is not None:
                 annotated = self._draw_alignment_overlay(annotated, result, w, h)
 
-            # Kalman filter tracking box (from alignment_controller)
+            # Kalman filter tracking box (from alignment_controller; skips when inactive)
             if self.show_kalman:
                 annotated = self._draw_kalman_overlay(annotated, w, h)
 
-            if self.publish_annotated:
+            if should_publish:
+                self._last_annotated_publish_time = now_ann
                 ann_msg = cv2_to_ros_image(annotated, msg.header)
                 self.annotated_pub.publish(ann_msg)
 
-            if self.enable_display:
-                if not self._display_created:
-                    cv2.namedWindow("Duburi Vision", cv2.WINDOW_NORMAL)
-                    cv2.resizeWindow("Duburi Vision", 960, 540)
-                    self._display_created = True
-                cv2.imshow("Duburi Vision", annotated)
+            if should_display:
+                self._last_display_time = now_ann
+                with self._display_lock:
+                    self._display_frame = annotated.copy()
 
     def _draw_alignment_overlay(
         self, img: np.ndarray, result, w: int, h: int
@@ -447,14 +488,13 @@ class DetectorNode(Node):
             confidence=np.array([1.0]),
             class_id=np.array([0]),
         )
-        color = sv.Color.from_hex("#FF00FF") if status.kalman_predicted else sv.Color.from_hex("#00FFFF")
         label = "KF pred" if status.kalman_predicted else "KF"
-        box_annotator = sv.BoxAnnotator(color=color, thickness=2)
-        label_annotator = sv.LabelAnnotator(text_scale=0.5, text_thickness=1)
-        img = box_annotator.annotate(scene=img, detections=kf_detections)
-        img = label_annotator.annotate(
-            scene=img, detections=kf_detections, labels=[label]
-        )
+        box_ann = self._kf_box_pred if status.kalman_predicted else self._kf_box_corr
+        if box_ann is not None and self._kf_label_annotator is not None:
+            img = box_ann.annotate(scene=img, detections=kf_detections)
+            img = self._kf_label_annotator.annotate(
+                scene=img, detections=kf_detections, labels=[label]
+            )
 
         # Kalman trail (path of tracked center)
         if len(self._kf_trail) >= 2:
@@ -491,8 +531,37 @@ class DetectorNode(Node):
 
         return result.plot(conf=True, line_width=2)
 
+    def _display_loop(self):
+        """Run imshow/waitKey in a dedicated thread (decouples from callback)."""
+        period = 1.0 / max(self.display_rate, 1.0)
+        window_created = False
+        while not self._display_stop.wait(timeout=period):
+            with self._display_lock:
+                frame = self._display_frame.copy() if self._display_frame is not None else None
+            if frame is not None:
+                if not window_created:
+                    cv2.namedWindow("Duburi Vision", cv2.WINDOW_NORMAL)
+                    cv2.resizeWindow("Duburi Vision", 960, 540)
+                    window_created = True
+                cv2.imshow("Duburi Vision", frame)
+            elif window_created:
+                if cv2.getWindowProperty("Duburi Vision", cv2.WND_PROP_VISIBLE) < 0:
+                    break
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord("q"):
+                self._quit_requested = True
+                self.get_logger().info("Quit requested from display window.")
+                break
+        if window_created:
+            try:
+                cv2.destroyWindow("Duburi Vision")
+            except cv2.error:
+                pass
+
     def destroy_node(self):
-        if self.enable_display:
+        if self._display_thread is not None:
+            self._display_stop.set()
+            self._display_thread.join(timeout=2.0)
             cv2.destroyAllWindows()
         self.get_logger().info(
             f"Detector shutting down. Processed {self.frame_count} frames, "
@@ -506,15 +575,9 @@ def main(args=None):
     node = DetectorNode()
     try:
         if node.enable_display:
-            # Manual spin loop so cv2.waitKey can pump the GUI event queue
-            # on the main thread.  rclpy.spin() would block and freeze the
-            # OpenCV window.
-            while rclpy.ok():
-                rclpy.spin_once(node, timeout_sec=0.01)
-                key = cv2.waitKey(1) & 0xFF
-                if key == ord("q"):
-                    node.get_logger().info("Quit requested from display window.")
-                    break
+            # Display thread handles imshow/waitKey; spin and check quit.
+            while rclpy.ok() and not node._quit_requested:
+                rclpy.spin_once(node, timeout_sec=0.05)
         else:
             rclpy.spin(node)
     except KeyboardInterrupt:

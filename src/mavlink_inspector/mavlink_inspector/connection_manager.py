@@ -87,11 +87,10 @@ class ConnectionManager:
     def heartbeat_lost_notified(self, value: bool):
         self._heartbeat_lost_notified = value
 
-    # ── Logging helpers ──────────────────────────────────────────────
-
-    def _log(self, level: str, msg: str):
-        if self._logger:
-            getattr(self._logger, level)(msg)
+    # ── Logging ──────────────────────────────────────────────────────
+    # Note: rclpy logger caches severity per caller; using getattr(logger, level)()
+    # triggers "Logger severity cannot be changed between calls" when level varies.
+    # Call logger.info/warn/error directly at each site so each caller has fixed severity.
 
     # ── Connection lifecycle ─────────────────────────────────────────
 
@@ -110,8 +109,10 @@ class ConnectionManager:
             return self._port
         for port in self._fallback_ports:
             if port != self._port and Path(port).exists():
-                self._log('info',
-                          f'Configured port {self._port} not found, trying {port}')
+                if self._logger:
+                    self._logger.info(
+                        f'Configured port {self._port} not found, trying {port}'
+                    )
                 return port
         return None
 
@@ -128,7 +129,8 @@ class ConnectionManager:
                     f'or fallbacks {self._fallback_ports}'
                 )
 
-            self._log('info', f'Connecting to Pixhawk at {port}...')
+            if self._logger:
+                self._logger.info(f'Connecting to Pixhawk at {port}...')
             self._master = mavutil.mavlink_connection(port, self._baud)
             self._master.wait_heartbeat(timeout=10)
 
@@ -139,9 +141,11 @@ class ConnectionManager:
             self._port = port
 
             self._on_event('connected', f'Pixhawk connected on {port}')
-            self._log('info', f'Pixhawk connected and active on {port}.')
+            if self._logger:
+                self._logger.info(f'Pixhawk connected and active on {port}.')
         except Exception as e:
-            self._log('error', f'Failed to connect: {e}')
+            if self._logger:
+                self._logger.error(f'Failed to connect: {e}')
             self._on_event('connection_failed', str(e))
             self._connected = False
             self.close()
@@ -171,8 +175,10 @@ class ConnectionManager:
         if not self._connected:
             if not self._reconnecting:
                 delay = self._reconnect_current
-                self._log('info',
-                          f'Not connected. Reconnecting in {delay:.0f}s...')
+                if self._logger:
+                    self._logger.info(
+                        f'Not connected. Reconnecting in {delay:.0f}s...'
+                    )
 
                 def _delayed_reconnect():
                     time.sleep(delay)
@@ -199,13 +205,16 @@ class ConnectionManager:
                     f'No Pixhawk heartbeat for {elapsed:.1f}s '
                     f'(timeout={self._heartbeat_timeout}s)',
                 )
-                self._log('warn', 'Pixhawk heartbeat lost!')
+                if self._logger:
+                    self._logger.warning('Pixhawk heartbeat lost!')
 
             # Too long → mark disconnected to trigger reconnect
             if (now - self._last_heartbeat) > self._heartbeat_timeout * 3:
-                self._log('error',
-                          'Heartbeat lost too long — marking disconnected '
-                          'for reconnect.')
+                if self._logger:
+                    self._logger.error(
+                        'Heartbeat lost too long — marking disconnected '
+                        'for reconnect.'
+                    )
                 self._connected = False
                 self._on_event('connection_lost',
                                'Heartbeat timeout exceeded, will reconnect')
@@ -218,7 +227,8 @@ class ConnectionManager:
                 mavutil.mavlink.MAV_AUTOPILOT_INVALID, 0, 0, 0,
             )
         except Exception as e:
-            self._log('warn', f'Heartbeat send failed: {e}')
+            if self._logger:
+                self._logger.warning(f'Heartbeat send failed: {e}')
             self._connected = False
 
     # ── Message reading ──────────────────────────────────────────────
@@ -239,7 +249,8 @@ class ConnectionManager:
                 msgs.append(msg)
                 msg = self._master.recv_match(blocking=False)
         except Exception as e:
-            self._log('error', f'Read error: {e}')
+            if self._logger:
+                self._logger.error(f'Read error: {e}')
             self._connected = False
             self._on_event('connection_lost', str(e))
         return msgs
