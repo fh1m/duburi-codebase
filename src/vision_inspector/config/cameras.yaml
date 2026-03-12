@@ -11,7 +11,7 @@
 
 cameras:
   - name: forward
-    device_ids: [0, 2]
+    device_ids: [0, 1]
     width: 640
     height: 480
     fps: 30
