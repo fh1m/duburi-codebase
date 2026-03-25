@@ -1,9 +1,10 @@
 """
 SubmergeState — arm, set mode, dive to mission depth, wait to stabilize.
 
-Sends arm + MANUAL mode, then activates PID depth hold. Waits for
-depth confirmation via telemetry. If no telemetry is available (desk
-testing), continues after settle time so the pipeline can be exercised.
+Waits for DDS publisher matching, sets MANUAL mode, arms with retry,
+then activates PID depth hold. Waits for depth confirmation via
+telemetry. If no telemetry is available (desk testing), continues
+after settle time so the pipeline can be exercised.
 
 Outcomes:
     "submerged"  — vehicle armed and at target depth (or settle elapsed)
@@ -25,6 +26,8 @@ from ..bb_utils import bb_get
 SUBMERGED = "submerged"
 FAILED = "failed"
 
+_ARM_RETRY_INTERVAL = 1.5
+
 
 class SubmergeState(State):
 
@@ -37,26 +40,36 @@ class SubmergeState(State):
 
         ctx.log(f"SUBMERGE — arming and diving to {depth:.2f} m")
 
-        # ── Arm ──────────────────────────────────────────────────────
+        # ── Wait for DDS discovery ────────────────────────────────────
+        ctx.wait_for_ready(timeout=8.0)
+
+        # ── Mode (set FIRST so arm doesn't get dropped) ──────────────
+        ctx.send('set_mode', mode='MANUAL')
+        ctx.sleep(1.0)
+
+        # ── Arm with retry ────────────────────────────────────────────
         ctx.send('arm')
 
         deadline = time.monotonic() + ctx.cfg.arm_settle_time
+        last_retry = time.monotonic()
+
         while time.monotonic() < deadline:
             ctx.sleep(0.5)
             if ctx.armed:
                 ctx.log("SUBMERGE — confirmed armed")
                 break
+
+            if time.monotonic() - last_retry >= _ARM_RETRY_INTERVAL:
+                ctx.log("SUBMERGE — retrying arm command...")
+                ctx.send('arm')
+                last_retry = time.monotonic()
         else:
             if ctx.vehicle_state is None:
                 ctx.warn("SUBMERGE — no telemetry (desk mode?) — continuing")
             else:
                 ctx.warn("SUBMERGE — not armed after settle — continuing")
 
-        # ── Mode ─────────────────────────────────────────────────────
-        ctx.send('set_mode', mode='MANUAL')
-        ctx.sleep(0.5)
-
-        # ── Dive ─────────────────────────────────────────────────────
+        # ── Dive ──────────────────────────────────────────────────────
         ctx.send('pid_depth', depth=depth)
 
         deadline = time.monotonic() + ctx.cfg.feedback_timeout
@@ -72,7 +85,6 @@ class SubmergeState(State):
                     ctx.sleep(ctx.cfg.dive_settle_time)
                     return SUBMERGED
             else:
-                # No telemetry — just wait the settle time and proceed
                 ctx.warn("SUBMERGE — no depth telemetry, waiting settle time")
                 ctx.sleep(ctx.cfg.dive_settle_time)
                 return SUBMERGED

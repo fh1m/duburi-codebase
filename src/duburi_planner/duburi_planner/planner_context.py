@@ -80,6 +80,28 @@ class PlannerContext:
             DetectionArray, '/vision/detections',
             self._on_detections, SENSOR_QOS)
 
+    # ── Startup ─────────────────────────────────────────────────────
+
+    def wait_for_ready(self, timeout: float = 10.0) -> bool:
+        """Block until /driver/command has at least one subscriber.
+
+        DDS discovery can take 1-3 s. If we publish before a subscriber
+        matches, the message is silently dropped. This method ensures
+        the inspector (or any other subscriber) is connected before the
+        first command is sent.
+        """
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self._cmd_pub.get_subscription_count() > 0:
+                yasmin.YASMIN_LOG_INFO(
+                    "[planner] /driver/command subscriber connected")
+                return True
+            time.sleep(0.25)
+        yasmin.YASMIN_LOG_WARN(
+            "[planner] No subscriber on /driver/command after "
+            f"{timeout}s — commands may be dropped")
+        return False
+
     # ── Publishers ────────────────────────────────────────────────────
 
     def publish_command(self, cmd: DriverCommand) -> None:

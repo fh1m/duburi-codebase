@@ -26,6 +26,7 @@ The central mission planning package for the BRACU Duburi AUV. This document cov
 18. [Common Patterns & Recipes](#18-common-patterns--recipes)
 19. [Troubleshooting](#19-troubleshooting)
 20. [Quick Reference Cheat Sheet](#20-quick-reference-cheat-sheet)
+21. [Demo Mission — Complete Deep Dive](#21-demo-mission--complete-deep-dive)
 
 ---
 
@@ -1778,6 +1779,608 @@ ros2 run yasmin_viewer yasmin_viewer_node
 3. Add config under task name in `planner.yaml`
 4. Wire into `mission_node.py`'s `build_mission()`
 5. Rebuild: `colcon build --packages-select duburi_planner`
+
+---
+
+## 21. Demo Mission — Complete Deep Dive
+
+This section dissects the demo square mission **line by line**, explaining every decision, every parameter, and what would happen if you changed each one. Use this as the reference template when building more complex missions.
+
+### 21.1 What the Demo Does (Plain English)
+
+The demo makes the AUV trace a square in the water:
+
+```
+         Start
+           │
+           ▼
+    ┌──────────────┐
+    │   LEG 1      │  Drive forward 3 seconds
+    │   (forward)  │
+    └──────┬───────┘
+           │
+    ┌──────▼───────┐
+    │   TURN 1     │  Rotate 90° right (PID controlled)
+    │   (+90°)     │
+    └──────┬───────┘
+           │
+    ┌──────▼───────┐
+    │   LEG 2      │  Drive forward 3 seconds
+    │   (forward)  │
+    └──────┬───────┘
+           │
+    ┌──────▼───────┐
+    │   TURN 2     │  Rotate 90° right
+    │   (+90°)     │
+    └──────┬───────┘
+           │
+    ┌──────▼───────┐
+    │   LEG 3      │  Drive forward 3 seconds
+    │   (forward)  │
+    └──────┬───────┘
+           │
+    ┌──────▼───────┐
+    │   TURN 3     │  Rotate 90° right
+    │   (+90°)     │
+    └──────┬───────┘
+           │
+    ┌──────▼───────┐
+    │   LEG 4      │  Drive forward 3 seconds
+    │   (forward)  │
+    └──────┬───────┘
+           │
+    ┌──────▼───────┐
+    │   TURN 4     │  Rotate 90° right + STOP thrusters
+    │   (final)    │
+    └──────────────┘
+```
+
+But before the square starts, the vehicle must be **armed** (thrusters enabled). And after the square, it **disarms** (thrusters disabled). So the full flow is:
+
+```
+ARM → SQUARE (4 legs + 4 turns) → DISARM
+```
+
+### 21.2 The Two Files Involved
+
+The demo is split into two files:
+
+| File | Responsibility |
+|---|---|
+| `demo_node.py` | The **entry point**. Initialises ROS, creates the top-level state machine (ARM → SQUARE → DISARM), starts the YASMIN viewer, and runs the mission. |
+| `missions/demo_square.py` | The **square pattern logic**. Defines the SETUP, LEG, and TURN states, and wires them into a sub-state-machine. |
+
+This separation exists because `demo_square.py` is a **reusable sub-machine**. You could embed it inside a competition mission (`mission_node.py`) just by adding one line:
+
+```python
+sm.add_state("SQUARE", build_demo_square(), transitions={...})
+```
+
+### 21.3 demo_node.py — Line by Line
+
+#### Startup (lines 84-112)
+
+```python
+def main() -> None:
+    rclpy.init()                          # 1. Start ROS 2 runtime
+    set_ros_loggers()                     # 2. Route YASMIN logs through ROS
+
+    node = rclpy.create_node('demo_node') # 3. Create a ROS node named 'demo_node'
+    cfg = load_config(node)               # 4. Load planner.yaml → PlannerConfig
+    ctx = PlannerContext(node, cfg)        # 5. Create shared ROS bridge
+```
+
+**What's happening:** The node is created, config is loaded, and the `PlannerContext` is built. The context creates one publisher (`/driver/command`) and four subscribers (`/driver/feedback`, `/mavlink/vehicle_state`, `/vision/alignment_status`, `/vision/detections`).
+
+**If you change `'demo_node'`** to another name, the ROS node appears with that name in `ros2 node list`. No functional difference.
+
+```python
+    sm = build_demo_mission(ctx)          # 6. Build: ARM → SQUARE → DISARM
+
+    viewer_name = "DUBURI_DEMO_SQUARE"
+    YasminViewerPub(sm, viewer_name)      # 7. Publish FSM to YASMIN viewer
+```
+
+**What's happening:** The state machine is constructed (all states and transitions defined). Then `YasminViewerPub` begins publishing the FSM structure to port 5000 so the web viewer can display it.
+
+**If you change `viewer_name`**, the filter dropdown in the web viewer shows the new name. Purely cosmetic.
+
+```python
+    blackboard = Blackboard()
+    blackboard["ctx"] = ctx               # 8. Inject context into blackboard
+
+    executor = MultiThreadedExecutor()
+    executor.add_node(node)
+    spin_thread = threading.Thread(target=executor.spin, daemon=True)
+    spin_thread.start()                   # 9. Start ROS in background thread
+```
+
+**What's happening:** The Blackboard is created with `ctx` as its first entry. A background thread starts spinning the ROS executor — this is what receives incoming messages (vehicle state, feedback, detections) while the FSM runs on the main thread.
+
+**Why a background thread?** YASMIN states block (`time.sleep`, polling loops). If the ROS executor ran on the same thread, it couldn't process incoming messages while a state was sleeping.
+
+```python
+    try:
+        outcome = sm(blackboard)          # 10. RUN THE MISSION (blocking)
+```
+
+**This is where the action happens.** `sm(blackboard)` starts executing the first state (`ARM`). The call blocks until the entire state machine finishes and returns a terminal outcome (`demo_success` or `demo_failed`).
+
+#### Cleanup (lines 124-132)
+
+```python
+    finally:
+        try:
+            ctx.send('stop')              # Safety: halt thrusters
+        except Exception:
+            pass
+        executor.shutdown()               # Stop ROS executor
+        node.destroy_node()               # Clean up node
+        if rclpy.ok():
+            rclpy.shutdown()              # Shut down ROS 2
+```
+
+**Why the `try...except`?** If the user hits Ctrl-C or the ROS context is already shut down, `ctx.send('stop')` would throw an `RCLError`. The `except` catches it silently — it's a cleanup step, not critical.
+
+#### The Top-Level State Machine (lines 53-81)
+
+```python
+def build_demo_mission(ctx: PlannerContext) -> StateMachine:
+    sm = StateMachine(
+        outcomes=[DEMO_SUCCESS, DEMO_FAILED],   # Terminal outcomes
+        handle_sigint=True,                       # Ctrl-C triggers clean exit
+    )
+```
+
+`outcomes` defines the possible end states of this machine. When the SM returns one of these strings, it's done. `handle_sigint=True` means YASMIN will catch Ctrl-C and shut down the SM gracefully.
+
+```python
+    sm.add_state("ARM", ArmState(),
+        transitions={ARMED: "SQUARE", ARM_FAILED: DEMO_FAILED})
+```
+
+**Reading this:** "Add a state called `ARM` that runs `ArmState()`. When it returns `"armed"`, go to the state called `SQUARE`. When it returns `"failed"`, the entire SM returns `demo_failed`."
+
+```python
+    sm.add_state("SQUARE", build_demo_square(),
+        transitions={SQUARE_DONE: "DISARM"})
+```
+
+**Reading this:** "Add a state called `SQUARE` that is itself a sub-state-machine (the square pattern). When it returns `"square_done"`, go to `DISARM`."
+
+This is **hierarchical composition** — from the top level's perspective, `SQUARE` is just a single box with one outcome. Inside, it's 9 states.
+
+```python
+    sm.add_state("DISARM", SurfaceState(),
+        transitions={SURFACED: DEMO_SUCCESS})
+```
+
+**Reading this:** "Add `DISARM` running `SurfaceState`. When it returns `"surfaced"`, the whole SM returns `demo_success`."
+
+### 21.4 ArmState — What Happens Step by Step
+
+When the SM starts, `ARM` is the first state. Here's exactly what `ArmState.execute()` does:
+
+```
+1. ctx.wait_for_ready(timeout=8.0)
+   │
+   │  The planner just started. Its publisher (/driver/command)
+   │  needs to find the inspector's subscriber. DDS discovery
+   │  takes 1-3 seconds. This method blocks until at least one
+   │  subscriber is found. Without this, the first commands
+   │  would be silently dropped.
+   │
+   │  If no subscriber after 8s: warns but continues (desk mode).
+   │
+2. ctx.send('set_mode', mode='MANUAL')
+   │
+   │  Sets the Pixhawk to MANUAL mode. In MANUAL, the Pixhawk
+   │  passes RC channel values directly to ESCs. This is required
+   │  before any thruster commands work.
+   │
+   │  Sleep 1.0s to let mode change confirm.
+   │
+3. ctx.send('arm')
+   │
+   │  Tells the Pixhawk to enable thrusters. Without arming,
+   │  all movement commands are rejected.
+   │
+4. Poll loop (4 seconds):
+   │
+   │  Every 0.5s: check ctx.armed (from /mavlink/vehicle_state).
+   │  If armed=true: log success, break out.
+   │  Every 1.5s: resend 'arm' (in case the first was dropped).
+   │
+   │  If 4s pass without confirmation:
+   │    - No telemetry at all? → "desk mode, continuing anyway"
+   │    - Telemetry but not armed? → "continuing anyway" (warn)
+   │
+5. Return "armed"
+```
+
+**Why retry?** Even with `wait_for_ready`, there's a tiny window where a message could be lost. Retrying every 1.5s makes it bulletproof.
+
+**Why set_mode before arm?** ArduSub sometimes rejects arm if not in a compatible mode. MANUAL is always valid.
+
+### 21.5 demo_square.py — The Square Pattern
+
+#### The SETUP State
+
+```python
+def _setup_demo(blackboard: Blackboard) -> str:
+    ctx = blackboard["ctx"]
+    if "leg_duration" not in blackboard:
+        blackboard["leg_duration"] = 3.0
+    if "turn_angle" not in blackboard:
+        blackboard["turn_angle"] = 90.0
+    if "demo_speed" not in blackboard:
+        blackboard["demo_speed"] = 40
+    if "turn_settle" not in blackboard:
+        blackboard["turn_settle"] = 2.0
+
+    ctx.log("DEMO SQUARE — starting 4-leg square pattern")
+    return "ready"
+```
+
+This is a `CbState` — a lightweight state made from a plain function. It **injects default parameters** into the Blackboard. The `if key not in blackboard` pattern means you can override any parameter before the mission starts and SETUP won't overwrite it.
+
+**Parameters and their effects:**
+
+| Parameter | Default | What It Controls | Effect of Increasing | Effect of Decreasing |
+|---|---|---|---|---|
+| `leg_duration` | `3.0` sec | How long the AUV drives forward per side | Longer sides → bigger square | Shorter sides → smaller square |
+| `turn_angle` | `90.0°` | How many degrees to turn between legs | >90° = overlap, <90° = opens up | 45° = octagon, 60° = hexagon |
+| `demo_speed` | `40` | PWM offset (0-100) for both forward and turn | Faster movement (riskier) | Slower, more controlled |
+| `turn_settle` | `2.0` sec | How long to wait after sending a yaw command | More time to complete turn | Might not finish turning |
+
+**Changing these creates different shapes:**
+
+| `turn_angle` | `leg_duration` | Shape |
+|---|---|---|
+| `90.0` | `3.0` | Square (default) |
+| `45.0` | `3.0` | Octagon |
+| `60.0` | `3.0` | Hexagon |
+| `120.0` | `3.0` | Triangle |
+| `90.0` | `1.0` | Tiny square |
+| `90.0` | `8.0` | Big square |
+
+#### DemoLegState — One Side of the Square
+
+```python
+class DemoLegState(State):
+    def __init__(self, leg_number: int) -> None:
+        super().__init__(outcomes=["leg_done"])
+        self._leg = leg_number
+
+    def execute(self, blackboard: Blackboard) -> str:
+        ctx = blackboard["ctx"]
+        duration = bb_get(blackboard, "leg_duration", 3.0)
+        speed = bb_get(blackboard, "demo_speed", 40)
+
+        ctx.log(f"DEMO LEG {self._leg} — move_forward dur={duration}s spd={speed}")
+        ctx.send('move_forward', duration=duration, speed=speed)
+        ctx.sleep(duration)
+        return "leg_done"
+```
+
+**What happens physically:**
+
+1. `ctx.send('move_forward', duration=3.0, speed=40)` — publishes a `DriverCommand` to `/driver/command`. The inspector receives it and sets the forward RC channel to 1500 + (40/100 × 400) = **1660 PWM**. The trapezoidal ramp smoothly increases from whatever the current value is to 1660.
+
+2. `ctx.sleep(duration)` — waits 3 seconds. During this time, the inspector continues sending RC overrides at 20 Hz (every 50ms), holding the forward channel at 1660. The AUV moves forward.
+
+3. Returns `"leg_done"` — **no stop command**. The thrusters are still running at 1660 PWM. The next state (a turn) will send a yaw command, and the ramp will smoothly transition forward→neutral while ramping yaw.
+
+**Why no stop?** If we sent `stop` here:
+- Forward channel would snap to 1500 (neutral) instantly
+- The AUV would lurch/decelerate abruptly
+- Then the turn command would start yaw from zero
+- The AUV would jerk again
+
+Without stop, the ramp smoothly blends: forward decreases while yaw increases over ~0.5s. The transition feels natural.
+
+#### DemoTurnState — A Corner of the Square
+
+```python
+class DemoTurnState(State):
+    def __init__(self, turn_number: int, is_final: bool = False) -> None:
+        super().__init__(outcomes=["turn_done"])
+        self._turn = turn_number
+        self._is_final = is_final
+
+    def execute(self, blackboard: Blackboard) -> str:
+        ctx = blackboard["ctx"]
+        turn_angle = bb_get(blackboard, "turn_angle", 90.0)
+        speed = bb_get(blackboard, "demo_speed", 40)
+        settle = bb_get(blackboard, "turn_settle", 2.0)
+
+        current = ctx.heading
+        target = (current + turn_angle) % 360
+
+        ctx.send('pid_yaw_to_heading', angle=target, speed=speed)
+        ctx.sleep(settle)
+
+        if self._is_final:
+            ctx.send('stop')
+
+        return "turn_done"
+```
+
+**What happens physically:**
+
+1. `ctx.heading` — reads the latest heading from `/mavlink/vehicle_state`. If the AUV is pointing at 0° (north) and `turn_angle` is 90°, then `target = (0 + 90) % 360 = 90°` (east).
+
+2. `ctx.send('pid_yaw_to_heading', angle=90, speed=40)` — the inspector activates its **PID yaw controller**. The PID reads the current heading from the compass, calculates the error (target − current), and adjusts the yaw RC channel. The AUV rotates smoothly towards 90°.
+
+3. `ctx.sleep(settle)` — waits 2 seconds for the PID to finish. During this time, the PID is running at 20 Hz, adjusting yaw channel every 50ms. The AUV rotates.
+
+4. **If final turn:** `ctx.send('stop')` — all channels snap to neutral. Thrusters stop. The square is done.
+
+5. **If not final:** returns immediately. The next leg state sends `move_forward`, and the ramp transitions from yaw→forward smoothly.
+
+**Why is `turn_settle` important?** If `turn_settle` is too short (e.g. 0.5s), the PID won't have time to finish the turn. The next leg starts while the AUV is still mid-rotation, so it drives forward at an angle. If `turn_settle` is too long (e.g. 10s), the AUV just sits there after finishing the turn, wasting mission time.
+
+**The `% 360` modular arithmetic:** Handles wrapping. If heading is 350° and turn_angle is 90°, target = (350 + 90) % 360 = 80°. The PID controller knows to turn right through 0° (north).
+
+#### How build_demo_square() Wires It All Together
+
+```python
+def build_demo_square() -> StateMachine:
+    sm = StateMachine(outcomes=[SQUARE_DONE])
+
+    sm.add_state("SETUP", CbState(["ready"], _setup_demo),
+                 transitions={"ready": "LEG_1"})
+
+    for i in range(1, 5):
+        sm.add_state(f"LEG_{i}", DemoLegState(i),
+                     transitions={"leg_done": f"TURN_{i}"})
+
+        is_final = (i == 4)
+        after_turn = SQUARE_DONE if is_final else f"LEG_{i + 1}"
+        sm.add_state(f"TURN_{i}", DemoTurnState(i, is_final=is_final),
+                     transitions={"turn_done": after_turn})
+
+    return sm
+```
+
+The `for i in range(1, 5)` loop creates 4 legs and 4 turns. Here's the transition map it builds:
+
+| State | Outcome | Goes To |
+|---|---|---|
+| `SETUP` | `ready` | `LEG_1` |
+| `LEG_1` | `leg_done` | `TURN_1` |
+| `TURN_1` | `turn_done` | `LEG_2` |
+| `LEG_2` | `leg_done` | `TURN_2` |
+| `TURN_2` | `turn_done` | `LEG_3` |
+| `LEG_3` | `leg_done` | `TURN_3` |
+| `TURN_3` | `turn_done` | `LEG_4` |
+| `LEG_4` | `leg_done` | `TURN_4` |
+| `TURN_4` | `turn_done` | `square_done` (terminal) |
+
+The last turn (`i == 4`) is marked `is_final=True` so it sends `stop`. Its transition leads to `SQUARE_DONE`, which is a terminal outcome — the sub-SM returns `"square_done"` to the parent.
+
+### 21.6 SurfaceState — Cleanup
+
+After the square, `DISARM` runs `SurfaceState`:
+
+```python
+def execute(self, blackboard):
+    ctx = blackboard["ctx"]
+    ctx.send('surface')       # Ascend command
+    ctx.sleep(5.0)            # Wait 5s for ascent
+    ctx.send('disarm')        # Disable thrusters
+    ctx.sleep(2.0)            # Wait for disarm
+    return "surfaced"
+```
+
+This sends `surface` (which the inspector translates to upward throttle), waits, then disarms. The 5-second wait is generous — at the surface, the AUV might already be there.
+
+### 21.7 Complete Command Timeline
+
+Here is the exact sequence of commands published to `/driver/command` with approximate timing:
+
+```
+Time (s)  Command                         What Happens Physically
+────────  ──────────────────────────────  ─────────────────────────────────
+ 0.0      (node starts)                   ROS 2 initialises
+ 0.0-3.0  (DDS discovery)                 wait_for_ready() polls for subscriber
+ ~3.0     set_mode MANUAL                 Pixhawk enters MANUAL mode
+ ~4.0     arm                             Thrusters enabled
+ ~4.5     arm (retry if needed)           Backup in case first was dropped
+ ~8.0     (ARM state done)               Confirmed armed or desk-mode timeout
+
+ ~8.0     move_forward (3s, spd 40)       Forward thrust ramps up → 1660 PWM
+ ~11.0    pid_yaw_to_heading (+90°)       Forward ramps down, yaw ramps up
+ ~13.0    move_forward (3s, spd 40)       Yaw ramps down, forward ramps up
+ ~16.0    pid_yaw_to_heading (+90°)       Smooth transition to yaw
+ ~18.0    move_forward (3s, spd 40)       Back to forward
+ ~21.0    pid_yaw_to_heading (+90°)       Turning
+ ~23.0    move_forward (3s, spd 40)       Last forward leg
+ ~26.0    pid_yaw_to_heading (+90°)       Last turn
+ ~28.0    stop                            All channels → 1500 (neutral)
+
+ ~28.0    surface                         Upward throttle
+ ~33.0    disarm                          Thrusters disabled
+ ~35.0    (mission complete)              demo_success returned
+```
+
+Total runtime: ~35 seconds. The YASMIN viewer shows each state lighting up in real time.
+
+### 21.8 What Each Parameter Change Does
+
+#### Changing `leg_duration`
+
+```python
+blackboard["leg_duration"] = 5.0   # Before: 3.0
+```
+
+| Aspect | Before (3.0s) | After (5.0s) |
+|---|---|---|
+| Side length | ~1.5m at speed 40 | ~2.5m at speed 40 |
+| Total pattern time | ~20s (excl. arm/disarm) | ~28s |
+| Square size | Small (good for tight spaces) | Larger |
+| Risk | Lower | Higher (more distance = more drift) |
+
+#### Changing `demo_speed`
+
+```python
+blackboard["demo_speed"] = 70     # Before: 40
+```
+
+| Aspect | Before (40) | After (70) |
+|---|---|---|
+| PWM offset | 1500 + 160 = 1660 | 1500 + 280 = 1780 |
+| Physical speed | Slow/moderate | Fast |
+| Ramp transition time | ~0.2s | ~0.35s |
+| PID turn speed | Moderate yaw rate | Aggressive yaw rate |
+| Risk | Low (easy to control) | Higher (overshooting turns) |
+
+#### Changing `turn_angle`
+
+```python
+blackboard["turn_angle"] = 45.0    # Before: 90.0
+```
+
+| Aspect | Before (90°) | After (45°) |
+|---|---|---|
+| Shape | Square (4 turns × 90° = 360°) | Octagon (4 turns × 45° = 180°, only half done!) |
+| To complete a full loop | 4 turns | Need 8 turns (360/45) |
+
+**Important:** The demo always does exactly 4 legs and 4 turns. If you set `turn_angle=45`, you get a half-octagon, not a full one. To make a full octagon, you'd need to modify `build_demo_square()` to use `range(1, 9)` instead of `range(1, 5)`.
+
+#### Changing `turn_settle`
+
+```python
+blackboard["turn_settle"] = 4.0    # Before: 2.0
+```
+
+| Aspect | Before (2.0s) | After (4.0s) |
+|---|---|---|
+| Turn accuracy | May undershoot if PID is slow | More time to converge |
+| Total time | Faster overall | 8s extra (4 turns × 2s extra) |
+| Use case | Quick desk test | Slow PID or heavy vehicle |
+
+### 21.9 How to Modify the Demo for Your Own Missions
+
+#### Example 1: Make a Triangle
+
+```python
+def build_demo_triangle() -> StateMachine:
+    sm = StateMachine(outcomes=["triangle_done"])
+    sm.add_state("SETUP", CbState(["ready"], _setup_triangle),
+                 transitions={"ready": "LEG_1"})
+
+    for i in range(1, 4):                             # 3 legs, not 4
+        sm.add_state(f"LEG_{i}", DemoLegState(i),
+                     transitions={"leg_done": f"TURN_{i}"})
+        is_final = (i == 3)                            # 3rd turn is final
+        after = "triangle_done" if is_final else f"LEG_{i + 1}"
+        sm.add_state(f"TURN_{i}",
+                     DemoTurnState(i, is_final=is_final),
+                     transitions={"turn_done": after})
+    return sm
+
+def _setup_triangle(blackboard):
+    blackboard["turn_angle"] = 120.0      # 360° / 3 = 120° per corner
+    blackboard["leg_duration"] = 4.0
+    blackboard["demo_speed"] = 40
+    blackboard["turn_settle"] = 2.5
+    blackboard["ctx"].log("TRIANGLE — starting 3-leg triangle")
+    return "ready"
+```
+
+#### Example 2: Add a Depth Hold During the Square
+
+```python
+from yasmin import CbState
+
+def _dive_before_square(blackboard):
+    ctx = blackboard["ctx"]
+    ctx.send('pid_depth', depth=0.5)      # Hold at 0.5m while doing square
+    ctx.sleep(3.0)                         # Wait to reach depth
+    return "ready"
+
+def build_underwater_square():
+    sm = StateMachine(outcomes=["done"])
+    sm.add_state("DIVE", CbState(["ready"], _dive_before_square),
+                 transitions={"ready": "SQUARE"})
+    sm.add_state("SQUARE", build_demo_square(),
+                 transitions={"square_done": "done"})
+    return sm
+```
+
+#### Example 3: Add Heading Logging Between Moves
+
+```python
+class LogHeadingState(State):
+    def __init__(self, label):
+        super().__init__(outcomes=["logged"])
+        self._label = label
+
+    def execute(self, blackboard):
+        ctx = blackboard["ctx"]
+        ctx.log(f"CHECKPOINT {self._label}: heading={ctx.heading:.1f}° "
+                f"depth={ctx.depth:.2f}m")
+        return "logged"
+```
+
+Insert it between a turn and the next leg:
+
+```python
+sm.add_state("CHECK_1", LogHeadingState("after turn 1"),
+             transitions={"logged": "LEG_2"})
+# Change TURN_1's transition: {"turn_done": "CHECK_1"} instead of "LEG_2"
+```
+
+### 21.10 How the Demo Maps to a Real Competition Mission
+
+The demo is structurally identical to a real mission — the only differences are what the states do and how many there are:
+
+| Demo Concept | Competition Equivalent |
+|---|---|
+| `ArmState` | Same — always needed |
+| `SETUP` (inject params) | `_setup_gate_blackboard` — loads task-specific config |
+| `DemoLegState` (drive forward) | `DriveState` — same idea, more options |
+| `DemoTurnState` (PID turn) | `SearchState` (rotates looking for targets) |
+| No vision | `AlignState` (uses camera to centre on target) |
+| Fixed pattern | Dynamic: search → align → drive based on outcomes |
+| `SurfaceState` | Same — always needed at the end |
+
+The key difference is that the demo is **open-loop** (fixed timing, no sensor feedback) while competition missions are **closed-loop** (react to detections, alignment status, depth readings). But the FSM structure — states, outcomes, transitions, Blackboard — is identical.
+
+### 21.11 What Can Go Wrong (and Why)
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| "vehicle not armed" on all commands | `arm` command dropped during DDS discovery | Fixed in latest version with `wait_for_ready()` + retry |
+| AUV drifts during legs | No heading hold — `move_forward` doesn't hold compass heading | Use `go_forward` instead (holds heading via PID) |
+| Turns overshoot | `turn_settle` too short, PID hasn't converged | Increase `turn_settle` or tune PID gains in inspector |
+| Square is lopsided | Current in the water pushes AUV during forward legs | Use `go_forward` with heading hold, or add drift correction |
+| Thrusters jerk between moves | A `stop` command was accidentally added between states | Remove all `stop` between consecutive moves — let the ramp handle it |
+| Mission runs but nothing moves | `mavlink_inspector` not running or not connected to Pixhawk | Start inspector first, verify it connects |
+| "No telemetry" warning but vehicle arms | Inspector is running but `VehicleState` hasn't been received yet | Increase `arm_settle_time` in `planner.yaml` |
+| Square completed but vehicle still moving | `is_final` not set on last turn | Ensure `DemoTurnState(4, is_final=True)` |
+
+### 21.12 From Demo to Competition: The Upgrade Path
+
+Once you've verified the demo works, building a competition mission follows the same pattern but with sensor-driven states:
+
+```
+DEMO:          ARM → [LEG → TURN] × 4 → DISARM
+                      (open-loop)
+
+COMPETITION:   SUBMERGE → [SEARCH → ALIGN → DRIVE] per task → SURFACE
+                           (closed-loop)
+```
+
+The `SEARCH` state replaces fixed legs — instead of driving forward for a set time, it rotates looking for a YOLO detection. The `ALIGN` state replaces fixed turns — instead of turning a fixed angle, it uses PID visual servoing to centre the target in the camera frame. The `DRIVE` state is the same concept as a demo leg but with optional heading hold.
+
+Every concept from the demo carries forward:
+- States return outcome strings
+- Transitions route outcomes to next states
+- Blackboard carries parameters
+- The ramp handles smooth thruster transitions
+- The YASMIN viewer shows real-time state
 
 ---
 
