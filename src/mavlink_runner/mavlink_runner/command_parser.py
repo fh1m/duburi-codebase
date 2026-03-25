@@ -9,12 +9,15 @@ import re
 
 from duburi_interfaces.msg import DriverCommand
 
+from duburi_common.command_vocabulary import (
+    DIRECTION_TO_COMMAND,
+    HORIZONTAL_DIRS,
+    build_command_name,
+    build_compound_name,
+    resolve_prefixes,
+)
 from .constants import HELP_TEXT
 from .status_display import print_status
-
-
-# Valid horizontal directions for compound commands
-_HORIZONTAL_DIRS = {'forward', 'back', 'backward', 'left', 'right'}
 
 
 def try_compound_move(node, direction: str, gain: float, duration: float,
@@ -28,11 +31,9 @@ def try_compound_move(node, direction: str, gain: float, duration: float,
     the direction string is not a valid compound.
     """
     parts = direction.replace('backward', 'back').split('-')
-    if len(parts) != 2 or not all(d in _HORIZONTAL_DIRS for d in parts):
+    cmd_name = build_compound_name(parts, is_just=is_just)
+    if cmd_name is None:
         return None, 0.0
-    cmd_name = 'move_' + '_'.join(p.replace('backward', 'back') for p in parts)
-    if is_just:
-        cmd_name = f'just_{cmd_name}'
     c = DriverCommand(command=cmd_name, duration=duration, speed=int(gain))
     if node._publish(c):
         extra = []
@@ -77,40 +78,11 @@ def parse_command(node, line: str) -> tuple[bool, float]:
     cmd = parts[0]
     args = parts[1:]
 
-    # ── 'just' prefix — instant (no-ramp) fallback ─────────────────
-    # Strips 'just' and prepends 'just_' to the DriverCommand name.
-    # e.g. 'just forward 50% 3s' → command='just_forward'
-    #      'just move left'      → command='just_move_left'
-    #      'just go forward 90'  → command='just_go_forward'
-    is_just = False
-    if cmd == 'just':
-        is_just = True
-        if not args:
-            print('Usage: just <command> — prefix any movement with "just" for no-ramp.')
-            return True, 0.0
-        cmd = args[0]
-        args = args[1:]
-
-    # ── Resolve ~ prefix (PID) and backward-compatible aliases ────
-    is_pid = False
-    if cmd.startswith('~'):
-        is_pid = True
-        cmd = cmd[1:]
-    if cmd == 'dive':
-        cmd = 'depth'
-    elif cmd == 'p_dive':
-        cmd = 'depth'
-        is_pid = True
-    elif cmd == 'yaw':
-        cmd = 'heading'
-    elif cmd == 'p_yaw':
-        cmd = 'heading'
-        is_pid = True
-    elif cmd == 'p_turn':
-        cmd = 'turn'
-        is_pid = True
-    elif cmd in ('cal_depth', 'calibrate', 'cal'):
-        cmd = 'calibrate_depth'
+    # ── Resolve prefixes and aliases (shared with mission parser) ───
+    cmd, args, is_just, is_pid = resolve_prefixes(cmd, args)
+    if is_just and not args and cmd == 'just':
+        print('Usage: just <command> — prefix any movement with "just" for no-ramp.')
+        return True, 0.0
 
     if cmd in ('quit', 'exit', 'q'):
         return False, 0.0
@@ -312,13 +284,9 @@ def parse_command(node, line: str) -> tuple[bool, float]:
             except ValueError:
                 print('Invalid depth (use float e.g. 0.2)')
             return True, 1.0
-        elif direction in ('left', 'right', 'forward', 'back', 'backward', 'up', 'down'):
-            cmd_map = {
-                'left': 'move_left', 'right': 'move_right',
-                'forward': 'move_forward', 'back': 'move_back', 'backward': 'move_back',
-                'up': 'move_up', 'down': 'move_down',
-            }
-            c = DriverCommand(command=_cmd_name(cmd_map[direction]), duration=duration, speed=int(gain))
+        elif direction in DIRECTION_TO_COMMAND:
+            cmd_str = build_command_name(direction, is_just=is_just) or DIRECTION_TO_COMMAND[direction]
+            c = DriverCommand(command=cmd_str, duration=duration, speed=int(gain))
             if node._publish(c):
                 extra = []
                 if gain != node._default_speed:
@@ -375,13 +343,9 @@ def parse_command(node, line: str) -> tuple[bool, float]:
             return True, duration
         return True, 0.0
 
-    if cmd in ('left', 'right', 'forward', 'back', 'backward', 'up', 'down'):
-        cmd_map = {
-            'left': 'move_left', 'right': 'move_right',
-            'forward': 'move_forward', 'back': 'move_back', 'backward': 'move_back',
-            'up': 'move_up', 'down': 'move_down',
-        }
-        c = DriverCommand(command=_cmd_name(cmd_map[cmd]), duration=duration, speed=int(gain))
+    if cmd in DIRECTION_TO_COMMAND:
+        cmd_str = build_command_name(cmd, is_just=is_just) or DIRECTION_TO_COMMAND[cmd]
+        c = DriverCommand(command=cmd_str, duration=duration, speed=int(gain))
         if node._publish(c):
             extra = []
             if gain != node._default_speed:

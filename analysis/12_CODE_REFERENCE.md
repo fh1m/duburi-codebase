@@ -17,10 +17,11 @@ BRACU Duburi AUV 4.2 ROS 2 codebase after the Phase 1 modularization refactor.
 4. [mavlink_runner](#4-mavlink_runner)
 5. [mavlink_logger](#5-mavlink_logger)
 6. [vision](#6-vision)
-7. [vision_manager](#7-vision_manager)
-8. [duburi_interfaces](#8-duburi_interfaces)
-9. [Cross-Package Dependency Graph](#9-cross-package-dependency-graph)
-10. [Import Map](#10-import-map)
+7. [vision_inspector](#7-vision_inspector)
+8. [duburi_common](#8-duburi_common)
+9. [duburi_interfaces](#9-duburi_interfaces)
+10. [Cross-Package Dependency Graph](#10-cross-package-dependency-graph)
+11. [Import Map](#11-import-map)
 
 ---
 
@@ -33,7 +34,8 @@ BRACU Duburi AUV 4.2 ROS 2 codebase after the Phase 1 modularization refactor.
 | `mavlink_runner` | Human-facing CLI | 4 | ~917 | `duburi_runner` |
 | `mavlink_logger` | Topic logging to CSV/JSON | 1 | ~233 | `mavlink_logger` |
 | `vision` | YOLO object detection | 3 | ~501 | `detector_node` |
-| `vision_manager` | Camera management & calibration | 4 | ~811 | `camera_node`, `camera_enumerator`, `camera_tester`, `camera_calibrator` |
+| `vision_inspector` | Camera management & calibration | 4 | ~811 | `camera_node`, `camera_enumerator`, `camera_tester`, `camera_calibrator` |
+| `duburi_common` | Shared constants and command vocabulary | 2 | — | — |
 | `duburi_interfaces` | ROS 2 msg/srv definitions | — | — | — |
 
 ---
@@ -58,6 +60,7 @@ owns all ROS timers, publishes vehicle state.
 | `_publish_diagnostics()` | timer (2 Hz) | Publishes `VehicleDiagnostics` |
 | `_rc_override_tick()` | timer (20 Hz) | 4-layer RC builder: neutral → movement → depth PID → yaw PID |
 | `_on_driver_command()` | subscriber | Delegates incoming `DriverCommand` to CommandHandler |
+| `/driver/teleop` subscription | subscriber | `TeleopCommand` → `CommandHandler.handle_teleop()` |
 | `_send_command_long()` | method | Constructs and sends MAV_CMD via MAVLink |
 | `_handle_command_ack()` | method | Processes COMMAND_ACK, resolves pending futures |
 | `_arm_disarm()` | method | Arm/disarm with optional checks |
@@ -89,6 +92,7 @@ system-command dispatch table and delegates movements to the MOVEMENTS registry.
 | `handle_compound_move()` | method | Routes `compound_move` commands to `movement_commands.handle_compound_move()` |
 | `_parse_speed_duration()` | static | Extracts (speed, end_time) from DriverCommand fields |
 | `create_depth_pid()` / `create_yaw_pid()` | factory | Returns configured PidController instances |
+| `handle_teleop()` | method | Applies multi-axis RC from `TeleopCommand` (`/driver/teleop`); `idle` clears movement |
 
 **Dispatch flow:**
 ```
@@ -100,7 +104,7 @@ handle_command(cmd)
   └─ unknown                 → log warning
 ```
 
-**Depends on:** `movement_commands` (MOVEMENTS registry), `pid_controller`
+**Depends on:** `movement_commands` (MOVEMENTS registry), `pid_controller`, `duburi_common.constants` (`UNARMED_ALLOWED_INSPECTOR`)
 
 ---
 
@@ -122,7 +126,7 @@ the inspector's RC controller. Registered in the `MOVEMENTS` dict.
 | `cmd_yaw_right()` | handler | CH_YAW + speed |
 | `cmd_surface()` | handler | Full CH_THROTTLE up for configurable duration |
 | `cmd_cruise()` | handler | CH_FORWARD + speed, no auto-stop timer |
-| `cmd_teleop()` | handler | 4-axis PWM from repurposed DriverCommand fields |
+| `cmd_teleop()` | handler | Legacy `DriverCommand` `teleop` path (field overloading); prefer `/driver/teleop` + `TeleopCommand` |
 | `handle_go()` | function | Parses `go_forward_left` → diagonal via `build_diagonal_channels()` |
 | `handle_compound_move()` | function | Parses `compound_move` with explicit axes |
 | Movement aliases | entries | `'forward' → cmd_move_forward`, `'back' → cmd_move_back`, etc. |
@@ -305,7 +309,7 @@ raw line → strip → lowercase
   └─ unknown         → log warning, return None
 ```
 
-**Depends on:** `driver_client` (all factory functions)
+**Depends on:** `driver_client` (all factory functions), `duburi_common.command_vocabulary` (`resolve_prefixes`, `HORIZONTAL_DIRS`)
 
 ---
 
@@ -316,7 +320,7 @@ raw line → strip → lowercase
 | Item | Kind | Purpose |
 |---|---|---|
 | `MissionExecutorNode` | class (Node) | ROS 2 node for autonomous missions |
-| `__init__()` | method | Subscribes to `/vehicle/state`, creates `/driver/command` publisher |
+| `__init__()` | method | Subscribes to `/mavlink/vehicle_state`, creates `/driver/command` publisher |
 | `run_mission_file()` | method | Loads `.txt` file, iterates lines, calls `_parse_file_command()` |
 | `run_builtin()` | method | Runs hardcoded mission sequences (e.g., `gate`) |
 | `_parse_file_command()` | method | Delegates to `mission_parser.parse_file_command()` |
@@ -335,31 +339,31 @@ just forward 80 2.0  # instant (no-ramp) variant
 ~ my_alias 60 3.0   # alias lookup
 ```
 
-**Depends on:** `mission_parser`, `driver_client`
+**Depends on:** `mission_parser`, `driver_client`, `duburi_common.constants` (`MISSION_PATHS`)
 
 ---
 
 ### 3.5 teleop_driver.py (104 lines)
 
-**Role:** Converts `geometry_msgs/Twist` messages to `DriverCommand` messages
-for joystick/gamepad control.
+**Role:** Converts `geometry_msgs/Twist` messages to `TeleopCommand` for
+joystick/gamepad control.
 
 | Item | Kind | Purpose |
 |---|---|---|
-| `TeleopDriverNode` | class (Node) | Subscribes to `/cmd_vel`, publishes to `/driver/command` |
-| `_on_twist()` | method | Maps Twist axes to teleop PWM offsets with 0.1 dead-zone |
+| `TeleopDriverNode` | class (Node) | Subscribes to `/cmd_vel`, publishes to `/driver/teleop` |
+| `_twist_cb()` | method | Maps Twist axes to `TeleopCommand` fields with 0.1 dead-zone; publishes `idle=True` when centred |
 
 **Axis mapping:**
-| Twist field | DriverCommand field | Meaning |
+| Twist field | TeleopCommand field | Meaning |
 |---|---|---|
-| `linear.x` | `speed` | Forward/back PWM offset |
-| `linear.y` | `duration` (repurposed) | Lateral PWM offset |
-| `linear.z` | `depth` (repurposed) | Throttle PWM offset |
-| `angular.z` | `angle` (repurposed) | Yaw PWM offset |
+| `linear.x` | `linear_x` | Forward / back |
+| `linear.y` | `linear_y` | Left / right |
+| `linear.z` | `linear_z` | Up / down |
+| `angular.z` | `angular_z` | Yaw |
 
-> **Note:** This field repurposing is Design Issue 7 — see `10_DESIGN_ISSUES.md`.
+`speed` is set from the `max_speed` parameter (PWM cap). Design Issue 7 (DriverCommand field overloading) is **resolved** — see `10_DESIGN_ISSUES.md`.
 
-**Depends on:** `duburi_interfaces.msg.DriverCommand`, `geometry_msgs.msg.Twist`
+**Depends on:** `duburi_interfaces.msg.TeleopCommand`, `geometry_msgs.msg.Twist`
 
 ---
 
@@ -397,7 +401,7 @@ user input → strip → lowercase
   └─ unknown → error message, return None
 ```
 
-**Depends on:** `driver_client`, `just_commands`, `constants`
+**Depends on:** `duburi_interfaces.msg.DriverCommand`, `duburi_common.command_vocabulary` (`DIRECTION_TO_COMMAND`, `HORIZONTAL_DIRS`, `build_command_name`, `build_compound_name`, `resolve_prefixes`), `constants` (`HELP_TEXT`), `status_display`
 
 ---
 
@@ -418,21 +422,20 @@ user input → strip → lowercase
 **Readline integration:** Loads/saves command history from
 `~/.duburi_history`. Tab completion is not implemented.
 
-**Depends on:** `command_parser`, `constants`, `status_display`
+**Depends on:** `command_parser`, `constants`, `status_display`, `duburi_common.constants` (`UNARMED_ALLOWED` for disarmed command gating)
 
 ---
 
 ### 4.3 constants.py (104 lines)
 
-**Role:** Shared constants for the runner package.
+**Role:** Runner-specific help text; re-exports shared paths from `duburi_common`.
 
 | Item | Kind | Purpose |
 |---|---|---|
-| `HELP_TEXT` | str | 86-line help string displayed by `help` command |
-| `MISSION_PATHS` | list[Path] | Search paths for mission files: `[./missions, ~/missions, ./]` |
-| `HISTORY_FILE` | Path | `~/.duburi_history` |
+| `HELP_TEXT` | str | Long help string displayed by `help` command |
+| `MISSION_PATHS`, `HISTORY_FILE` | re-export | From `duburi_common.constants` (canonical definitions) |
 
-**Depends on:** nothing (standalone)
+**Depends on:** `duburi_common.constants` (re-exports only)
 
 ---
 
@@ -450,18 +453,18 @@ user input → strip → lowercase
 
 ## 5. mavlink_logger
 
-> **Purpose:** Logs all ROS 2 topics to CSV and JSON files for post-dive analysis.
+> **Purpose:** Logs subscribed topics (events, vehicle state, commands) to CSV and JSON files for post-dive analysis.
 
 ### 5.1 logger_node.py (233 lines)
 
 | Item | Kind | Purpose |
 |---|---|---|
-| `MavlinkLoggerNode` | class (Node) | Subscribes to all major topics, writes to files |
-| Subscriptions | 4 topics | `VehicleState`, `VehicleDiagnostics`, `MavlinkEvent`, `DriverCommand` |
-| CSV writer | method | Appends timestamped rows to `~/.duburi_logs/YYYY-MM-DD_HH-MM-SS.csv` |
+| `MavlinkLoggerNode` | class (Node) | Subscribes to events, vehicle state, and commands; writes to files |
+| Subscriptions | 3 topics | `MavlinkEvent`, `VehicleState` (`/mavlink/vehicle_state`), `DriverCommand` |
+| CSV writer | method | Appends timestamped rows to `<workspace>/logs/YYYY-MM-DD_HH-MM-SS.csv` |
 | JSON writer | method | Appends JSON lines to corresponding `.jsonl` file |
 
-**Log directory:** `~/.duburi_logs/` with automatic session-based filenames.
+**Log directory:** `<workspace>/logs/` with automatic session-based filenames.
 
 **Depends on:** `duburi_interfaces.msg.*`
 
@@ -507,7 +510,7 @@ user input → strip → lowercase
 
 ---
 
-## 7. vision_manager
+## 7. vision_inspector
 
 > **Purpose:** Camera device management, calibration, and raw image publishing.
 
@@ -547,7 +550,39 @@ user input → strip → lowercase
 
 ---
 
-## 8. duburi_interfaces
+## 8. duburi_common
+
+> **Purpose:** Shared Python library (no ROS nodes): command vocabulary and stack-wide constants so `mavlink_runner` and `mavlink_driver` do not duplicate parsing rules, paths, or allow-lists.
+
+### 8.1 command_vocabulary.py
+
+| Item | Kind | Purpose |
+|---|---|---|
+| `ALIASES` | dict | User-facing alias → canonical command (or tuple with PID flag), e.g. `dive` → `depth` |
+| `DIRECTION_TO_COMMAND` | dict | Direction word → `DriverCommand.command` name (`forward` → `move_forward`, etc.) |
+| `HORIZONTAL_DIRS` | frozenset | Valid horizontal directions for compound / `go_*` parsing |
+| `resolve_prefixes()` | function | Resolves `just` prefix, `~` PID prefix, and alias expansion on tokenized input |
+| `build_command_name()` | function | Builds normalized movement command strings (incl. `just_` variants) |
+| `build_compound_name()` | function | Builds hyphenated compound command names from horizontal parts |
+
+**Imported by:** `mavlink_runner.command_parser`, `mavlink_driver.mission_parser`
+
+### 8.2 constants.py
+
+| Item | Kind | Purpose |
+|---|---|---|
+| `MISSION_PATHS` | list[Path] | Search paths for mission files |
+| `HISTORY_FILE` | Path | CLI readline history location (`~/.duburi_history`) |
+| `DEFAULT_SPEED` | int | Default movement gain for parsers / UX |
+| `ARM_WAIT`, `DISARM_WAIT`, `SURFACE_WAIT` | float | Timing constants for arm/disarm/surface sequences |
+| `UNARMED_ALLOWED` | frozenset | Commands permitted when disarmed (runner gate) |
+| `UNARMED_ALLOWED_INSPECTOR` | frozenset | Superset used by inspector (extra passthrough / alignment commands) |
+
+**Imported by:** `mavlink_runner.constants` (re-exports paths), `mavlink_runner.runner`, `mavlink_driver.mission_executor`, `mavlink_inspector.command_handler`
+
+---
+
+## 9. duburi_interfaces
 
 > **Purpose:** ROS 2 message and service definitions shared by all packages.
 
@@ -555,66 +590,70 @@ user input → strip → lowercase
 
 | Message | Fields | Used By |
 |---|---|---|
-| `DriverCommand` | `command`, `speed`, `duration`, `depth`, `angle`, `gain` | driver → inspector |
+| `DriverCommand` | `command`, `mode`, `depth`, `angle`, `duration`, `speed`, `status` | driver, runner → inspector, logger |
+| `TeleopCommand` | `linear_x`, `linear_y`, `linear_z`, `angular_z`, `speed`, `idle` | teleop_driver → inspector (`/driver/teleop`) |
 | `VehicleState` | `armed`, `mode`, `heading`, `depth`, `roll`, `pitch`, `yaw`, `battery_voltage`, `battery_current`, `battery_remaining`, `servos[8]`, `rc_channels[8]` | inspector → all |
-| `VehicleDiagnostics` | `cpu_temp`, `board_voltage`, `system_status`, `errors_count` | inspector → logger |
+| `VehicleDiagnostics` | `cpu_temp`, `board_voltage`, `system_status`, `errors_count` | inspector (not subscribed by mavlink_logger) |
 | `MavlinkEvent` | `event_type`, `description`, `timestamp` | inspector → logger |
 | `DetectionArray` | `detections[]` — each with `class_name`, `confidence`, `bbox` | vision → runner |
 
 ---
 
-## 9. Cross-Package Dependency Graph
+## 10. Cross-Package Dependency Graph
 
 ```
-                    duburi_interfaces (msg/srv definitions)
-                           │
-              ┌────────────┼────────────────┐
-              ▼            ▼                ▼
-        mavlink_driver   mavlink_inspector  mavlink_logger
-              │            │
-              │     ┌──────┴──────┐
-              │     ▼             ▼
-              │  pymavlink    (internal modules)
-              │
-     ┌────────┴────────┐
-     ▼                 ▼
-mavlink_runner    vision / vision_manager
+duburi_interfaces (ROS msgs/srv)              duburi_common (Python library)
+            │                                           │
+            ├──────────────┬────────────────────────────┼──────────────┐
+            ▼              ▼                            ▼              ▼
+   mavlink_logger   mavlink_inspector            mavlink_driver   mavlink_runner
+                          │                            │              │
+                          │                            └──────┬───────┘
+                          │                                   │
+                     pymavlink                          runner imports
+                    + internal mods                       driver_client,
+                                                            just_commands
+
+            vision / vision_inspector ──► duburi_interfaces only (+ ultralytics)
 ```
 
 **Key dependency rules:**
-- `mavlink_inspector` has **zero** Python imports from other BRACU packages
-  (only `duburi_interfaces` messages)
-- `mavlink_driver` depends only on `duburi_interfaces`
-- `mavlink_runner` imports from `mavlink_driver` (`driver_client`, `just_commands`)
+- `mavlink_inspector` imports `duburi_interfaces` and `duburi_common` (allow-list only); it does not import `mavlink_driver` or `mavlink_runner`
+- `mavlink_driver` depends on `duburi_interfaces` and `duburi_common`
+- `mavlink_runner` imports from `mavlink_driver` (`driver_client`, `just_commands`) and `duburi_common`
 - `vision` depends on `duburi_interfaces` and `ultralytics`
 - All inter-package communication is via ROS 2 topics (loose coupling)
 
 ---
 
-## 10. Import Map
+## 11. Import Map
 
 ### What imports what (Python-level)
 
 ```
 mavlink_runner.command_parser
-  ← mavlink_driver.driver_client    (make_command, move_*, yaw_*, etc.)
-  ← mavlink_driver.just_commands    (just_forward, just_back, etc.)
-  ← mavlink_runner.constants        (HELP_TEXT, MISSION_PATHS)
+  ← duburi_interfaces.msg.DriverCommand  (inline message construction)
+  ← mavlink_runner.constants        (HELP_TEXT)
+  ← mavlink_runner.status_display   (print_status)
+  ← duburi_common.command_vocabulary (resolve_prefixes, DIRECTION_TO_COMMAND, …)
 
 mavlink_runner.runner
   ← mavlink_runner.command_parser   (parse_command)
   ← mavlink_runner.constants        (HELP_TEXT, HISTORY_FILE)
   ← mavlink_runner.status_display   (print_status)
+  ← duburi_common.constants         (UNARMED_ALLOWED)
 
 mavlink_driver.just_commands
   ← mavlink_driver.driver_client    (make_command)
 
 mavlink_driver.mission_parser
   ← mavlink_driver.driver_client    (all factory functions)
+  ← duburi_common.command_vocabulary (resolve_prefixes, HORIZONTAL_DIRS)
 
 mavlink_driver.mission_executor
   ← mavlink_driver.mission_parser   (parse_file_command)
   ← mavlink_driver.driver_client    (stop, disarm)
+  ← duburi_common.constants         (MISSION_PATHS)
 
 mavlink_inspector.inspector_node
   ← mavlink_inspector.connection_manager
@@ -626,6 +665,7 @@ mavlink_inspector.inspector_node
 mavlink_inspector.command_handler
   ← mavlink_inspector.movement_commands  (MOVEMENTS, handle_go, handle_compound_move)
   ← mavlink_inspector.pid_controller     (PidController)
+  ← duburi_common.constants              (UNARMED_ALLOWED_INSPECTOR)
 
 mavlink_inspector.movement_commands
   ← mavlink_inspector.rc_controller      (channel constants, percent_to_pwm, build_diagonal_channels)
@@ -662,10 +702,12 @@ resolved by removing the unused re-export block from `driver_client.py`.
 | `DuburiRunnerNode` | `runner.py` | mavlink_runner |
 | `print_status()` | `status_display.py` | mavlink_runner |
 | `HELP_TEXT` | `constants.py` | mavlink_runner |
+| `ALIASES`, `resolve_prefixes`, compound helpers | `command_vocabulary.py` | duburi_common |
+| `MISSION_PATHS`, `UNARMED_ALLOWED*` | `constants.py` | duburi_common |
 | Channel constants | `rc_controller.py` | mavlink_inspector |
 | Image conversion | `image_utils.py` | vision |
 | YOLO detection | `detector_node.py` | vision |
-| Camera publishing | `camera_node.py` | vision_manager |
+| Camera publishing | `camera_node.py` | vision_inspector |
 
 ---
 

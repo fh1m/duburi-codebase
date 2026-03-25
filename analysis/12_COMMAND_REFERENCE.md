@@ -857,15 +857,15 @@ Tunable at launch or runtime via `ros2 param set`.
 | `yaw_ki` | `0.05` | Yaw PID integral gain |
 | `yaw_kd` | `0.5` | Yaw PID derivative gain |
 | `yaw_max_integral` | `50.0` | Yaw PID integral windup limit |
-| `depth_kp` | `500.0` | Depth PID proportional gain |
-| `depth_ki` | `25.0` | Depth PID integral gain |
-| `depth_kd` | `200.0` | Depth PID derivative gain |
-| `depth_max_integral` | `0.5` | Depth PID integral windup limit |
-| `depth_tolerance` | `0.05` | Depth PID deadband (metres) |
+| `depth_kp` | `800.0` | Depth PID proportional gain |
+| `depth_ki` | `50.0` | Depth PID integral gain |
+| `depth_kd` | `100.0` | Depth PID derivative gain |
+| `depth_max_integral` | `1.0` | Depth PID integral windup limit |
+| `depth_tolerance` | `0.08` | Depth PID deadband (metres) |
 | `pid_max_rate` | `50` | PID output rate limit (PWM units/tick). Prevents thruster hunting. |
 | `nominal_voltage` | `0.0` | Battery voltage compensation. 0=disabled. Set to nominal (e.g. 14.8 for 4S LiPo). |
 | `ack_timeout` | `3.0` | Command ACK timeout (seconds) |
-| `yaw_source` | `compass` | Yaw source: `compass` or `gyro` |
+| `yaw_source` | `attitude` | Yaw source: `attitude`, `ahrs2`, or `both` |
 
 ### Runtime Tuning Examples
 

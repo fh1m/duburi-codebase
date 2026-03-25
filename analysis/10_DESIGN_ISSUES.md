@@ -428,7 +428,9 @@ state variable and modifying `get_channels()` to return `None` in IDLE state
 
 ## Issue 7 — DriverCommand Message Field Overloading (Teleop)
 
-**Severity:** MEDIUM  |  **Effort to fix:** MEDIUM  |  **Status: OPEN**
+**Severity:** MEDIUM  |  **Effort to fix:** MEDIUM  |  **Status: RESOLVED**
+
+**Resolution:** `TeleopCommand.msg` was added with a dedicated `/driver/teleop` topic. `teleop_driver` publishes `TeleopCommand`; the inspector handles it via `CommandHandler.handle_teleop()`. Multi-axis teleop no longer overloads `DriverCommand` fields.
 
 ### Theory
 
@@ -654,16 +656,16 @@ only if PWM range becomes configurable.
 | 4 | if/elif command dispatch | Medium | **RESOLVED** — dispatch tables | Done ✓ |
 | 5 | if/elif message parsing | Medium | **RESOLVED** — dispatch dict | Done ✓ |
 | 6 | RC neutral override | Low | **DEFERRED** — pending pool test | Post-pool |
-| 7 | DriverCommand teleop overloading | Medium | **OPEN** — documented workaround | Next interface version |
+| 7 | DriverCommand teleop overloading | Medium | **RESOLVED** — `TeleopCommand` + `/driver/teleop` | Done ✓ |
 | 8 | Duplicated command parsing (NEW) | Medium | **OPEN** — three parallel parsers | Off-season |
 | 9 | percent_to_pwm duplication (NEW) | Low | **OPEN** — accepted for now | Low priority |
 
 ### Progress Since First Analysis
 
-Three of the original seven issues are now **fully resolved** (Issues 1, 4, 5).
+Four of the original seven issues are now **fully resolved** (Issues 1, 4, 5, 7).
 One issue is **improved** (Issue 3 — constants now co-located with their
-modules). Two issues remain **open** with clear implementation paths (Issues 2,
-7). One issue is **deferred** pending empirical data (Issue 6).
+modules). One issue remains **open** with a clear implementation path (Issue 2).
+One issue is **deferred** pending empirical data (Issue 6).
 
 Two new issues (8, 9) were identified during the deep audit — these are
 structural observations that became visible only after the modularization made
@@ -678,4 +680,3 @@ the codebase structure explicit.
 3. **Parameterize connection tuning** (Issue 3 remaining) — heartbeat_timeout,
    backoff rates. ~30 minutes, useful for pool testing.
 4. **Shared command vocabulary** (Issue 8) — extract when adding new commands.
-5. **TeleopCommand.msg** (Issue 7) — do with next interface version.

@@ -17,6 +17,7 @@ setup(
         'supervision',
         'opencv-python',
         'numpy',
+        'simple-pid',
     ],
     zip_safe=True,
     maintainer='BRACU Duburi',

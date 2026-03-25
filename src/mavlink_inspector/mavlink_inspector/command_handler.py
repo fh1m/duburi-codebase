@@ -13,7 +13,7 @@ from __future__ import annotations
 import math
 import time
 
-from duburi_interfaces.msg import DriverCommand
+from duburi_interfaces.msg import DriverCommand, TeleopCommand
 
 from .pid_controller import PidController
 from .rc_controller import (
@@ -27,14 +27,7 @@ from .movement_commands import MOVEMENTS, handle_go, handle_compound_move
 class CommandHandler:
     """Dispatches DriverCommand messages to handler methods."""
 
-    # Commands allowed when the vehicle is disarmed
-    UNARMED_ALLOWED = frozenset({
-        'arm', 'disarm', 'set_mode', 'stop', 'pid_depth_off',
-        'surface', 'just_surface', 'teleop_idle', 'calibrate_depth',
-        'lat_align', 'dep_align', 'align', 'align_forward',
-        'pid_lat_align', 'pid_dep_align', 'pid_align', 'pid_align_forward',
-        'vision_stop',
-    })
+    from duburi_common.constants import UNARMED_ALLOWED_INSPECTOR as UNARMED_ALLOWED
 
     # Commands handled by other nodes (vision alignment controller).
     # Inspector logs them but does not dispatch or reject.
@@ -456,3 +449,36 @@ class CommandHandler:
         n._publish_event('actuator', 'Grabber close')
         n._publish_feedback('close_grabber', 'accepted',
                             detail='grabber close')
+
+    # ── Teleop (dedicated TeleopCommand message) ─────────────────────
+
+    def handle_teleop(self, msg: TeleopCommand):
+        """Handle TeleopCommand from /driver/teleop topic."""
+        n = self._n
+        if not n._conn.connected or n._conn.master is None:
+            return
+
+        if msg.idle:
+            with n._movement_lock:
+                n._current_movement = None
+            return
+
+        max_offset = min(PWM_RANGE, abs(msg.speed) if msg.speed != 0 else 200)
+        clamp = lambda v: max(-max_offset, min(max_offset, int(v * max_offset)))
+        fwd = clamp(msg.linear_x)
+        lat = clamp(msg.linear_y)
+        thr = clamp(msg.linear_z)
+        yaw = clamp(msg.angular_z)
+
+        with n._movement_lock:
+            n._current_movement = {
+                'channels': {
+                    CH_FORWARD: NEUTRAL_PWM + fwd,
+                    CH_LATERAL: NEUTRAL_PWM + lat,
+                    CH_THROTTLE: NEUTRAL_PWM + thr,
+                    CH_YAW: NEUTRAL_PWM + yaw,
+                },
+                'end_time': float('inf'),
+                'bypass_ramp': True,
+                'command': 'teleop',
+            }

@@ -12,6 +12,7 @@ find_package(std_msgs REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/DriverCommand.msg"
   "msg/DriverCommandFeedback.msg"
+  "msg/TeleopCommand.msg"
   "msg/MavlinkEvent.msg"
   "msg/VehicleDiagnostics.msg"
   "msg/VehicleState.msg"

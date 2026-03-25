@@ -2,17 +2,7 @@
 Constants and help text for the Duburi AUV CLI runner.
 """
 
-from pathlib import Path
-
-
-# Mission file search paths
-MISSION_PATHS = [
-    Path.cwd() / 'missions',
-    Path(__file__).resolve().parent.parent / 'missions',
-    Path.home() / '.duburi' / 'missions',
-]
-
-HISTORY_FILE = Path.home() / '.duburi_history'
+from duburi_common.constants import HISTORY_FILE, MISSION_PATHS  # noqa: F401 — re-exported
 
 
 HELP_TEXT = """

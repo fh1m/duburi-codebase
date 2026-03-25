@@ -18,10 +18,10 @@ All inter-node communication uses custom messages in `duburi_interfaces`. This d
 |-------|------|-----------|-------|
 | `command` | string | Action to perform | See command list below |
 | `mode` | string | Flight mode name **or** heading (cruise) | `set_mode`: MANUAL/ALT_HOLD/STABILIZE. `cruise`/`just_cruise`: target heading in degrees (parsed back to float). |
-| `depth` | float32 | Target depth in meters | Positive = below surface. For `set_depth`, `p_dive`, `cruise`. Inspector negates for ArduSub (negative = below). **Teleop:** repurposed as throttle PWM offset. |
-| `angle` | float32 | Heading/bearing in degrees 0-360 | For `yaw_angle`, `yaw_to_heading`, `pid_yaw_to_heading`, `go_*` (target heading), `move_at`/`just_move_at` (body-frame bearing), `cruise`/`just_cruise` (thrust bearing). **Teleop:** repurposed as yaw PWM offset. |
-| `duration` | float32 | Seconds to sustain movement | 0 = indefinite. Used by move_*, yaw_left, yaw_right, go_*, cruise, etc. **Teleop:** repurposed as lateral PWM offset. |
-| `speed` | int32 | Gain or PWM offset | 0-100 = percent (inspector converts via `percent_to_pwm`). >100 = raw PWM. **Teleop:** repurposed as forward PWM offset. |
+| `depth` | float32 | Target depth in meters | Positive = below surface. For `set_depth`, `p_dive`, `cruise`. Inspector negates for ArduSub (negative = below). |
+| `angle` | float32 | Heading/bearing in degrees 0-360 | For `yaw_angle`, `yaw_to_heading`, `pid_yaw_to_heading`, `go_*` (target heading), `move_at`/`just_move_at` (body-frame bearing), `cruise`/`just_cruise` (thrust bearing). |
+| `duration` | float32 | Seconds to sustain movement | 0 = indefinite. Used by move_*, yaw_left, yaw_right, go_*, cruise, etc. |
+| `speed` | int32 | Gain or PWM offset | 0-100 = percent (inspector converts via `percent_to_pwm`). >100 = raw PWM. |
 | `status` | string | Optional metadata | Reserved for future use |
 
 ### Command Values
@@ -57,14 +57,14 @@ All inter-node communication uses custom messages in `duburi_interfaces`. This d
 
 **Surface:** `surface` — clears all movement/PID and commands ascent
 
-**Teleop:** `teleop` — direct multi-axis control (field overloading — see Issue 7 in 10_DESIGN_ISSUES.md)
+**Teleop:** Use the dedicated `/driver/teleop` topic with `TeleopCommand` (see below). The legacy `DriverCommand` command `teleop` / `just_teleop` remains only as a fallback in the inspector.
 
 **Instant (`just_*`) variants:**
 All movement commands accept a `just_` prefix for bypass-ramp (instant PWM) operation:
 `just_move_forward`, `just_move_back`, `just_move_left`, `just_move_right`,
 `just_move_up`, `just_move_down`, `just_move_at`, `just_move_forward_right`, etc.,
 `just_surface`, `just_go_forward`, `just_go_forward_right`, etc.,
-`just_cruise`, `just_teleop`
+`just_cruise`
 
 ### Design Rationale
 
@@ -72,6 +72,30 @@ All movement commands accept a `just_` prefix for bypass-ramp (instant PWM) oper
 - **speed as percent or PWM:** 0-100 maps to percent (user-friendly). Values >100 allow direct PWM for advanced use. Inspector branches on `0 < raw_speed <= 100`.
 - **duration 0 = indefinite:** Allows "move left" without timeout; user sends `stop` when done.
 - **`mode` field dual-use:** The `mode` string field carries either a flight mode name (for `set_mode`) or a heading value (for `cruise`). Since these commands are mutually exclusive, the overloading is unambiguous.
+
+---
+
+## TeleopCommand.msg
+
+**Purpose:** Dedicated message for joystick/gamepad teleop (multi-axis thruster control). Replaces the old pattern of publishing `DriverCommand` with `command='teleop'` and overloading `speed` / `duration` / `depth` / `angle` to carry PWM offsets (Design Issue 7 — **resolved**; see `10_DESIGN_ISSUES.md`).
+
+**Topic:** `/driver/teleop` (published by `teleop_driver`; subscribed by `mavlink_inspector`)
+
+### Fields
+
+| Field | Type | Semantics |
+|-------|------|-----------|
+| `linear_x` | float32 | Forward (+) / back (−) axis, typically normalized [−1.0, 1.0] |
+| `linear_y` | float32 | Right (+) / left (−) axis [−1.0, 1.0] |
+| `linear_z` | float32 | Up (+) / down (−) axis [−1.0, 1.0] |
+| `angular_z` | float32 | Yaw: CCW/left (+) / CW/right (−) [−1.0, 1.0] |
+| `speed` | int32 | Max PWM offset from neutral (e.g. default 200); scales axis magnitudes |
+| `idle` | bool | When true, joystick is centred — clear movement without a full `stop` command |
+
+### Design Rationale
+
+- **Unambiguous semantics:** Loggers and future subscribers see axis fields with one meaning; no special case for `command == 'teleop'`.
+- **Single teleop path:** `teleop_driver` publishes here; the inspector applies RC overrides from `TeleopCommand` directly.
 
 ---
 
@@ -167,7 +191,7 @@ All movement commands accept a `just_` prefix for bypass-ramp (instant PWM) oper
 ## Adding New Commands
 
 1. Add command string to `DriverCommand.msg` comments.
-2. Add handler in `inspector_node.py` `_on_driver_command`.
+2. Add handler in `command_handler.py` — register with the dispatch table used by `CommandHandler.handle`.
 3. Add helper in `driver_client.py` if used by mission nodes.
 4. Add parser branch in `runner.py` `_parse_one` if CLI support needed.
 5. Add parser branch in `mission_executor.py` `_parse_file_command` for mission file support.

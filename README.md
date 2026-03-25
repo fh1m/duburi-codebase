@@ -53,7 +53,7 @@ ROS 2 Humble workspace for the BRACU Duburi AUV 4.2. Controls the vehicle throug
 | `mavlink_runner` | 4 | ~920 | `runner` | Interactive `Duburi >` CLI with history, status dashboard, file-based missions |
 | `mavlink_logger` | 1 | ~230 | `logger` | Logs all ROS topics to session-based CSV/JSON files |
 | `vision` | 3 | ~500 | `detector_node`, `detector_standalone` | YOLOv8 object detection with GPU acceleration |
-| `vision_manager` | 4 | ~810 | `camera_node`, `camera_enum`, `camera_test`, `camera_calibrate` | Camera streaming, enumeration, testing, checkerboard calibration |
+| `vision_inspector` | 4 | ~810 | `camera_node`, `camera_enum`, `camera_test`, `camera_calibrate` | Camera streaming, enumeration, testing, checkerboard calibration |
 
 ### Inspector Module Breakdown
 
@@ -140,7 +140,7 @@ ros2 run mavlink_logger logger
 
 ```bash
 # Terminal 1: Camera streaming
-ros2 run vision_manager camera_node --ros-args -p device_id:=0
+ros2 run vision_inspector camera_node --ros-args -p device_id:=0
 
 # Terminal 2: YOLO detection (GPU)
 ros2 run vision detector_node --ros-args -p enable_display:=True
@@ -173,7 +173,7 @@ ros2 launch vision vision.launch.py enable_display:=True confidence:=0.4
 │                                                    │   │                                │
 │                 Pixhawk (/dev/ttyACM0)             │   │  USB Camera (/dev/videoN)      │
 │                         │                          │   │         │                      │
-│           mavlink_inspector (7 modules)            │   │   vision_manager               │
+│           mavlink_inspector (7 modules)            │   │   vision_inspector               │
 │           ┌─ connection_manager (serial I/O)       │   │   (camera_node)                │
 │           ├─ telemetry_parser (MAVLink → state)    │   │         │                      │
 │           ├─ command_handler (dispatch table)      │   │  /camera/image_raw             │
@@ -810,7 +810,7 @@ ros2 run vision detector_standalone --ros-args -p device_id:=0
 
 # Full ROS pipeline
 # Terminal 1: Camera streaming
-ros2 run vision_manager camera_node --ros-args -p device_id:=0
+ros2 run vision_inspector camera_node --ros-args -p device_id:=0
 
 # Terminal 2: YOLO detection (GPU by default)
 ros2 run vision detector_node --ros-args -p enable_display:=True
@@ -819,7 +819,7 @@ ros2 run vision detector_node --ros-args -p enable_display:=True
 ros2 topic echo /vision/detections
 ```
 
-### vision_manager – Camera Management
+### vision_inspector – Camera Management
 
 | Executable | Description |
 |------------|-------------|
@@ -841,17 +841,17 @@ ros2 topic echo /vision/detections
 
 ```bash
 # Enumerate cameras
-ros2 run vision_manager camera_enum
+ros2 run vision_inspector camera_enum
 
 # Test a specific camera
-ros2 run vision_manager camera_test --ros-args -p device_id:=1
+ros2 run vision_inspector camera_test --ros-args -p device_id:=1
 
 # Calibrate (9x6 checkerboard, 2.5cm squares)
-ros2 run vision_manager camera_calibrate --ros-args \
+ros2 run vision_inspector camera_calibrate --ros-args \
     -p board_width:=9 -p board_height:=6 -p square_size:=0.025
 
 # Launch camera node with calibration
-ros2 launch vision_manager camera.launch.py \
+ros2 launch vision_inspector camera.launch.py \
     device_id:=0 calibration_file:=calibration/calibration_video0_20260306.yaml
 ```
 
@@ -1071,7 +1071,7 @@ ros2 run mavlink_inspector inspector --ros-args \
 | **PID oscillation** | Lower `depth_kp` / `yaw_kp`. Pool-tuned defaults are conservative — start there |
 | **Depth drift** | Verify BAR30 is connected. Check `~depth` is active (not bare `depth` with ALT_HOLD) |
 | **Import errors after refactor** | Run `colcon build` (not just the changed package). Circular imports were fixed in commit 87dab7e |
-| **Camera not found** | Run `ros2 run vision_manager camera_enum` to list V4L2 devices. Try `device_id:=1` |
+| **Camera not found** | Run `ros2 run vision_inspector camera_enum` to list V4L2 devices. Try `device_id:=1` |
 | **YOLO slow / CPU-only** | Verify PyTorch CUDA: `python3 -c "import torch; print(torch.cuda.is_available())"` |
 
 ### Quick Diagnostics

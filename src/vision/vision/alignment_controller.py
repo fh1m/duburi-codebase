@@ -45,9 +45,10 @@ from duburi_interfaces.msg import (
     VehicleState,
 )
 
+from simple_pid import PID
+
 from . import config as C
 from .kalman_tracker import KalmanObjectTracker
-from .pid_controller import PIDController
 
 
 _BANNER = """
@@ -214,10 +215,15 @@ class AlignmentControllerNode(Node):
 
     def _build_controllers(self) -> None:
         lo, hi = -float(self._max_speed), float(self._max_speed)
-        df = self._pid_d_filter
-        self._pid_lat = PIDController(*self._pid_lat_gains, output_min=lo, output_max=hi, d_filter_coeff=df)
-        self._pid_vert = PIDController(*self._pid_vert_gains, output_min=lo, output_max=hi, d_filter_coeff=df)
-        self._pid_fwd = PIDController(*self._pid_fwd_gains, output_min=lo, output_max=hi, d_filter_coeff=df)
+        self._pid_lat = PID(
+            *self._pid_lat_gains, setpoint=C.FRAME_CENTER,
+            output_limits=(lo, hi), differential_on_measurement=True)
+        self._pid_vert = PID(
+            *self._pid_vert_gains, setpoint=C.FRAME_CENTER,
+            output_limits=(lo, hi), differential_on_measurement=True)
+        self._pid_fwd = PID(
+            *self._pid_fwd_gains, setpoint=self._target_area_ratio,
+            output_limits=(lo, hi), differential_on_measurement=True)
 
         dt = 1.0 / self._control_rate
         self._tracker = KalmanObjectTracker(
@@ -425,9 +431,11 @@ class AlignmentControllerNode(Node):
         effective_max = float(self._max_speed) * (self._active_gain / 100.0)
         use_pid = self._force_pid and not self._force_just
         if use_pid:
-            speed_lat = self._pid_lat.compute(error_x, cx, dt)
-            speed_vert = self._pid_vert.compute(error_y, cy, dt)
-            speed_fwd = self._pid_fwd.compute(error_area, area_ratio, dt)
+            # Negate: simple-pid computes (setpoint - input), but our convention
+            # is error = input - setpoint (positive = object right/below/close).
+            speed_lat = -self._pid_lat(cx, dt=dt)
+            speed_vert = -self._pid_vert(cy, dt=dt)
+            speed_fwd = -self._pid_fwd(area_ratio, dt=dt)
             # Clamp PID output to effective max
             speed_lat = max(-effective_max, min(speed_lat, effective_max))
             speed_vert = max(-effective_max, min(speed_vert, effective_max))

@@ -363,7 +363,7 @@ MOVEMENTS: dict[str, callable] = {
     'cruise':             cmd_cruise,
     'just_cruise':        cmd_just_cruise,
 
-    # ── Teleop ───────────────────────────────────────────────────
+    # ── Teleop (legacy DriverCommand fallback — prefer /driver/teleop topic)
     'teleop':             cmd_teleop,
 }
 

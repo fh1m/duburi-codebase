@@ -114,11 +114,7 @@ class DuburiRunnerNode(Node):
     def _publish(self, cmd: DriverCommand) -> bool:
         """Publish command. Returns True if sent, False if rejected (not armed)."""
         c = cmd.command.lower()
-        UNARMED_ALLOWED = {
-            'arm', 'disarm', 'set_mode', 'stop', 'pid_depth_off',
-            'surface', 'just_surface', 'calibrate_depth',
-            'vision_stop',  # stop alignment when disarmed
-        }
+        from duburi_common.constants import UNARMED_ALLOWED
         if not self._armed and c not in UNARMED_ALLOWED:
             print(f'  [WARNING] Vehicle not armed! Arm first.')
             return False

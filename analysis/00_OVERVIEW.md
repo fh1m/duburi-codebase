@@ -49,9 +49,9 @@ duburi_ws/
 │   ├── mavlink_inspector/     # Pixhawk connection, command execution, PID, ramp
 │   ├── mavlink_driver/        # driver_client, mission_executor, teleop_driver
 │   ├── mavlink_runner/        # Duburi > CLI
-│   ├── mavlink_logger/        # Logs to auv_logs/
+│   ├── mavlink_logger/        # Session logs under logs/
 │   ├── vision/                # Camera perception (gate detection, etc.)
-│   └── vision_manager/        # Vision pipeline manager
+│   └── vision_inspector/        # Vision pipeline manager
 ├── missions/                  # Mission .txt files (run gate, etc.)
 └── analysis/                  # This documentation
 ```

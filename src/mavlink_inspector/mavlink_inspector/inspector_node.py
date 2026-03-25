@@ -29,7 +29,7 @@ from pymavlink.quaternion import QuaternionBase
 
 from duburi_interfaces.msg import (
     DriverCommand, DriverCommandFeedback, MavlinkEvent,
-    VehicleDiagnostics, VehicleState,
+    TeleopCommand, VehicleDiagnostics, VehicleState,
 )
 
 from .connection_manager import ConnectionManager
@@ -145,10 +145,13 @@ class MavlinkInspectorNode(Node):
         self._feedback_pub = self.create_publisher(
             DriverCommandFeedback, '/driver/feedback', reliable_qos)
 
-        # ── Subscriber ───────────────────────────────────────────────
+        # ── Subscribers ──────────────────────────────────────────────
         self.create_subscription(
             DriverCommand, '/driver/command',
             self._cmd_handler.handle, reliable_qos)
+        self.create_subscription(
+            TeleopCommand, '/driver/teleop',
+            self._cmd_handler.handle_teleop, reliable_qos)
 
         # ── Timers ───────────────────────────────────────────────────
         self.create_timer(0.02, self._read_mavlink)       # 50 Hz

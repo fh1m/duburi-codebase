@@ -42,12 +42,7 @@ from mavlink_driver.driver_client import (
 from mavlink_driver.mission_parser import parse_file_command
 
 
-# Mission file search paths
-MISSION_PATHS = [
-    Path.cwd() / 'missions',
-    Path(__file__).resolve().parent.parent / 'missions',
-    Path.home() / '.duburi' / 'missions',
-]
+from duburi_common.constants import MISSION_PATHS
 
 
 class MissionExecutorNode(Node):

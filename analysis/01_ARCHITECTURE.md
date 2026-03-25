@@ -13,28 +13,33 @@
          ▼                            ▼                            ▼
   /driver/command              /mavlink/events            /mavlink/vehicle_state
   (DriverCommand)              (MavlinkEvent)              (VehicleState)
+  /driver/teleop
+  (TeleopCommand)
          │                            │                            │
     ┌────┴────┬───────────────┬──────┴──────┬───────────────┐     │
     ▼         ▼               ▼             ▼               ▼     ▼
   runner   mission_executor  teleop_driver  logger         ...   logger
-  (CLI)    (Python mission)   (/cmd_vel)    (events)              (state)
+  (CLI)    (Python mission)   (/cmd_vel →   (events)              (state)
+                                /driver/teleop)
 ```
 
 ## Package Roles
 
 | Package | Role | Key Files |
 |---------|------|-----------|
-| `duburi_interfaces` | Shared message definitions | `msg/DriverCommand.msg`, `MavlinkEvent.msg`, `VehicleState.msg` |
+| `duburi_interfaces` | Shared message definitions | `msg/DriverCommand.msg`, `TeleopCommand.msg`, `MavlinkEvent.msg`, `VehicleState.msg` |
+| `duburi_common` | Shared constants and command vocabulary | `command_vocabulary.py`, `constants.py` |
 | `mavlink_inspector` | Owns Pixhawk connection, executes commands, publishes state/events | `inspector_node.py` |
 | `mavlink_driver` | Helpers and alternative command sources | `driver_client.py`, `mission_executor.py`, `teleop_driver.py` |
 | `mavlink_runner` | Interactive CLI (`Duburi >`) | `runner.py` |
-| `mavlink_logger` | Logs events, state, commands to `auv_logs/` | `logger_node.py` |
+| `mavlink_logger` | Logs events, state, commands to `logs/` | `logger_node.py` |
 
 ## Topic Summary
 
 | Topic | Type | Publisher | Subscribers |
 |-------|------|-----------|-------------|
-| `/driver/command` | DriverCommand | runner, mission_executor, teleop_driver | inspector, logger |
+| `/driver/command` | DriverCommand | runner, mission_executor | inspector, logger |
+| `/driver/teleop` | TeleopCommand | teleop_driver | inspector |
 | `/mavlink/events` | MavlinkEvent | inspector | runner, logger |
 | `/mavlink/vehicle_state` | VehicleState | inspector | logger, status tools |
 | `/cmd_vel` | Twist | teleop/joystick nodes | teleop_driver |

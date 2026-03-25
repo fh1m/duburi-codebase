@@ -19,10 +19,10 @@ ros2 launch mavlink_inspector duburi_control.launch.py
 ros2 run mavlink_runner runner
 
 # Terminal 3 — Monitoring (pick what you need)
-ros2 topic echo /vehicle/state          # depth, yaw, armed, mode
-ros2 topic echo /vehicle/events         # movement events
+ros2 topic echo /mavlink/vehicle_state          # depth, yaw, armed, mode
+ros2 topic echo /mavlink/events         # movement events
 ros2 topic echo /driver/command         # command traffic
-ros2 topic echo /vehicle/diagnostics    # heading_rate, pressure
+ros2 topic echo /mavlink/diagnostics    # heading_rate, pressure
 ```
 
 ---
@@ -44,7 +44,7 @@ thrust for one tick) because the derivative term reacted to the setpoint jump.
    ```
 2. In the monitoring terminal, watch throttle channel:
    ```bash
-   ros2 topic echo /vehicle/events
+   ros2 topic echo /mavlink/events
    ```
 3. **While PID is active**, change the target:
    ```
@@ -218,7 +218,7 @@ ROS callback thread, delaying all other commands for 500ms.
    ros2 topic pub --once /driver/command duburi_interfaces/msg/DriverCommand \
      "{command: 'move_forward', speed: 50, duration: 3.0}"
    ```
-   Both events should appear within ~100ms of each other in `/vehicle/events`.
+   Both events should appear within ~100ms of each other in `/mavlink/events`.
 
 ---
 
@@ -238,7 +238,7 @@ different readings → PID oscillation.
 
 2. **Monitor yaw stability:**
    ```bash
-   ros2 topic echo /vehicle/state --field yaw
+   ros2 topic echo /mavlink/vehicle_state --field yaw
    ```
    With the Pixhawk on the desk, yaw should be stable (±0.1° jitter max).
 
@@ -369,16 +369,16 @@ disarm
 
 ```bash
 # Real-time state (depth, yaw, armed, mode)
-ros2 topic echo /vehicle/state
+ros2 topic echo /mavlink/vehicle_state
 
 # Movement events (PID output, command execution)
-ros2 topic echo /vehicle/events
+ros2 topic echo /mavlink/events
 
 # Raw commands entering inspector
 ros2 topic echo /driver/command
 
 # Diagnostics (heading_rate, voltage, pressure)
-ros2 topic echo /vehicle/diagnostics
+ros2 topic echo /mavlink/diagnostics
 
 # Check a parameter
 ros2 param get /mavlink_inspector depth_ki
@@ -388,6 +388,6 @@ ros2 param get /mavlink_inspector yaw_source
 ros2 param list /mavlink_inspector
 
 # Topic Hz (verify publish rates)
-ros2 topic hz /vehicle/state           # expect ~10 Hz
-ros2 topic hz /vehicle/diagnostics     # expect ~2 Hz
+ros2 topic hz /mavlink/vehicle_state           # expect ~10 Hz
+ros2 topic hz /mavlink/diagnostics     # expect ~2 Hz
 ```

@@ -13,7 +13,7 @@
 | mavlink_driver | 3 main | 998 | HIGH |
 | mavlink_logger | 1 main | 233 | LOW |
 | vision | 2 main | 489 | MEDIUM |
-| vision_manager | 4 main | 811 | MEDIUM |
+| vision_inspector | 4 main | 811 | MEDIUM |
 | **Total** | **11** | **3,400** | |
 
 ---
@@ -22,13 +22,13 @@
 
 These are safe, mechanical changes. No behavioral difference.
 
-### 1.1  Extract shared constants
+### 1.1  Extract shared constants — Not yet implemented
 - `DEFAULT_SPEED = 50` (used in ~40 signatures in driver_client.py, references in runner.py)
 - `MISSION_PATHS` dict (duplicated in runner.py L35-39 and mission_executor.py L75-79)
 - `_DIRECTION_MAP` (duplicated in runner.py L537-542 and L613-618)
 - Topic names (`/driver/command`, `/mavlink/events`, `/camera/image_raw`) scattered across files
 
-### 1.2  Hoist hardcoded wait times to named constants
+### 1.2  Hoist hardcoded wait times to named constants — Not yet implemented
 In runner.py:
 - `4.0` arm wait (L361), `2.0` disarm wait (L366)
 - `2.0` surface wait (L424), `1.0` depth wait (L413)
@@ -36,7 +36,7 @@ In runner.py:
 - `16.8`/`14.0` battery voltage bounds (L230)
 - `3.0` health timer interval (L161), `5.0` stale telemetry threshold (L204)
 
-### 1.3  Extract `resolve_aliases()` shared function
+### 1.3  Extract `resolve_aliases()` shared function — Not yet implemented
 The `dive→depth`, `p_dive→~depth`, `yaw→heading`, `p_yaw→~heading`, `p_turn→~turn`
 alias table is copied verbatim in:
 - runner.py L320-339
@@ -44,7 +44,7 @@ alias table is copied verbatim in:
 
 Extract to one function, import in both.
 
-### 1.4  Generate `just_*` variants programmatically in driver_client.py
+### 1.4  Generate `just_*` variants programmatically in driver_client.py — Not yet implemented
 ~25 one-liner `just_*` functions (L260-355) are mechanical copies of their base
 counterparts. Replace with:
 ```python
@@ -54,7 +54,7 @@ def _make_just(base_func, just_name):
 ```
 Eliminates ~100 lines of boilerplate.
 
-### 1.5  Extract `V4L2Camera` helper class
+### 1.5  Extract `V4L2Camera` helper class — Not yet implemented
 Camera open/configure/read logic is duplicated 4 times across 2 packages:
 - camera_node.py `_open_camera()` (L90-113)
 - camera_tester.py `run_test()` (L50-62)
@@ -63,17 +63,17 @@ Camera open/configure/read logic is duplicated 4 times across 2 packages:
 
 Extract to a shared class with `open()`, `read()`, `release()`, `actual_resolution`.
 
-### 1.6  Extract image conversion utilities
+### 1.6  Extract image conversion utilities — ✅ Done
 `_ros_image_to_cv2` and `_cv2_to_ros_image` exist in:
 - detector_node.py (L258-301)
 - camera_node.py (L139-152, inline)
 
 These are `cv_bridge` replacements. Move to a shared `image_utils.py`.
 
-### 1.7  Fix `_DZ` hardcode in teleop_driver.py
+### 1.7  Fix `_DZ` hardcode in teleop_driver.py — Not yet implemented
 Dead-zone `_DZ = 0.1` at L25 should be a ROS parameter.
 
-### 1.8  Fix `hasattr` control flow in detector_node.py
+### 1.8  Fix `hasattr` control flow in detector_node.py — ✅ Done
 `self._class_names_filter` (L91-97) — initialize explicitly in `__init__` as `None`,
 check with `is not None` instead of `hasattr()`.
 

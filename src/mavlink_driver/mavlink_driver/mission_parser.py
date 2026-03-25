@@ -8,6 +8,8 @@ aliases (dive→depth, p_dive→~depth, etc.).
 
 from duburi_interfaces.msg import DriverCommand
 
+from duburi_common.command_vocabulary import resolve_prefixes, HORIZONTAL_DIRS
+
 from mavlink_driver.driver_client import (
     arm,
     calibrate_depth,
@@ -69,35 +71,10 @@ def parse_file_command(current_heading: float, cmd: str,
       just go forward 90 5 60  → just_go_combo(...)
     """
     try:
-        # ── 'just' prefix: instant (no-ramp) fallback ───────────────
-        is_just = False
-        if cmd == 'just':
-            is_just = True
-            if not args:
-                return None
-            cmd = args[0]
-            args = args[1:]
-
-        # ── Resolve ~ prefix (PID) and backward-compatible aliases ──
-        is_pid = False
-        if cmd.startswith('~'):
-            is_pid = True
-            cmd = cmd[1:]
-        if cmd == 'dive':
-            cmd = 'depth'
-        elif cmd == 'p_dive':
-            cmd = 'depth'
-            is_pid = True
-        elif cmd == 'yaw':
-            cmd = 'heading'
-        elif cmd == 'p_yaw':
-            cmd = 'heading'
-            is_pid = True
-        elif cmd == 'p_turn':
-            cmd = 'turn'
-            is_pid = True
-        elif cmd in ('cal_depth', 'calibrate', 'cal'):
-            cmd = 'calibrate_depth'
+        # ── Resolve prefixes and aliases (shared with CLI parser) ────
+        cmd, args, is_just, is_pid = resolve_prefixes(cmd, args)
+        if is_just and not args and cmd == 'just':
+            return None
 
         if cmd == 'arm':
             return arm()
@@ -221,10 +198,8 @@ def parse_file_command(current_heading: float, cmd: str,
                 return just_cruise(bearing, heading_val, depth=depth_val, duration=dur, speed=spd)
             return cruise(bearing, heading_val, depth=depth_val, duration=dur, speed=spd)
         elif '-' in cmd:
-            # Compound diagonal: forward-right 5 50 (horizontal only)
-            VALID = {'forward', 'back', 'backward', 'left', 'right'}
             parts = cmd.split('-')
-            if len(parts) == 2 and all(p in VALID for p in parts):
+            if len(parts) == 2 and all(p in HORIZONTAL_DIRS for p in parts):
                 dur = float(args[0]) if args else 3.0
                 spd = int(args[1]) if len(args) > 1 else 50
                 if is_just:

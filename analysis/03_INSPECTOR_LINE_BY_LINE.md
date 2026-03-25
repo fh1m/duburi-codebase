@@ -1,5 +1,7 @@
 # mavlink_inspector – Line-by-Line Analysis
 
+> **Note (2026-03):** This document was written for the original monolithic `inspector_node.py`. The code has since been refactored into split modules: `inspector_node.py` (orchestrator), `connection_manager.py`, `telemetry_parser.py`, `rc_controller.py`, `pid_controller.py`, `command_handler.py`, and `movement_commands.py`. See `12_CODE_REFERENCE.md` for the current module layout. The concepts (RC override, PID, channel mapping) remain accurate.
+
 **File:** `src/mavlink_inspector/mavlink_inspector/inspector_node.py`
 
 This node owns the single MAVLink connection to the Pixhawk. All control flows through it.
