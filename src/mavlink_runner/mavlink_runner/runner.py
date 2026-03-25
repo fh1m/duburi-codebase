@@ -12,6 +12,7 @@ Usage examples:
 """
 
 import signal
+import subprocess
 import time
 import threading
 from pathlib import Path
@@ -64,6 +65,8 @@ class DuburiRunnerNode(Node):
         self._last_reject_print = 0.0
 
         self._health_timer = self.create_timer(3.0, self._check_inspector_health)
+
+        self._planner_proc: subprocess.Popen | None = None
 
     def _on_event(self, msg: MavlinkEvent):
         """Print arm/disarm and rejection events (non-blocking).
@@ -124,6 +127,109 @@ class DuburiRunnerNode(Node):
     def _parse_one(self, line: str) -> tuple[bool, float]:
         """Parse and execute one command. Returns (continue, wait_sec)."""
         return parse_command(self, line)
+
+    # ── Planner (YASMIN FSM) mission support ────────────────────────
+
+    PLANNER_MISSIONS = {
+        'demo':    ('duburi_planner', 'demo_node',    'Demo square (fwd + 90° turn × 4)'),
+        'mission': ('duburi_planner', 'mission_node', 'Full competition mission (gate → ...)'),
+    }
+
+    def _planner_list(self):
+        """Print available YASMIN planner missions."""
+        print('  Available planner missions:')
+        print()
+        for name, (pkg, exe, desc) in self.PLANNER_MISSIONS.items():
+            print(f'    {name:<12s} {desc}')
+        print()
+        print('  Usage:  planner <name>        Launch mission')
+        print('          planner stop          Stop running mission')
+        print('          planner viewer        Start YASMIN web viewer')
+        print()
+        active = self._planner_is_running()
+        if active:
+            print(f'  ● Planner is running (PID {self._planner_proc.pid})')
+        else:
+            print('  ○ No planner mission running')
+
+    def _planner_is_running(self) -> bool:
+        if self._planner_proc is None:
+            return False
+        ret = self._planner_proc.poll()
+        if ret is not None:
+            self._planner_proc = None
+            return False
+        return True
+
+    def _planner_launch(self, name: str):
+        """Launch a YASMIN planner mission as a subprocess."""
+        if self._planner_is_running():
+            print(f'  Planner already running (PID {self._planner_proc.pid}).')
+            print('  Stop it first: planner stop')
+            return
+
+        if name not in self.PLANNER_MISSIONS:
+            print(f'  Unknown planner mission: {name}')
+            print(f'  Available: {", ".join(self.PLANNER_MISSIONS)}')
+            return
+
+        pkg, exe, desc = self.PLANNER_MISSIONS[name]
+        print(f'  Launching: {desc}')
+        print(f'  (ros2 run {pkg} {exe})')
+        print(f'  YASMIN Viewer → http://localhost:5000/')
+        print()
+
+        try:
+            self._planner_proc = subprocess.Popen(
+                ['ros2', 'run', pkg, exe],
+                stdout=None, stderr=None,
+            )
+            time.sleep(0.5)
+            if self._planner_is_running():
+                print(f'  ● Started (PID {self._planner_proc.pid})')
+                print('  Use "planner stop" to end the mission.')
+            else:
+                rc = self._planner_proc.returncode
+                print(f'  ✗ Exited immediately (code {rc})')
+                self._planner_proc = None
+        except FileNotFoundError:
+            print('  ✗ Could not find ros2 command. Is ROS 2 sourced?')
+        except Exception as e:
+            print(f'  ✗ Launch failed: {e}')
+
+    def _planner_stop(self):
+        """Stop the running planner mission."""
+        if not self._planner_is_running():
+            print('  No planner mission running.')
+            return
+
+        pid = self._planner_proc.pid
+        print(f'  Stopping planner (PID {pid})...')
+        self._planner_proc.terminate()
+        try:
+            self._planner_proc.wait(timeout=5)
+            print('  ● Planner stopped.')
+        except subprocess.TimeoutExpired:
+            print('  Force-killing planner...')
+            self._planner_proc.kill()
+            self._planner_proc.wait()
+            print('  ● Planner killed.')
+        self._planner_proc = None
+
+    def _planner_viewer(self):
+        """Start the YASMIN viewer node as a background process."""
+        print('  Starting YASMIN viewer...')
+        try:
+            subprocess.Popen(
+                ['ros2', 'run', 'yasmin_viewer', 'yasmin_viewer_node'],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            time.sleep(1.0)
+            print('  ● YASMIN Viewer running → http://localhost:5000/')
+        except FileNotFoundError:
+            print('  ✗ Could not find ros2 command.')
+        except Exception as e:
+            print(f'  ✗ Failed: {e}')
 
     def _list_missions(self):
         """List available mission files."""
@@ -209,6 +315,22 @@ class DuburiRunnerNode(Node):
                             break
                     else:
                         print('Usage: run <mission_name>')
+                elif line == 'planner' or line == 'planner list':
+                    self._planner_list()
+                elif line.startswith('planner '):
+                    planner_args = line[8:].strip().split()
+                    pcmd = planner_args[0] if planner_args else ''
+                    if pcmd == 'stop':
+                        self._planner_stop()
+                    elif pcmd == 'viewer':
+                        self._planner_viewer()
+                    elif pcmd == 'list':
+                        self._planner_list()
+                    elif pcmd in self.PLANNER_MISSIONS:
+                        self._planner_launch(pcmd)
+                    else:
+                        print(f'  Unknown planner command: {pcmd}')
+                        print('  Usage: planner [list|demo|mission|stop|viewer]')
                 else:
                     if not self._execute_chain(line):
                         break
@@ -228,6 +350,8 @@ class DuburiRunnerNode(Node):
 
     def _safe_disarm(self):
         """Send stop + disarm directly, ignoring arm-check guard."""
+        if self._planner_is_running():
+            self._planner_stop()
         try:
             if not rclpy.ok():
                 return

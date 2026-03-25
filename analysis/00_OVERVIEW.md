@@ -44,14 +44,15 @@ This design draws from:
 ```
 duburi_ws/
 ├── src/
-│   ├── duburi_interfaces/     # Messages (DriverCommand, MavlinkEvent, VehicleState,
-│   │                          #   DriverCommandFeedback, VehicleDiagnostics, ...)
+│   ├── duburi_interfaces/     # Messages (DriverCommand, TeleopCommand, VehicleState,
+│   │                          #   AlignmentStatus, Detection, CameraStatus, ...)
+│   ├── duburi_common/         # Shared constants and command vocabulary
 │   ├── mavlink_inspector/     # Pixhawk connection, command execution, PID, ramp
 │   ├── mavlink_driver/        # driver_client, mission_executor, teleop_driver
 │   ├── mavlink_runner/        # Duburi > CLI
 │   ├── mavlink_logger/        # Session logs under logs/
-│   ├── vision/                # Camera perception (gate detection, etc.)
-│   └── vision_inspector/        # Vision pipeline manager
+│   ├── vision/                # YOLO11 detection, Kalman tracking, PID visual servo
+│   └── vision_inspector/      # Multi-camera management, calibration, recording
 ├── missions/                  # Mission .txt files (run gate, etc.)
-└── analysis/                  # This documentation
+└── analysis/                  # This documentation (17+ documents)
 ```

@@ -472,5 +472,21 @@ def parse_command(node, line: str) -> tuple[bool, float]:
         print('Vision alignment stopped.')
         return True, 0.0
 
+    # ── Planner commands (handled via subprocess, not DriverCommand) ──
+    if cmd == 'planner':
+        sub = args[0] if args else ''
+        if sub == 'stop':
+            node._planner_stop()
+        elif sub == 'viewer':
+            node._planner_viewer()
+        elif sub == 'list' or sub == '':
+            node._planner_list()
+        elif sub in node.PLANNER_MISSIONS:
+            node._planner_launch(sub)
+        else:
+            print(f'  Unknown planner command: {sub}')
+            print('  Usage: planner [list|demo|mission|stop|viewer]')
+        return True, 0.0
+
     print(f'Unknown command: {line}. Type "help" for commands.')
     return True, 0.0

@@ -1,0 +1,44 @@
+# ═══════════════════════════════════════════════════════════════════════
+# Duburi Planner — Pool-tunable configuration
+# Edit this file between runs; no rebuild needed.
+# ═══════════════════════════════════════════════════════════════════════
+
+mission_node:
+  ros__parameters:
+
+    # ── Global defaults ─────────────────────────────────────────────
+    default_speed: 50
+    dive_depth: 0.6             # metres below surface for mission start
+    surface_depth: 0.0
+
+    # ── Timing (seconds) — adjust at the pool ──────────────────────
+    arm_settle_time: 4.0        # wait after arming before first move
+    dive_settle_time: 3.0       # stabilization after reaching depth
+    feedback_timeout: 10.0      # how long to wait for DriverCommandFeedback
+    alignment_timeout: 15.0     # how long to wait for full visual alignment
+    search_timeout: 30.0        # max time spent searching before giving up
+    drive_through_time: 4.0     # seconds to drive forward through a gate/target
+
+    # ── Gate task (Task 1 — Begin Assessment) ──────────────────────
+    gate:
+      target_class: "gate"      # YOLO class name for gate detection
+      search_yaw_step: 30.0     # degrees to rotate per search sweep
+      search_speed: 40          # speed during search rotation
+      approach_speed: 50        # speed when driving through gate
+      drive_through_time: 5.0   # seconds to drive through after alignment
+      alignment_timeout: 20.0   # override for gate-specific alignment
+      search_timeout: 45.0      # override for gate-specific search
+
+    # ── Slalom task (Task 2 — Avoid Debris) — placeholder ─────────
+    slalom:
+      target_class: "pipe_red"
+      search_timeout: 30.0
+
+    # ── Bins task (Task 3 — Recon) — placeholder ──────────────────
+    bins:
+      target_class: "bin"
+      search_timeout: 30.0
+
+    # ── YASMIN viewer ──────────────────────────────────────────────
+    enable_viewer: true
+    viewer_name: "DUBURI_MISSION"

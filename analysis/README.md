@@ -19,16 +19,23 @@ This folder contains comprehensive documentation for the BRACU Duburi AUV 4.2 RO
 | `00_OVERVIEW.md` | Project context, philosophy, key constraints |
 | `01_ARCHITECTURE.md` | System architecture, packages, topics, data flow |
 | `02_DESIGN_DECISIONS.md` | Design choices and rationale |
-| `03_INSPECTOR_LINE_BY_LINE.md` | mavlink_inspector – every choice explained |
+| `03_INSPECTOR_LINE_BY_LINE.md` | mavlink_inspector – every choice explained (pre-refactor note) |
 | `04_RUNNER_LINE_BY_LINE.md` | mavlink_runner – CLI and mission execution |
 | `05_DRIVER_LINE_BY_LINE.md` | mavlink_driver – driver_client, mission_executor, teleop |
-| `06_INTERFACES.md` | duburi_interfaces – messages and fields |
+| `06_INTERFACES.md` | duburi_interfaces – messages and fields (incl. TeleopCommand) |
 | `07_ARDUSUB_CONSTRAINTS.md` | ArduSub requirements that shape the design |
 | `08_AGENT_GUIDE.md` | Quick reference for agents |
 | `09_KNOWN_ISSUES_AND_GOTCHAS.md` | Known issues, edge cases, and applied fixes |
-| `10_DESIGN_ISSUES.md` | 7 architectural concerns with severity/effort ratings |
+| `10_DESIGN_ISSUES.md` | Post-refactor architectural concerns with severity/effort ratings |
 | `11_DESK_TESTING_GUIDE.md` | Step-by-step desk testing procedures |
+| `11_REFACTORING_PLAN.md` | 3-phase refactoring plan (Phase 1 partially complete) |
+| `12_CODE_REFERENCE.md` | Post-refactor module map with line counts |
 | `12_COMMAND_REFERENCE.md` | Complete command reference with field encoding details |
+| `13_COMPETITIVE_ANALYSIS.md` | **Deep comparison vs Bumblebee (NUS) and Desert WAVE TDRs** |
+| `14_ISSUES_AND_RECOMMENDATIONS.md` | **Gap analysis, design critique, and phased roadmap** |
+| `15_MISSION_PLANNER_ANALYSIS.md` | **YASMIN (FSM) vs Behaviour Trees — deep comparison & verdict** |
+| `16_PLANNER_DOCUMENTATION.md` | **duburi_planner: Complete theory, implementation & usage guide** |
+| `VISION_PERFORMANCE_ANALYSIS.md` | Vision pipeline FPS optimisation (5→25 FPS on Orin Nano) |
 
 ## Key Invariants (Do Not Violate)
 

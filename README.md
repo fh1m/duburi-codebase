@@ -1,8 +1,8 @@
 # BRACU Duburi 4.2 — Control & Perception Software
 
-ROS 2 Humble workspace for the BRACU Duburi AUV 4.2. Controls the vehicle through a Pixhawk 2.4.8 running ArduSub via pymavlink. Perception via YOLOv8 object detection with CUDA-accelerated inference.
+ROS 2 Humble workspace for the BRACU Duburi AUV 4.2. Controls the vehicle through a Pixhawk 2.4.8 running ArduSub via pymavlink. Perception via YOLO11 object detection with CUDA-accelerated inference, Kalman-filtered tracking, and PID-based visual servoing.
 
-**33 Python source files · 7 packages · ~5 600 lines**
+**~40 Python source files · 8 packages · ~6 500 lines**
 
 ---
 
@@ -47,13 +47,14 @@ ROS 2 Humble workspace for the BRACU Duburi AUV 4.2. Controls the vehicle throug
 
 | Package | Modules | Lines | ROS Nodes | Description |
 |---------|---------|-------|-----------|-------------|
-| `duburi_interfaces` | — | — | — | Shared ROS 2 messages: `DriverCommand`, `VehicleState`, `VehicleDiagnostics`, `MavlinkEvent`, `DriverCommandFeedback`, `Detection`, `DetectionArray` |
+| `duburi_interfaces` | — | — | — | Shared ROS 2 messages: `DriverCommand`, `TeleopCommand`, `VehicleState`, `VehicleDiagnostics`, `MavlinkEvent`, `DriverCommandFeedback`, `Detection`, `DetectionArray`, `AlignmentStatus`, `CameraStatus` |
+| `duburi_common` | 2 | ~120 | — | Shared constants (`MISSION_PATHS`, `UNARMED_ALLOWED`) and command vocabulary (aliases, direction maps, prefix resolution) |
 | `mavlink_inspector` | 7 | ~2 250 | `inspector` | MAVLink ↔ ROS bridge. Owns serial port, RC override, PID controllers, command dispatch, telemetry publishing |
-| `mavlink_driver` | 5 | ~1 040 | `mission_executor`, `teleop_driver` | High-level command API (`driver_client.py`), mission file execution, joystick/teleop input |
+| `mavlink_driver` | 5 | ~1 040 | `mission_executor`, `teleop_driver` | High-level command API (`driver_client.py`), mission file execution, joystick/teleop via `TeleopCommand` |
 | `mavlink_runner` | 4 | ~920 | `runner` | Interactive `Duburi >` CLI with history, status dashboard, file-based missions |
 | `mavlink_logger` | 1 | ~230 | `logger` | Logs all ROS topics to session-based CSV/JSON files |
-| `vision` | 3 | ~500 | `detector_node`, `detector_standalone` | YOLOv8 object detection with GPU acceleration |
-| `vision_inspector` | 4 | ~810 | `camera_node`, `camera_enum`, `camera_test`, `camera_calibrate` | Camera streaming, enumeration, testing, checkerboard calibration |
+| `vision` | 5 | ~900 | `detector_node`, `detector_standalone`, `alignment_controller` | YOLO11 detection, Kalman-filtered tracking, PID-based visual servoing |
+| `vision_inspector` | 8 | ~810 | `camera_manager`, `camera_enum`, `camera_test`, `camera_calibrate`, `camera_record`, `camera_playback` | Multi-camera management, enumeration, testing, calibration, recording/playback |
 
 ### Inspector Module Breakdown
 
@@ -78,16 +79,16 @@ mavlink_driver/
 ├── mission_parser.py       (245 lines)  parse_file_command() for mission files
 ├── mission_executor.py     (318 lines)  Autonomous mission runner node
 ├── just_commands.py        (115 lines)  just_* instant (no-ramp) movement variants
-└── teleop_driver.py        (104 lines)  Twist → DriverCommand with dead-zone
+└── teleop_driver.py        (~70 lines)  Twist → TeleopCommand on /driver/teleop
 ```
 
 ### Runner Module Breakdown
 
 ```
 mavlink_runner/
-├── command_parser.py       (470 lines)  parse_command() full CLI parser
+├── command_parser.py       (~280 lines) parse_command() — uses duburi_common.command_vocabulary
 ├── runner.py               (268 lines)  Interactive REPL node with readline
-├── constants.py            (104 lines)  HELP_TEXT, MISSION_PATHS, HISTORY_FILE
+├── constants.py            (~50 lines)  HELP_TEXT, re-exports from duburi_common.constants
 └── status_display.py        (75 lines)  ANSI dashboard (battery, heading, servos)
 ```
 
@@ -112,7 +113,7 @@ pip install pymavlink ultralytics opencv-python
 
 ```bash
 cd /home/duburi/workspaces/duburi_ws
-colcon build            # builds all 7 packages (~5s clean)
+colcon build            # builds all 8 packages (~5s clean)
 source install/setup.bash
 ```
 
@@ -139,11 +140,14 @@ ros2 run mavlink_logger logger
 ### Quick Start — Perception
 
 ```bash
-# Terminal 1: Camera streaming
-ros2 run vision_inspector camera_node --ros-args -p device_id:=0
+# Terminal 1: Camera streaming (multi-camera manager)
+ros2 run vision_inspector camera_manager
 
 # Terminal 2: YOLO detection (GPU)
 ros2 run vision detector_node --ros-args -p enable_display:=True
+
+# Terminal 3 (optional): Visual servoing alignment
+ros2 run vision alignment_controller
 ```
 
 ### Launch files (multi-node)
@@ -169,33 +173,33 @@ ros2 launch vision vision.launch.py enable_display:=True confidence:=0.4
 ## Architecture
 
 ```
-┌──────────────────── CONTROLS ─────────────────────┐   ┌────────── PERCEPTION ──────────┐
-│                                                    │   │                                │
-│                 Pixhawk (/dev/ttyACM0)             │   │  USB Camera (/dev/videoN)      │
-│                         │                          │   │         │                      │
-│           mavlink_inspector (7 modules)            │   │   vision_inspector               │
-│           ┌─ connection_manager (serial I/O)       │   │   (camera_node)                │
-│           ├─ telemetry_parser (MAVLink → state)    │   │         │                      │
-│           ├─ command_handler (dispatch table)      │   │  /camera/image_raw             │
-│           ├─ movement_commands (MOVEMENTS registry)│   │  /camera/camera_info           │
-│           ├─ rc_controller (PWM ramp + channels)   │   │         │                      │
-│           ├─ pid_controller ×2 (depth + yaw)       │   │      vision                    │
-│           └─ inspector_node (orchestrator)          │   │   (detector_node)              │
-│                         │                          │   │         │                      │
-│       /mavlink/events   │   /mavlink/vehicle_state │   │  /vision/detections            │
-│                         │                          │   │  /vision/annotated_image       │
-│                /driver/command                     │   │                                │
-│                         │                          │   └────────────────────────────────┘
-│     +-------------------+-------------------+      │
-│     │                   │                   │      │       ┌──────────────────┐
-│  mavlink_runner   mission_executor    teleop_driver│       │ duburi_interfaces│
-│  (CLI, missions)  (autonomous)       (/cmd_vel)    │       │ (shared messages)│
+┌──────────────────── CONTROLS ─────────────────────┐   ┌──────────── PERCEPTION ─────────────┐
+│                                                    │   │                                     │
+│                 Pixhawk (/dev/ttyACM0)             │   │  USB Camera(s) (/dev/videoN)        │
+│                         │                          │   │         │                           │
+│           mavlink_inspector (7 modules)            │   │   vision_inspector                  │
+│           ┌─ connection_manager (serial I/O)       │   │   (camera_manager — multi-cam)      │
+│           ├─ telemetry_parser (MAVLink → state)    │   │         │                           │
+│           ├─ command_handler (dispatch table)      │   │  /camera/<name>/image_raw           │
+│           ├─ movement_commands (MOVEMENTS registry)│   │         │                           │
+│           ├─ rc_controller (PWM ramp + channels)   │   │      vision                        │
+│           ├─ pid_controller ×2 (depth + yaw)       │   │   detector_node → /vision/detections│
+│           └─ inspector_node (orchestrator)          │   │         │                           │
+│                         │                          │   │   alignment_controller              │
+│       /mavlink/events   │   /mavlink/vehicle_state │   │   (PID visual servo → DriverCommand)│
+│                         │                          │   │         │                           │
+│                /driver/command                     │   └─────────┼───────────────────────────┘
+│                /driver/teleop (TeleopCommand)      │             │
+│                         │                          │       ┌─────┴────────────┐
+│     +-------------------+-------------------+      │       │ duburi_interfaces │
+│     │                   │                   │      │       │ duburi_common     │
+│  mavlink_runner   mission_executor    teleop_driver│       │ (shared msgs +   │
+│  (CLI, missions)  (autonomous)       (/cmd_vel)    │       │  vocab/constants) │
 │     │                   │                   │      │       └──────────────────┘
 │     +-------------------+-------------------+      │
 │                         │                          │
 │                 mavlink_logger → logs/              │
 └────────────────────────────────────────────────────┘
-          Both sides share duburi_interfaces
 ```
 
 ### Data Flow Summary
@@ -744,7 +748,7 @@ Use `missions/*.txt` files as mission descriptions even when not using the runne
 ### Option 5: Teleop via /cmd_vel
 
 Use `teleop_driver` to drive the AUV with Twist messages (e.g., from a joystick or nav stack).
-All 4 axes (forward/lateral/vertical/yaw) are combined into a **single `teleop` command** per tick — no per-axis stomping. When the joystick returns to centre, a single `teleop_idle` is sent that clears movement without disrupting active depth PID or heading hold.
+The driver converts `Twist` to a dedicated `TeleopCommand` message on `/driver/teleop`, with clean axis semantics (`linear_x/y/z`, `angular_z`). When the joystick returns to centre, `idle=true` clears movement without disrupting active depth PID or heading hold.
 
 ```bash
 ros2 run mavlink_driver teleop_driver
@@ -755,7 +759,7 @@ ros2 topic pub /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.5, y: 0.0, z: 0.
 ros2 topic pub /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.5, y: 0.5, z: 0.3}, angular: {x: 0.0, y: 0.0, z: 0.3}}"
 ```
 
-The `teleop` command encodes PWM offsets in DriverCommand fields: `speed`=forward, `duration`=lateral, `depth`=throttle, `angle`=yaw. The inspector decodes all 4 and sets channels in one `_current_movement`.
+The inspector subscribes to `/driver/teleop` and applies RC overrides directly from `TeleopCommand` fields — no field overloading needed.
 
 ---
 
@@ -823,12 +827,14 @@ ros2 topic echo /vision/detections
 
 | Executable | Description |
 |------------|-------------|
-| `camera_node` | Streams camera → `/camera/image_raw` + `/camera/camera_info` |
+| `camera_manager` | Multi-camera orchestration → `/camera/<name>/image_raw` per camera |
 | `camera_enum` | Lists all V4L2 cameras (one-shot, prints table) |
 | `camera_test` | Interactive preview with FPS overlay, snapshots (`s`), info (`i`) |
 | `camera_calibrate` | Checkerboard calibration → YAML file (ROS CameraInfo compatible) |
+| `camera_record` | Record camera frames to disk |
+| `camera_playback` | Replay recorded frames as ROS topics |
 
-**camera_node parameters:**
+**camera_manager parameters:**
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
@@ -866,10 +872,10 @@ ros2 launch vision_inspector camera.launch.py \
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `model` | `yolov8n.pt` | YOLO model file |
+| `model` | `yolo11n.pt` | YOLO model file |
 | `confidence` | `0.5` | Detection confidence threshold |
-| `device` | `cuda:0` | Inference device (`cpu` or `cuda:0`) |
-| `image_topic` | `/camera/image_raw` | Input image topic |
+| `device` | `auto` | Inference device (`auto`, `cpu`, or `cuda:0`) |
+| `image_topic` | `/camera/forward/image_raw` | Input image topic |
 | `enable_display` | `False` | Show OpenCV preview window |
 | `publish_annotated` | `True` | Publish annotated image with bounding boxes |
 | `max_det` | `50` | Max detections per frame |
@@ -893,6 +899,25 @@ ros2 run vision detector_node --ros-args -p device:=cpu
 # Via launch file
 ros2 launch vision vision.launch.py enable_display:=True confidence:=0.4
 ```
+
+### vision – Alignment Controller (Visual Servoing)
+
+The `alignment_controller` subscribes to `/vision/detections` and `/mavlink/vehicle_state`, runs PID loops (lateral, vertical, forward) to center the AUV on a detected target, and publishes `DriverCommand` to `/driver/command`. Uses `simple-pid` library with Kalman-filtered measurements.
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `target_class` | `person` | YOLO class to track |
+| `pid_lat_kp/ki/kd` | `300/5/60` | Lateral PID gains |
+| `pid_vert_kp/ki/kd` | `300/5/60` | Vertical PID gains |
+| `pid_fwd_kp/ki/kd` | `250/3/50` | Forward PID gains |
+| `max_speed` | `200` | Max PWM offset from neutral |
+| `control_rate` | `10.0` | Control loop frequency (Hz) |
+| `lost_timeout` | `2.0` | Seconds without detection before stop |
+
+**Activation:** Send alignment commands via runner or `DriverCommand`:
+- `lat_align` / `dep_align` / `align` / `align_forward` — proportional fallback
+- `pid_lat_align` / `pid_dep_align` / `pid_align` / `pid_align_forward` — PID-controlled
+- `vision_stop` — stop alignment
 
 ### Detection Message Format
 
@@ -919,11 +944,14 @@ ros2 launch vision vision.launch.py enable_display:=True confidence:=0.4
 ### Vision Data Flow
 
 ```
- USB Camera ──► camera_node ──► detector_node ──► /vision/detections
- /dev/video0    (V4L2+OpenCV)    (YOLO GPU)        (DetectionArray)
-                    │                │
-             /camera/image_raw   /vision/annotated_image
-             (sensor_msgs/Image) (with bounding boxes)
+ USB Camera(s) ──► camera_manager ──► detector_node ──► /vision/detections
+ /dev/videoN       (multi-cam)        (YOLO11 GPU)       (DetectionArray)
+                       │                   │                    │
+              /camera/<name>/image_raw   /vision/annotated   alignment_controller
+              (sensor_msgs/Image)        (annotated frames)  (PID visual servo)
+                                                                    │
+                                                           /driver/command
+                                                           (DriverCommand)
 ```
 
 Normalized center coordinates (`center_x`, `center_y`) are designed for easy future MAVLink integration:
@@ -945,11 +973,12 @@ Normalized center coordinates (`center_x`, `center_y`) are designed for easy fut
 | `/mavlink/events` | `MavlinkEvent` | Inspector → | Arm/disarm, mode, movement events |
 | `/mavlink/vehicle_state` | `VehicleState` | Inspector → | Armed, mode, depth, yaw, voltage (10 Hz) |
 | `/mavlink/diagnostics` | `VehicleDiagnostics` | Inspector → | Heading rate, pressure, servos, RC, CPU (2 Hz) |
-| `/cmd_vel` | `Twist` | → teleop_driver | Teleop input (when using teleop_driver) |
-| `/camera/image_raw` | `Image` | camera_node → | Raw camera frames (bgr8, 30 Hz) |
-| `/camera/camera_info` | `CameraInfo` | camera_node → | Camera intrinsics / calibration |
+| `/driver/teleop` | `TeleopCommand` | teleop_driver → | Normalized joystick axes (dedicated teleop path) |
+| `/cmd_vel` | `Twist` | joystick/nav → | Teleop input (converted to TeleopCommand by teleop_driver) |
+| `/camera/<name>/image_raw` | `Image` | camera_manager → | Raw camera frames (bgr8, per camera) |
 | `/vision/detections` | `DetectionArray` | detector_node → | YOLO detections per frame |
 | `/vision/annotated_image` | `Image` | detector_node → | Frames with bounding boxes drawn |
+| `/vision/alignment_status` | `AlignmentStatus` | alignment_controller → | Visual servo state + PID errors |
 
 **DriverCommand fields:**
 
@@ -1001,8 +1030,8 @@ Normalized center coordinates (`center_x`, `center_y`) are designed for easy fut
 | `stop` | Control | Stop all movement + clear all PIDs |
 | `open_grabber` | Actuator | Open grabber servo |
 | `close_grabber` | Actuator | Close grabber servo |
-| `teleop` | Teleop | All 4 axes in one command (used by teleop_driver) |
-| `teleop_idle` | Teleop | Clear movement without nuking PIDs (used by teleop_driver) |
+| `teleop` | Teleop | Legacy: 4 axes via DriverCommand (prefer TeleopCommand on `/driver/teleop`) |
+| `teleop_idle` | Teleop | Legacy: clear movement (prefer `TeleopCommand.idle=true`) |
 | `just_*` | Instant | Any movement command with `just_` prefix bypasses PWM ramp |
 
 ---
@@ -1099,14 +1128,14 @@ dmesg | tail -20   # check USB connect/disconnect
 
 ## Analysis & Documentation
 
-The `analysis/` folder contains 15 detailed technical documents:
+The `analysis/` folder contains 17+ detailed technical documents:
 
 | Document | Description |
 |----------|-------------|
 | `00_OVERVIEW.md` | High-level system overview |
 | `01_ARCHITECTURE.md` | Detailed architecture and data flow |
 | `02_DESIGN_DECISIONS.md` | Rationale for key design choices (12 decisions) |
-| `03_INSPECTOR_LINE_BY_LINE.md` | Inspector node code walkthrough (pre-refactor) |
+| `03_INSPECTOR_LINE_BY_LINE.md` | Inspector node code walkthrough (pre-refactor note) |
 | `04_RUNNER_LINE_BY_LINE.md` | Runner CLI code walkthrough |
 | `05_DRIVER_LINE_BY_LINE.md` | Driver client library walkthrough |
 | `06_INTERFACES.md` | Message definitions and field semantics |
@@ -1115,9 +1144,12 @@ The `analysis/` folder contains 15 detailed technical documents:
 | `09_KNOWN_ISSUES_AND_GOTCHAS.md` | Known issues, edge cases, and fixes (21 entries) |
 | `10_DESIGN_ISSUES.md` | Post-refactor architectural analysis — 9 issues with severity/effort ratings |
 | `11_DESK_TESTING_GUIDE.md` | Step-by-step desk testing procedures |
-| `11_REFACTORING_PLAN.md` | 3-phase all-package refactoring plan |
-| `12_CODE_REFERENCE.md` | **Post-refactor module map** — all 33 files, 7 packages, with line counts and descriptions |
+| `11_REFACTORING_PLAN.md` | 3-phase all-package refactoring plan (Phase 1 partially done) |
+| `12_CODE_REFERENCE.md` | Post-refactor module map — all packages, with line counts and descriptions |
 | `12_COMMAND_REFERENCE.md` | Complete command reference with examples and field encoding |
+| `13_COMPETITIVE_ANALYSIS.md` | **Deep-dive comparison** against Bumblebee (NUS) and Desert WAVE TDRs |
+| `14_ISSUES_AND_RECOMMENDATIONS.md` | **Gap analysis**, design critique, and next-step roadmap |
+| `VISION_PERFORMANCE_ANALYSIS.md` | Vision pipeline FPS optimization (5→25 FPS) |
 
 ---
 
@@ -1131,6 +1163,8 @@ The `analysis/` folder contains 15 detailed technical documents:
 ### Perception
 - **OpenCV:** `pip install opencv-python` or `sudo apt install python3-opencv`
 - **Ultralytics YOLO:** `pip install ultralytics`
+- **Supervision:** `pip install supervision` (annotation library)
+- **simple-pid:** `pip install simple-pid` (visual servo PID controllers)
 - **PyTorch with CUDA 12.8:** Required for GPU inference (auto-detected by ultralytics)
 - **v4l-utils (optional):** `sudo apt install v4l-utils` — for `camera_enum` detailed device info
 
@@ -1141,7 +1175,7 @@ The `analysis/` folder contains 15 detailed technical documents:
 pip install pymavlink
 
 # Perception (GPU)
-pip install opencv-python ultralytics
+pip install opencv-python ultralytics supervision simple-pid
 # Verify CUDA
 python3 -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, Device: {torch.cuda.get_device_name(0)}')"
 ```

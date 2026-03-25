@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>duburi_planner</name>
+  <version>1.0.0</version>
+  <description>YASMIN FSM mission planner for BRACU Duburi AUV — RoboSub 2026</description>
+  <maintainer email="duburi@bracu.edu.bd">BRACU Duburi</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_python</buildtool_depend>
+
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>duburi_interfaces</exec_depend>
+  <exec_depend>duburi_common</exec_depend>
+  <exec_depend>yasmin</exec_depend>
+  <exec_depend>yasmin_ros</exec_depend>
+  <exec_depend>yasmin_viewer</exec_depend>
+
+  <export>
+    <build_type>ament_python</build_type>
+  </export>
+</package>

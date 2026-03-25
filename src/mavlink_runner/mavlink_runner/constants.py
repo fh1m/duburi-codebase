@@ -72,6 +72,13 @@ Chained commands & Missions:
   run <mission>        Run mission file from missions/<mission>
   list missions        List available mission files
 
+Planner (YASMIN FSM missions):
+  planner              List available planner missions & status
+  planner demo         Launch demo square (fwd + 90° turn × 4)
+  planner mission      Launch full competition mission
+  planner stop         Stop running planner mission
+  planner viewer       Start YASMIN web viewer (http://localhost:5000/)
+
 Backward-compatible aliases:
   dive = depth  |  p_dive = ~depth  |  yaw = heading
   p_yaw = ~heading  |  p_turn = ~turn
