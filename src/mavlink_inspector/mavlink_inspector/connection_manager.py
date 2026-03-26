@@ -1,7 +1,8 @@
-"""Connection manager for the MAVLink serial link to Pixhawk.
+"""Connection manager for the MAVLink link to Pixhawk or SITL.
 
 Handles:
-- Serial port detection (configured + fallback scanning)
+- Serial port detection (configured + fallback scanning) for USB Pixhawk
+- Direct TCP/UDP URLs for ArduPilot SITL (e.g. ``tcp:127.0.0.1:5760``)
 - Connection with exponential backoff on failure
 - GCS heartbeat sending and health monitoring
 - Heartbeat loss detection and automatic reconnection
@@ -19,8 +20,24 @@ os.environ['MAVLINK20'] = '1'
 from pymavlink import mavutil
 
 
+def _is_network_mavlink_url(port: str) -> bool:
+    """True if *port* is a pymavlink network-style connection string (SITL, UDP relay)."""
+    p = port.strip().lower()
+    return p.startswith(
+        (
+            'tcp:',
+            'tcpin:',
+            'tcpout:',
+            'udp:',
+            'udpin:',
+            'udpout:',
+            'udpbcast:',
+        ),
+    )
+
+
 class ConnectionManager:
-    """Manages the MAVLink serial connection to Pixhawk."""
+    """Manages the MAVLink connection to Pixhawk (serial) or SITL (tcp/udp)."""
 
     def __init__(
         self,
@@ -104,7 +121,9 @@ class ConnectionManager:
             self._master = None
 
     def _find_port(self) -> str | None:
-        """Find Pixhawk serial port.  Tries configured port, then fallbacks."""
+        """Resolve connection endpoint: SITL (tcp/udp) or USB serial device."""
+        if _is_network_mavlink_url(self._port):
+            return self._port
         if Path(self._port).exists():
             return self._port
         for port in self._fallback_ports:
@@ -130,7 +149,8 @@ class ConnectionManager:
                 )
 
             if self._logger:
-                self._logger.info(f'Connecting to Pixhawk at {port}...')
+                label = 'SITL/network' if _is_network_mavlink_url(port) else 'Pixhawk'
+                self._logger.info(f'Connecting to {label} at {port}...')
             self._master = mavutil.mavlink_connection(port, self._baud)
             self._master.wait_heartbeat(timeout=10)
 

@@ -11,6 +11,8 @@
 mavlink_inspector:
   ros__parameters:
     # ── Connection ─────────────────────────────────────────────────
+    # SITL example: sim_vehicle --out=udp:127.0.0.1:5760 → use udpin:127.0.0.1:5760
+    # (not tcp:127.0.0.1:5760; that is a different socket and often stays idle.)
     connection_port: "/dev/ttyACM0"
     baud: 115200
 

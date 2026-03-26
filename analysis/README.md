@@ -36,6 +36,7 @@ This folder contains comprehensive documentation for the BRACU Duburi AUV 4.2 RO
 | `15_MISSION_PLANNER_ANALYSIS.md` | **YASMIN (FSM) vs Behaviour Trees — deep comparison & verdict** |
 | `16_PLANNER_DOCUMENTATION.md` | **duburi_planner: Complete theory, implementation & usage guide** |
 | `VISION_PERFORMANCE_ANALYSIS.md` | Vision pipeline FPS optimisation (5→25 FPS on Orin Nano) |
+| `17_SIMULATION_GAZEBO_ARUDSUB_SITL.md` | **SITL stack:** Gazebo Harmonic + ArduSub + Duburi, ports/UDP, tuning roadmap, GPU tiers (2060/3080), optional simulators |
 
 ## Key Invariants (Do Not Violate)
 

@@ -17,12 +17,13 @@ ROS 2 Humble workspace for the BRACU Duburi AUV 4.2. Controls the vehicle throug
 7. [Planning Missions Without the Runner](#planning-missions-without-the-runner)
 8. [Logging](#logging)
 9. [Vision & Perception](#vision--perception)
-10. [Topics & Messages](#topics--messages)
-11. [Inspector Parameters](#inspector-parameters)
-12. [Troubleshooting](#troubleshooting)
-13. [Analysis & Documentation](#analysis--documentation)
-14. [Dependencies](#dependencies)
-15. [License](#license)
+10. [Simulation: Gazebo and ArduSub SITL](#simulation-gazebo-and-ardusub-sitl)
+11. [Topics & Messages](#topics--messages)
+12. [Inspector Parameters](#inspector-parameters)
+13. [Troubleshooting](#troubleshooting)
+14. [Analysis & Documentation](#analysis--documentation)
+15. [Dependencies](#dependencies)
+16. [License](#license)
 
 ---
 
@@ -167,6 +168,109 @@ ros2 launch mavlink_inspector duburi_control.launch.py \
 # Camera + detector together
 ros2 launch vision vision.launch.py enable_display:=True confidence:=0.4
 ```
+
+---
+
+## Simulation: Gazebo and ArduSub SITL
+
+Software-in-the-loop stack used for autonomous testing **without the pool**: **Gazebo Harmonic (gz sim 8)** ↔ **ArduPilot ArduSub JSON** ↔ **`mavlink_inspector`** over **UDP** (same ROS 2 graph as hardware).
+
+**Deep dive (architecture, ports, GPU lab planning, optional simulators):**  
+[analysis/17_SIMULATION_GAZEBO_ARUDSUB_SITL.md](analysis/17_SIMULATION_GAZEBO_ARUDSUB_SITL.md)
+
+### What you need on a fresh machine
+
+| Layer | Requirement |
+|--------|-------------|
+| OS | **Ubuntu 22.04** (Jammy) |
+| ROS 2 | **Humble** — `sudo apt install ros-humble-desktop` (or your metapackage) |
+| Gazebo | **Gazebo Harmonic** — `gz sim` reports **8.x**; metapackage `gz-harmonic` |
+| ROS ↔ Gazebo | **`ros-humble-ros-gzharmonic-bridge`** (and related `ros-humble-ros-gzharmonic*` as needed) |
+| ArduPilot | Clone [ArduPilot/ardupilot](https://github.com/ArduPilot/ardupilot), run `Tools/environment_install/install-prereqs-ubuntu.sh`, build SITL (`./waf configure --board sitl` then `./waf sub`) |
+| Gazebo world + BlueROV model | A world such as **`bluerov2_underwater.world`** from **ArduPilot Gazebo** (e.g. [ArduPilot/ardupilot_gazebo](https://github.com/ArduPilot/ardupilot_gazebo)) or your team fork. Resource paths must resolve so `gz sim` finds the world and models (`GZ_SIM_RESOURCE_PATH` / `GZ_SIM_SYSTEM_PLUGIN_PATH` per upstream docs). |
+| Duburi workspace | This repo built with `colcon build`, `source install/setup.bash` (or `.zsh`) |
+| Python | **`pymavlink`** (`pip install pymavlink`) — used by `mavlink_inspector` |
+
+Verify versions:
+
+```bash
+source /opt/ros/humble/setup.bash
+ros2 doctor --report | head -5
+gz sim --version
+dpkg -l | grep -E 'ros-humble-ros-gzharmonic|gz-sim8-cli' | head -5
+```
+
+### Port and transport rule (important)
+
+`sim_vehicle.py` **`--out=udp:HOST:PORT`** sends MAVLink **UDP datagrams** to that address. The inspector must **listen on UDP** with the same host/port:
+
+```bash
+-p connection_port:=udpin:127.0.0.1:5760
+```
+
+Using **`tcp:127.0.0.1:5760`** connects to **TCP** port 5760 (SITL’s primary MAVLink TCP listener). That is **not** the same socket as the UDP `--out` stream; you may see connect + sparse heartbeats then **heartbeat loss**. Always pair **`--out=udp:…`** with **`connection_port:=udpin:…`** (same host and port).
+
+### Bring-up order (working sequence)
+
+Run in **separate terminals**. Order matters: **Gazebo first** (JSON plugin), then **SITL**, then **bridge**, then **Duburi**.
+
+**1 — Gazebo (from a directory / env where the world resolves)**
+
+```bash
+source /opt/ros/humble/setup.bash
+gz sim -r bluerov2_underwater.world
+```
+
+`-r` runs the simulation (unpaused). Use **`gz sim`**, not legacy `ign gazebo`, so the generation matches **Harmonic**.
+
+**2 — ArduSub SITL + MAVProxy UDP output**
+
+From your ArduPilot tree (after `. ~/.profile` or equivalent so `sim_vehicle.py` is on `PATH`):
+
+```bash
+cd /path/to/ardupilot
+sim_vehicle.py -v ArduSub -f vectored --model JSON \
+  --out=udp:127.0.0.1:5760 --console
+```
+
+Adjust **`-f vectored`** / frame if your Gazebo model expects another SITL frame (some stacks use **`vectored_6dof`**). Keep **`--out`** port aligned with **`udpin`** below.
+
+**3 — ROS 2 ↔ Gazebo bridge (camera + clock example)**
+
+```bash
+source /opt/ros/humble/setup.bash
+ros2 run ros_gz_bridge parameter_bridge \
+  /camera@sensor_msgs/msg/Image@gz.msgs.Image \
+  /clock@rosgraph_msgs/msg/Clock@gz.msgs.Clock
+```
+
+Topic names must match **your** world’s sensor topics; adjust if your SDF uses different gz topic names.
+
+**4 — Duburi workspace + mavlink_inspector (UDP in)**
+
+```bash
+cd /path/to/Duburi_ws
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+ros2 run mavlink_inspector inspector --ros-args \
+  -p connection_port:=udpin:127.0.0.1:5760
+```
+
+**5 — Optional: runner, logger, vision**
+
+```bash
+ros2 run mavlink_runner runner
+# ros2 run mavlink_logger logger
+# vision stack as in [Quick Start — Perception](#quick-start--perception)
+```
+
+### One-line checklist
+
+1. `gz sim -r <world>`  
+2. `sim_vehicle.py … --model JSON --out=udp:127.0.0.1:<PORT> --console`  
+3. `ros2 run ros_gz_bridge parameter_bridge …`  
+4. `ros2 run mavlink_inspector inspector --ros-args -p connection_port:=udpin:127.0.0.1:<PORT>`  
+5. Same `<PORT>` everywhere.
 
 ---
 
@@ -1102,6 +1206,9 @@ ros2 run mavlink_inspector inspector --ros-args \
 | **Import errors after refactor** | Run `colcon build` (not just the changed package). Circular imports were fixed in commit 87dab7e |
 | **Camera not found** | Run `ros2 run vision_inspector camera_enum` to list V4L2 devices. Try `device_id:=1` |
 | **YOLO slow / CPU-only** | Verify PyTorch CUDA: `python3 -c "import torch; print(torch.cuda.is_available())"` |
+| **SITL: heartbeat lost after connect** | If using `--out=udp:…`, use **`udpin:HOST:PORT`** on the inspector, not **`tcp:`**. TCP and UDP do not share the same socket even on the same port number. |
+| **No MAVLink on UDP** | Start **MAVProxy/SITL** before or after inspector, but ensure nothing else bound the same **UDP** port; only one listener on `udpin` per port. |
+| **Gazebo / SITL desync** | Run **gz sim** before **sim_vehicle**; unpause the world (`-r`); bridge **`/clock`** if nodes must use sim time. |
 
 ### Quick Diagnostics
 
@@ -1128,7 +1235,7 @@ dmesg | tail -20   # check USB connect/disconnect
 
 ## Analysis & Documentation
 
-The `analysis/` folder contains 17+ detailed technical documents:
+The `analysis/` folder contains detailed technical documents:
 
 | Document | Description |
 |----------|-------------|
@@ -1150,6 +1257,7 @@ The `analysis/` folder contains 17+ detailed technical documents:
 | `13_COMPETITIVE_ANALYSIS.md` | **Deep-dive comparison** against Bumblebee (NUS) and Desert WAVE TDRs |
 | `14_ISSUES_AND_RECOMMENDATIONS.md` | **Gap analysis**, design critique, and next-step roadmap |
 | `VISION_PERFORMANCE_ANALYSIS.md` | Vision pipeline FPS optimization (5→25 FPS) |
+| `17_SIMULATION_GAZEBO_ARUDSUB_SITL.md` | **Gazebo Harmonic + ArduSub SITL + Duburi** — stack, ports, tuning roadmap, GPU tiers, optional simulators |
 
 ---
 
@@ -1159,6 +1267,10 @@ The `analysis/` folder contains 17+ detailed technical documents:
 - **ROS 2 Humble** on Ubuntu 22.04
 - **pymavlink:** `pip install pymavlink` or `sudo apt install python3-pymavlink`
 - **PyYAML:** included with ROS 2 (used for config loading)
+
+### Simulation (optional)
+- **Gazebo Harmonic** (`gz-harmonic`, `gz-sim8-cli`) and **`ros-humble-ros-gzharmonic-bridge`**
+- **ArduPilot** (SITL + `sim_vehicle.py`) and a **Gazebo JSON** BlueROV world (e.g. **ardupilot_gazebo**)
 
 ### Perception
 - **OpenCV:** `pip install opencv-python` or `sudo apt install python3-opencv`

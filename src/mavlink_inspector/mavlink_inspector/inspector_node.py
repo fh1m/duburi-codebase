@@ -22,6 +22,7 @@ import time
 os.environ['MAVLINK20'] = '1'
 
 import rclpy
+from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
 from pymavlink import mavutil
@@ -49,8 +50,18 @@ class MavlinkInspectorNode(Node):
         self._boot_time = time.time()
 
         # ── ROS parameters ───────────────────────────────────────────
+        _conn_desc = ParameterDescriptor(
+            description=(
+                'Serial device (e.g. /dev/ttyACM0) or pymavlink URL. '
+                'For ArduPilot SITL, match the transport of your link: '
+                'if sim_vehicle/MAVProxy uses --out=udp:HOST:PORT, use '
+                'udpin:HOST:PORT here. tcp:HOST:5760 is SITL’s TCP listener '
+                'and often carries no stream for a second client once MAVProxy '
+                'is connected.'
+            ),
+        )
         conn_port = self.declare_parameter(
-            'connection_port', '/dev/ttyACM0').value
+            'connection_port', '/dev/ttyACM0', _conn_desc).value
         baud = self.declare_parameter('baud', 115200).value
         yaw_source = self.declare_parameter('yaw_source', 'attitude').value
 
@@ -245,19 +256,21 @@ class MavlinkInspectorNode(Node):
 
     def _read_mavlink(self):
         for msg in self._conn.read_messages():
+            # Link alive if any inbound telemetry arrives (not only HEARTBEAT).
+            # SITL + TCP often streams ATTITUDE/AHRS2 while HEARTBEAT to a
+            # second client can be sparse or contended with MAVProxy on 5760.
+            self._conn.last_heartbeat = time.time()
             self._process_message(msg)
 
     def _process_message(self, msg):
         msg_type = msg.get_type()
 
-        # ── Connection health from heartbeat ─────────────────────────
-        if msg_type == 'HEARTBEAT':
-            self._conn.last_heartbeat = time.time()
-            if self._conn.heartbeat_lost_notified:
-                self._conn.heartbeat_lost_notified = False
-                self._publish_event('heartbeat_restored',
-                                    'Pixhawk heartbeat restored')
-                self.get_logger().info('Pixhawk heartbeat restored.')
+        # ── Connection health: first good packet after a loss ──────────
+        if self._conn.heartbeat_lost_notified:
+            self._conn.heartbeat_lost_notified = False
+            self._publish_event(
+                'heartbeat_restored', 'Vehicle telemetry restored')
+            self.get_logger().info('Vehicle telemetry restored.')
 
         # ── COMMAND_ACK — own ACK tracking ───────────────────────────
         if msg_type == 'COMMAND_ACK':
