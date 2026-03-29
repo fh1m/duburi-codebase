@@ -37,6 +37,7 @@ This folder contains comprehensive documentation for the BRACU Duburi AUV 4.2 RO
 | `16_PLANNER_DOCUMENTATION.md` | **duburi_planner: Complete theory, implementation & usage guide** |
 | `VISION_PERFORMANCE_ANALYSIS.md` | Vision pipeline FPS optimisation (5→25 FPS on Orin Nano) |
 | `17_SIMULATION_GAZEBO_ARUDSUB_SITL.md` | **SITL stack:** Gazebo Harmonic + ArduSub + Duburi, ports/UDP, tuning roadmap, GPU tiers (2060/3080), optional simulators |
+| `18_BLUEOS_JETSON_NETWORK_BRINGUP.md` | **Pi BlueOS + Jetson production setup:** first principles, endpoint mapping, static IP plan, bring-up checklist, failure recovery |
 
 ## Key Invariants (Do Not Violate)
 
