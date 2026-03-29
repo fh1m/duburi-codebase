@@ -179,3 +179,16 @@ Depth always comes from AHRS2 regardless of yaw source.
 3. All defaults remain overridable via ROS parameters (`depth_ki`, `depth_max_integral`).
 
 **Files:** `inspector_node.py` (depth PID defaults ~L155, depth PID loop ~L770)
+
+### 22. BlueOS Router HEARTBEAT Loop (armed/disarmed flapping)
+
+**Symptom:** With `mavlink_inspector` connected over a network/BlueOS routing setup, you may see repeated sequences like:
+- `disarmed` → `mode_change MANUAL` → `armed` → `mode_change STABILIZE` → repeat
+
+**Cause:** In some BlueOS configurations, the inspector’s own outbound “GCS heartbeat” can be routed back into the same inbound UDP stream. If the telemetry parser treats *every* received MAVLink `HEARTBEAT` as the vehicle’s heartbeat, the parser alternately interprets different components and flips armed/mode state.
+
+**Fix (now in repo):** In `telemetry_parser.py`, `HEARTBEAT` updates are filtered by MAVLink source sysid/compid:
+- Only `HEARTBEAT` messages whose source matches the Pixhawk component IDs (from pymavlink `master.target_system/master.target_component`) are used to update `armed` and `flight_mode`.
+- Mismatched `HEARTBEAT` messages are ignored, preventing armed/disarmed flapping.
+
+**Files:** `telemetry_parser.py`

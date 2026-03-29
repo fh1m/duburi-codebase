@@ -42,6 +42,7 @@ class TelemetryParser:
         # ── Transition tracking ──────────────────────────────────────
         self._prev_armed: bool | None = None
         self._prev_mode: str | None = None
+        self._unexpected_heartbeat_warned: bool = False
 
         # ── Dispatch table (Design Issue 5) ──────────────────────────
         # Uniform signature: handler(msg, master, events)
@@ -76,6 +77,32 @@ class TelemetryParser:
     # ── Message handlers ─────────────────────────────────────────────
 
     def _handle_heartbeat(self, msg, master, events):
+        # Only treat HEARTBEAT messages coming from the vehicle (Pixhawk)
+        # as ground truth for armed/mode state.
+        #
+        # In some BlueOS router setups, the inspector's own outbound
+        # "GCS heartbeat" can be forwarded back into the same receive
+        # stream. Without filtering by MAVLink src sysid/compid, that
+        # can cause armed/mode flapping.
+        if master is not None:
+            try:
+                src_sys = msg.get_srcSystem()
+                src_comp = msg.get_srcComponent()
+                exp_sys = master.target_system
+                exp_comp = master.target_component
+                if src_sys != exp_sys or src_comp != exp_comp:
+                    if not self._unexpected_heartbeat_warned:
+                        self._unexpected_heartbeat_warned = True
+                        print(
+                            f"[TelemetryParser] Ignoring HEARTBEAT from "
+                            f"src sys={src_sys} comp={src_comp}; "
+                            f"expected sys={exp_sys} comp={exp_comp}"
+                        )
+                    return
+            except Exception:
+                # If introspection fails, fall back to original behavior.
+                pass
+
         self.armed = (
             msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED
         ) != 0
