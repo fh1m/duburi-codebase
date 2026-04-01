@@ -2,7 +2,7 @@
 Shared constants for the Duburi AUV 4.2 stack.
 
 Single source of truth for mission paths, timing, speed defaults,
-and command allow-lists. All packages import from here.
+network configuration, and command allow-lists. All packages import from here.
 """
 
 from pathlib import Path
@@ -14,6 +14,39 @@ MISSION_PATHS = [
 ]
 
 HISTORY_FILE = Path.home() / '.duburi_history'
+
+# ── Network Configuration ────────────────────────────────────────────
+# BlueOS (Raspberry Pi 4B) running MAVLink router
+BLUEOS_HOST = '192.168.2.2'
+
+# Jetson Orin Nano (ROS 2 companion computer)
+JETSON_HOST = '192.168.2.69'
+
+# This PC / GCS
+GCS_HOST = '192.168.2.1'
+
+# MAVLink ports
+MAVLINK_UDP_PORT = 14550  # Standard MAVLink UDP port
+
+# BlueOS service ports
+BLUEOS_PORT_HELPER = 81
+BLUEOS_PORT_SYSTEM_INFO = 6030
+BLUEOS_PORT_MAVLINK2REST = 6040
+BLUEOS_PORT_ARDUPILOT_MANAGER = 8000
+BLUEOS_PORT_CABLE_GUY = 9090
+
+# Default UDP endpoints to try when auto-connecting
+# Format: (description, pymavlink_url)
+DEFAULT_UDP_ENDPOINTS = [
+    ('BlueOS UDP (listen)', f'udpin:0.0.0.0:{MAVLINK_UDP_PORT}'),
+    ('BlueOS UDP (localhost)', f'udpin:127.0.0.1:{MAVLINK_UDP_PORT}'),
+]
+
+# Default serial ports to try (existing behavior)
+DEFAULT_SERIAL_PORTS = [
+    '/dev/ttyACM0', '/dev/ttyACM1', '/dev/ttyACM2', '/dev/ttyACM3',
+    '/dev/ttyUSB0', '/dev/ttyUSB1',
+]
 
 # ── Speed / timing defaults ──────────────────────────────────────────
 DEFAULT_SPEED = 50

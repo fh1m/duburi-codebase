@@ -3,6 +3,7 @@
 Handles:
 - Serial port detection (configured + fallback scanning) for USB Pixhawk
 - Direct TCP/UDP URLs for ArduPilot SITL (e.g. ``tcp:127.0.0.1:5760``)
+- BlueOS UDP endpoint auto-detection (udpin:0.0.0.0:14550)
 - Connection with exponential backoff on failure
 - GCS heartbeat sending and health monitoring
 - Heartbeat loss detection and automatic reconnection
@@ -11,6 +12,7 @@ Handles:
 from __future__ import annotations
 
 import os
+import socket
 import threading
 import time
 from pathlib import Path
@@ -18,6 +20,24 @@ from pathlib import Path
 os.environ['MAVLINK20'] = '1'
 
 from pymavlink import mavutil
+
+# Import network config from duburi_common if available
+try:
+    from duburi_common.constants import (
+        DEFAULT_UDP_ENDPOINTS,
+        DEFAULT_SERIAL_PORTS,
+        MAVLINK_UDP_PORT,
+    )
+except ImportError:
+    # Fallback defaults if duburi_common not available
+    MAVLINK_UDP_PORT = 14550
+    DEFAULT_UDP_ENDPOINTS = [
+        ('BlueOS UDP (listen)', f'udpin:0.0.0.0:{MAVLINK_UDP_PORT}'),
+    ]
+    DEFAULT_SERIAL_PORTS = [
+        '/dev/ttyACM0', '/dev/ttyACM1', '/dev/ttyACM2', '/dev/ttyACM3',
+        '/dev/ttyUSB0', '/dev/ttyUSB1',
+    ]
 
 
 def _is_network_mavlink_url(port: str) -> bool:
@@ -36,8 +56,21 @@ def _is_network_mavlink_url(port: str) -> bool:
     )
 
 
+def _check_udp_port_available(port: int, timeout: float = 0.5) -> bool:
+    """Check if a UDP port can receive data (non-blocking test)."""
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.settimeout(timeout)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(('0.0.0.0', port))
+        sock.close()
+        return True
+    except (OSError, socket.error):
+        return False
+
+
 class ConnectionManager:
-    """Manages the MAVLink connection to Pixhawk (serial) or SITL (tcp/udp)."""
+    """Manages the MAVLink connection to Pixhawk (serial) or SITL/BlueOS (tcp/udp)."""
 
     def __init__(
         self,
@@ -47,6 +80,8 @@ class ConnectionManager:
         reconnect_backoff: float = 2.0,
         reconnect_max: float = 15.0,
         fallback_ports: list[str] | None = None,
+        fallback_udp_endpoints: list[tuple[str, str]] | None = None,
+        auto_search_udp: bool = True,
         logger=None,
         on_event=None,
     ):
@@ -56,10 +91,9 @@ class ConnectionManager:
         self._reconnect_backoff = reconnect_backoff
         self._reconnect_max = reconnect_max
         self._reconnect_current = reconnect_backoff
-        self._fallback_ports = fallback_ports or [
-            '/dev/ttyACM0', '/dev/ttyACM1', '/dev/ttyACM2', '/dev/ttyACM3',
-            '/dev/ttyUSB0', '/dev/ttyUSB1',
-        ]
+        self._fallback_ports = fallback_ports or list(DEFAULT_SERIAL_PORTS)
+        self._fallback_udp_endpoints = fallback_udp_endpoints or list(DEFAULT_UDP_ENDPOINTS)
+        self._auto_search_udp = auto_search_udp
         self._logger = logger
         self._on_event = on_event or (lambda *_a: None)
 
@@ -121,11 +155,23 @@ class ConnectionManager:
             self._master = None
 
     def _find_port(self) -> str | None:
-        """Resolve connection endpoint: SITL (tcp/udp) or USB serial device."""
+        """Resolve connection endpoint: network (tcp/udp), serial, or BlueOS UDP.
+
+        Search order:
+        1. If configured port is a network URL, use it directly
+        2. If configured port is an existing serial device, use it
+        3. Search fallback serial ports
+        4. If auto_search_udp is enabled, try UDP endpoints (BlueOS)
+        """
+        # 1. Network URL (SITL, BlueOS, etc.) - use directly
         if _is_network_mavlink_url(self._port):
             return self._port
+
+        # 2. Configured serial port exists
         if Path(self._port).exists():
             return self._port
+
+        # 3. Search fallback serial ports
         for port in self._fallback_ports:
             if port != self._port and Path(port).exists():
                 if self._logger:
@@ -133,24 +179,49 @@ class ConnectionManager:
                         f'Configured port {self._port} not found, trying {port}'
                     )
                 return port
+
+        # 4. Auto-search UDP endpoints (BlueOS network connection)
+        if self._auto_search_udp:
+            if self._logger:
+                self._logger.info(
+                    f'No serial ports found, searching UDP endpoints...'
+                )
+            for desc, udp_url in self._fallback_udp_endpoints:
+                if self._logger:
+                    self._logger.info(f'Trying {desc}: {udp_url}')
+                # For udpin, we can connect and see if we get data
+                # Return the URL and let connect() verify with wait_heartbeat
+                return udp_url
+
         return None
 
     def connect(self):
-        """Connect to Pixhawk (blocking — call from a background thread)."""
+        """Connect to Pixhawk (blocking — call from a background thread).
+
+        Searches serial ports and UDP endpoints automatically.
+        For BlueOS setup, will try udpin:0.0.0.0:14550 if no serial found.
+        """
         self._reconnecting = True
         try:
             self.close()  # clean up any stale connection
 
             port = self._find_port()
             if port is None:
+                udp_hint = ''
+                if self._auto_search_udp:
+                    udp_hint = f' or UDP endpoints {[u[1] for u in self._fallback_udp_endpoints]}'
                 raise ConnectionError(
-                    f'No Pixhawk found on {self._port} '
-                    f'or fallbacks {self._fallback_ports}'
+                    f'No MAVLink source found on {self._port}, '
+                    f'serial fallbacks {self._fallback_ports}{udp_hint}'
                 )
 
             if self._logger:
-                label = 'SITL/network' if _is_network_mavlink_url(port) else 'Pixhawk'
+                if _is_network_mavlink_url(port):
+                    label = 'BlueOS/network' if 'udpin' in port else 'SITL/network'
+                else:
+                    label = 'Pixhawk (serial)'
                 self._logger.info(f'Connecting to {label} at {port}...')
+
             self._master = mavutil.mavlink_connection(port, self._baud)
             self._master.wait_heartbeat(timeout=10)
 
@@ -160,9 +231,9 @@ class ConnectionManager:
             self._reconnect_current = self._reconnect_backoff
             self._port = port
 
-            self._on_event('connected', f'Pixhawk connected on {port}')
+            self._on_event('connected', f'MAVLink connected on {port}')
             if self._logger:
-                self._logger.info(f'Pixhawk connected and active on {port}.')
+                self._logger.info(f'MAVLink connected and active on {port}.')
         except Exception as e:
             if self._logger:
                 self._logger.error(f'Failed to connect: {e}')

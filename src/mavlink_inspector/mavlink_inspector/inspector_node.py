@@ -102,6 +102,17 @@ class MavlinkInspectorNode(Node):
         reconnect_max = self.declare_parameter(
             'reconnect_max', 15.0).value
 
+        # Auto-search UDP endpoints when no serial found (for BlueOS)
+        auto_search_udp = self.declare_parameter(
+            'auto_search_udp', True,
+            ParameterDescriptor(
+                description=(
+                    'When serial ports are not found, automatically try '
+                    'UDP endpoints (udpin:0.0.0.0:14550) for BlueOS connection.'
+                )
+            ),
+        ).value
+
         # ── Modules ──────────────────────────────────────────────────
         self._conn = ConnectionManager(
             port=conn_port,
@@ -109,6 +120,7 @@ class MavlinkInspectorNode(Node):
             heartbeat_timeout=heartbeat_timeout,
             reconnect_backoff=reconnect_backoff,
             reconnect_max=reconnect_max,
+            auto_search_udp=auto_search_udp,
             logger=self.get_logger(),
             on_event=self._publish_event,
         )

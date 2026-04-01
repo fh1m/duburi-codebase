@@ -1,0 +1,51 @@
+# BlueOS Integration Configuration for BRACU Duburi AUV 4.2
+# ============================================================
+#
+# Network Architecture:
+#   Raspberry Pi 4B (192.168.2.2) - BlueOS + Pixhawk 2.4.8
+#   Jetson Orin Nano (192.168.2.69) - ROS 2 companion computer
+#   GCS/Dev PC (192.168.2.1) - Ground Control Station
+#   Network switch connecting all devices
+#
+# MAVLink Endpoint (configured in BlueOS):
+#   Name: Inspector
+#   Type: UDP Client (udpout)
+#   Target: 192.168.2.69:14550
+
+# BlueOS Monitor Node
+blueos_monitor:
+  ros__parameters:
+    # BlueOS host (Raspberry Pi IP)
+    blueos_host: "192.168.2.2"
+    
+    # Polling rate for system status (Hz)
+    poll_rate_hz: 1.0
+    
+    # API request timeout (seconds)
+    timeout_sec: 2.0
+    
+    # Warning thresholds
+    warn_cpu_percent: 80.0
+    warn_memory_percent: 80.0
+    warn_disk_percent: 90.0
+    warn_temp_celsius: 70.0
+
+# MAVLink Bridge Node
+mavlink_bridge:
+  ros__parameters:
+    # BlueOS host (Raspberry Pi IP)
+    blueos_host: "192.168.2.2"
+    
+    # Jetson Orin Nano IP (where MAVLink is sent)
+    jetson_ip: "192.168.2.69"
+    
+    # MAVLink UDP port on Jetson
+    # Inspector listens with: udpin:0.0.0.0:14550
+    mavlink_port: 14550
+    
+    # Automatically create Jetson endpoint on startup
+    # Set to false if endpoint already configured in BlueOS
+    auto_setup: false
+    
+    # API request timeout (seconds)
+    timeout_sec: 5.0
