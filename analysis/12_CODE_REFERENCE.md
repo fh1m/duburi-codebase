@@ -2,7 +2,7 @@
 
 > **Commit:** `d0a48d6` — "BlueOS+Jetson bring-up guide and HEARTBEAT source gating fix"  
 > **Date:** 2026-03-28  
-> **Total:** 72 Python source files across 9 packages (~10,556 lines)
+> **Total:** 80 Python source files across 10 packages (~10,556 lines)
 
 This document maps every package, module, class, and public function in the
 BRACU Duburi AUV 4.2 ROS 2 codebase after the Phase 1 modularization refactor
@@ -21,9 +21,10 @@ and the addition of the YASMIN FSM mission planner.
 7. [vision_inspector](#7-vision_inspector)
 8. [duburi_planner](#8-duburi_planner)
 9. [duburi_common](#9-duburi_common)
-10. [duburi_interfaces](#10-duburi_interfaces)
-11. [Cross-Package Dependency Graph](#11-cross-package-dependency-graph)
-12. [Import Map](#12-import-map)
+10. [duburi_blueos](#10-duburi_blueos)
+11. [duburi_interfaces](#11-duburi_interfaces)
+12. [Cross-Package Dependency Graph](#12-cross-package-dependency-graph)
+13. [Import Map](#13-import-map)
 
 ---
 
@@ -36,9 +37,10 @@ and the addition of the YASMIN FSM mission planner.
 | `mavlink_runner` | Human-facing CLI | 4 | ~917 | `duburi_runner` |
 | `mavlink_logger` | Topic logging to CSV/JSON | 1 | ~233 | `mavlink_logger` |
 | `vision` | YOLO detection + visual servo + Kalman tracking | 6 | ~1,374 | `detector_node` |
-| `vision_inspector` | Camera management, calibration, recording | 8 | ~1,380 | `camera_node`, `camera_enumerator`, `camera_tester`, `camera_calibrator`, `camera_recorder`, `camera_playback`, `frame_publisher` |
+| `vision_inspector` | Camera management, calibration, recording | 10 | ~1,380 | `camera_manager`, `camera_enumerator`, `camera_tester`, `camera_calibrator`, `camera_recorder`, `camera_playback` |
 | `duburi_planner` | YASMIN FSM mission planner | 18 | ~2,100 | `mission_planner` |
 | `duburi_common` | Shared constants and command vocabulary | 2 | ~207 | — |
+| `duburi_blueos` | BlueOS REST API companion client | 6 | ~450 | `blueos_monitor` |
 | `duburi_interfaces` | ROS 2 msg/srv definitions | — | — | — |
 
 ---
@@ -578,12 +580,15 @@ temporary dropouts (occlusion, missed frames).
 
 > **Purpose:** Camera device management, calibration, recording/playback, and raw image publishing.
 
-### 7.1 camera_node.py (219 lines)
+### 7.1 camera_manager_node.py (~250 lines)
 
 | Item | Kind | Purpose |
 |---|---|---|
-| `CameraNode` | class (Node) | Opens V4L2 camera, publishes `Image` at configurable FPS |
-| Parameters | ROS params | `device_id`, `width`, `height`, `fps`, `auto_exposure` |
+| `CameraManagerNode` | class (Node) | Multi-camera orchestrator. Discovers cameras, creates `FramePublisher` per camera, publishes `/camera/<name>/image_raw` |
+| Parameters | ROS params | `camera_configs` (YAML list of camera name→device mappings) |
+| `_on_status_timer()` | method | Publishes `CameraStatusArray` to `/vision_inspector/status` at 1 Hz |
+
+> **Note:** The old single-camera `camera_node.py` has been replaced by `camera_manager_node.py` + `frame_publisher.py` + `camera_device.py` for multi-camera support.
 
 ---
 
@@ -728,44 +733,25 @@ Holds ROS publishers, subscribers, and cached vehicle state.
 
 ---
 
-### 8.5 states/ Directory (6 files, ~800 lines total)
+### 8.5 states/ Directory (8 files, ~800 lines total)
 
 **Role:** YASMIN state implementations for mission primitives.
 
-#### states/base_state.py (~100 lines)
+#### states/arm.py
 
 | Item | Kind | Purpose |
 |---|---|---|
-| `BaseState` | class (State) | Abstract base with logging, timeout, and abort handling |
-| `on_enter()` | method | Called on state entry (override in subclasses) |
-| `on_exit()` | method | Called on state exit |
-| `execute()` | method | Main state logic (override in subclasses) |
+| `ArmState` | class (State) | Arms the vehicle, sets mode |
+| Outcomes | | `succeeded`, `failed` |
 
-#### states/submerge_state.py (~120 lines)
+#### states/submerge.py
 
 | Item | Kind | Purpose |
 |---|---|---|
-| `SubmergeState` | class (State) | Arms, sets mode, descends to target depth |
+| `SubmergeState` | class (State) | Descends to target depth via PID |
 | Outcomes | | `succeeded`, `failed`, `aborted` |
 
-#### states/search_state.py (~150 lines)
-
-| Item | Kind | Purpose |
-|---|---|---|
-| `SearchState` | class (State) | Searches for target object (yaw sweep or forward cruise) |
-| `_yaw_search()` | method | Rotates in place looking for detection |
-| `_cruise_search()` | method | Moves forward while scanning |
-| Outcomes | | `found`, `not_found`, `aborted` |
-
-#### states/align_state.py (~180 lines)
-
-| Item | Kind | Purpose |
-|---|---|---|
-| `AlignState` | class (State) | Visual servo alignment to detected target |
-| `execute()` | method | Enables alignment controller, waits for convergence |
-| Outcomes | | `aligned`, `lost_target`, `timeout`, `aborted` |
-
-#### states/drive_state.py (~130 lines)
+#### states/drive.py
 
 | Item | Kind | Purpose |
 |---|---|---|
@@ -773,7 +759,7 @@ Holds ROS publishers, subscribers, and cached vehicle state.
 | `execute()` | method | Sends forward command for configured duration |
 | Outcomes | | `succeeded`, `aborted` |
 
-#### states/surface_state.py (~120 lines)
+#### states/surface.py
 
 | Item | Kind | Purpose |
 |---|---|---|
@@ -781,13 +767,42 @@ Holds ROS publishers, subscribers, and cached vehicle state.
 | `execute()` | method | Sends surface command, waits, disarms |
 | Outcomes | | `succeeded`, `failed` |
 
+#### states/search.py
+
+| Item | Kind | Purpose |
+|---|---|---|
+| `SearchState` | class (State) | Searches for target object (yaw sweep or forward cruise) |
+| Outcomes | | `found`, `not_found`, `aborted` |
+
+#### states/align.py
+
+| Item | Kind | Purpose |
+|---|---|---|
+| `AlignState` | class (State) | Visual servo alignment to detected target |
+| `execute()` | method | Enables alignment controller, waits for convergence |
+| Outcomes | | `aligned`, `lost_target`, `timeout`, `aborted` |
+
+#### states/wait_feedback.py
+
+| Item | Kind | Purpose |
+|---|---|---|
+| `WaitFeedbackState` | class (State) | Waits for `DriverCommandFeedback` confirmation |
+| Outcomes | | `reached`, `timeout`, `rejected` |
+
+#### states/send_command.py
+
+| Item | Kind | Purpose |
+|---|---|---|
+| `SendCommandState` | class (State) | Publishes a `DriverCommand` and optionally waits |
+| Outcomes | | `succeeded`, `failed` |
+
 ---
 
-### 8.6 missions/ Directory (3 files, ~400 lines total)
+### 8.6 missions/ Directory (2 files)
 
 **Role:** Mission-specific state machine definitions.
 
-#### missions/gate_mission.py (~200 lines)
+#### missions/gate.py
 
 | Item | Kind | Purpose |
 |---|---|---|
@@ -795,23 +810,18 @@ Holds ROS publishers, subscribers, and cached vehicle state.
 
 **State sequence:**
 ```
-START → SubmergeState → SearchState → AlignState → DriveState → SurfaceState → END
-                              ↑              │
-                              └──lost_target─┘
+START → ArmState → SubmergeState → SearchState → AlignState → DriveState → SurfaceState → END
+                                         ↑              │
+                                         └──lost_target─┘
 ```
 
-#### missions/buoy_mission.py (~100 lines)
+#### missions/demo_square.py
 
 | Item | Kind | Purpose |
 |---|---|---|
-| `create_buoy_fsm()` | function | Builds state machine for buoy touch task |
+| `create_demo_square_fsm()` | function | Builds state machine for a simple square movement pattern (testing/demo) |
 
-#### missions/mission_registry.py (~50 lines)
-
-| Item | Kind | Purpose |
-|---|---|---|
-| `MISSIONS` | dict | Registry mapping mission name → FSM factory function |
-| `get_mission()` | function | Returns FSM for requested mission name |
+> **Note:** There is no `mission_registry.py` or `buoy_mission.py`. Missions are loaded by name in `mission_node.py`.
 
 ---
 
@@ -847,7 +857,49 @@ START → SubmergeState → SearchState → AlignState → DriveState → Surfac
 
 ---
 
-## 10. duburi_interfaces
+## 10. duburi_blueos
+
+> **Purpose:** REST API client for the BlueOS companion computer (Raspberry Pi 4B).
+> Monitors system health, manages endpoints, and publishes status to ROS 2.
+
+### 10.1 blueos_monitor_node.py
+
+| Item | Kind | Purpose |
+|---|---|---|
+| `BlueosMonitorNode` | class (Node) | ROS 2 node that periodically polls BlueOS endpoints and publishes system status |
+| `_status_timer()` | method | Timer callback that queries health and publishes to `/blueos/system_status` |
+
+### 10.2 blueos_client.py
+
+| Item | Kind | Purpose |
+|---|---|---|
+| `BlueosClient` | class | HTTP client for BlueOS REST API (system info, MAVLink endpoints, extensions) |
+| `get_system_info()` | method | Fetches CPU, memory, disk, temperature from BlueOS |
+| `get_mavlink_endpoints()` | method | Lists active MAVLink endpoint configurations |
+
+### 10.3 blueos_config.py
+
+| Item | Kind | Purpose |
+|---|---|---|
+| Configuration | module | BlueOS connection settings (IP, port, endpoints) |
+
+### 10.4 endpoints.py
+
+| Item | Kind | Purpose |
+|---|---|---|
+| `ENDPOINTS` | dict | Mapping of BlueOS REST API endpoint paths |
+
+### 10.5 health_checker.py
+
+| Item | Kind | Purpose |
+|---|---|---|
+| `HealthChecker` | class | Evaluates system health metrics against thresholds (CPU temp, disk space, memory) |
+
+**Depends on:** `requests`, `duburi_interfaces.msg` (for status messages)
+
+---
+
+## 11. duburi_interfaces
 
 > **Purpose:** ROS 2 message and service definitions shared by all packages.
 
@@ -866,7 +918,7 @@ START → SubmergeState → SearchState → AlignState → DriveState → Surfac
 
 ---
 
-## 11. Cross-Package Dependency Graph
+## 12. Cross-Package Dependency Graph
 
 ```
 duburi_interfaces (ROS msgs/srv)              duburi_common (Python library)
@@ -890,6 +942,8 @@ duburi_interfaces (ROS msgs/srv)              duburi_common (Python library)
                └──► yasmin (YASMIN FSM library)
 
             vision_inspector ──► duburi_interfaces only
+
+            duburi_blueos ──► requests (HTTP client)
 ```
 
 **Key dependency rules:**
@@ -902,7 +956,7 @@ duburi_interfaces (ROS msgs/srv)              duburi_common (Python library)
 
 ---
 
-## 12. Import Map
+## 13. Import Map
 
 ### What imports what (Python-level)
 
@@ -1002,7 +1056,7 @@ resolved by removing the unused re-export block from `driver_client.py`.
 | YOLO detection | `detector_node.py` | vision |
 | `AlignmentController` | `alignment_controller.py` | vision |
 | `KalmanTracker` | `kalman_tracker.py` | vision |
-| Camera publishing | `camera_node.py` | vision_inspector |
+| Camera publishing | `camera_manager_node.py` | vision_inspector |
 | Camera recording | `camera_recorder.py` | vision_inspector |
 | `MissionPlannerNode` | `mission_node.py` | duburi_planner |
 | `PlannerContext` | `planner_context.py` | duburi_planner |
@@ -1011,4 +1065,4 @@ resolved by removing the unused re-export block from `driver_client.py`.
 
 ---
 
-*Document updated from full codebase audit at commit `d0a48d6`.*
+*Document updated from full codebase audit. 80 Python source files across 10 packages.*

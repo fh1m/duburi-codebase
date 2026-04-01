@@ -35,9 +35,13 @@ This folder contains comprehensive documentation for the BRACU Duburi AUV 4.2 RO
 | `14_ISSUES_AND_RECOMMENDATIONS.md` | **Gap analysis, design critique, and phased roadmap** |
 | `15_MISSION_PLANNER_ANALYSIS.md` | **YASMIN (FSM) vs Behaviour Trees — deep comparison & verdict** |
 | `16_PLANNER_DOCUMENTATION.md` | **duburi_planner: Complete theory, implementation & usage guide** |
-| `VISION_PERFORMANCE_ANALYSIS.md` | Vision pipeline FPS optimisation (5→25 FPS on Orin Nano) |
-| `17_SIMULATION_GAZEBO_ARUDSUB_SITL.md` | **SITL stack:** Gazebo Harmonic + ArduSub + Duburi, ports/UDP, tuning roadmap, GPU tiers (2060/3080), optional simulators |
+| `17_SIMULATION_GAZEBO_ARUDSUB_SITL.md` | **SITL stack:** Gazebo Harmonic + ArduSub + Duburi, ports/UDP, tuning roadmap, GPU tiers |
 | `18_BLUEOS_JETSON_NETWORK_BRINGUP.md` | **Pi BlueOS + Jetson production setup:** first principles, endpoint mapping, static IP plan, bring-up checklist, failure recovery |
+| `19_DESIGN_DECISIONS_ANALYSIS.md` | Deep-dive analysis of all 12 design decisions — trade-offs, alternatives, risks |
+| `20_ARDUSUB_MAVLINK_DEEP_DIVE.md` | ArduSub MAVLink protocol internals — message types, RC override mechanics, EKF configuration |
+| `21_DUBURI_BLUEOS_PACKAGE_ANALYSIS.md` | `duburi_blueos` package analysis — BlueOS REST API integration, system monitoring |
+| `VISION_PERFORMANCE_ANALYSIS.md` | Vision pipeline FPS optimisation (5→25 FPS on Orin Nano) |
+| `ROADMAP.md` | **RoboSub 2026 development roadmap** — 5-phase plan with competition task analysis |
 
 ## Key Invariants (Do Not Violate)
 

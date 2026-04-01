@@ -48,27 +48,35 @@ This design draws from:
 ```
 duburi_ws/
 ├── src/
-│   ├── duburi_interfaces/     # Messages (DriverCommand, TeleopCommand, VehicleState,
-│   │                          #   AlignmentStatus, Detection, CameraStatus, ...)
+│   ├── duburi_interfaces/     # 11 custom messages (DriverCommand, TeleopCommand,
+│   │                          #   VehicleState, VehicleDiagnostics, MavlinkEvent,
+│   │                          #   DriverCommandFeedback, AlignmentStatus, Detection,
+│   │                          #   DetectionArray, CameraStatus, CameraStatusArray)
 │   ├── duburi_common/         # Shared constants and command vocabulary
 │   ├── mavlink_inspector/     # Pixhawk connection, command execution, PID, ramp
-│   ├── mavlink_driver/        # driver_client, mission_executor, teleop_driver
+│   │   ├── config/            #   defaults.yaml, competition.yaml, pool_test.yaml
+│   │   └── launch/            #   duburi_control.launch.py
+│   ├── mavlink_driver/        # driver_client, mission_executor, teleop_driver, just_commands
 │   ├── mavlink_runner/        # Duburi > CLI
 │   ├── mavlink_logger/        # Session logs under logs/
 │   ├── vision/                # YOLO11 detection, Kalman tracking, PID visual servo
 │   ├── vision_inspector/      # Multi-camera management, calibration, recording, playback
-│   └── duburi_planner/        # YASMIN FSM mission planner with hierarchical states
+│   ├── duburi_planner/        # YASMIN FSM mission planner with hierarchical states
+│   │   ├── config/            #   planner.yaml
+│   │   └── launch/            #   planner.launch.py
+│   └── duburi_blueos/         # BlueOS REST API client for RPi4B companion integration
 ├── missions/                  # Mission .txt files (run gate, etc.)
-├── config/                    # YAML configuration files for planner and vision
-└── analysis/                  # This documentation (20+ documents)
+└── analysis/                  # This documentation (26 documents) + ROADMAP
 ```
 
 ## Codebase Statistics
 
 | Metric | Value |
 |--------|-------|
-| Python source files | 72 |
-| Total lines of code | ~10,556 |
-| ROS 2 packages | 9 |
-| Custom message types | 8 |
-| ROS nodes | 12+ |
+| Python source files | 80 |
+| Total lines of code | ~10,500 |
+| ROS 2 packages | 10 |
+| Custom message types | 11 |
+| ROS nodes | 15+ |
+| Config files (YAML) | 6 (defaults, competition, pool_test, planner, cameras, blueos_config) |
+| Launch files | 6 (duburi_control, planner, vision, perception, camera, duburi_launch) |

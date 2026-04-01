@@ -48,26 +48,33 @@
 | `mavlink_runner` | Interactive CLI (`Duburi >`) | `runner.py`, `command_parser.py` |
 | `mavlink_logger` | Logs events, state, commands to `logs/` | `logger_node.py` |
 | `vision` | YOLO detection, Kalman tracking, visual servo | `detector_node.py`, `alignment_controller.py`, `kalman_tracker.py` |
-| `vision_inspector` | Camera management, calibration, recording | `camera_node.py`, `camera_recorder.py`, `calibration_store.py` |
+| `vision_inspector` | Camera management, calibration, recording | `camera_manager_node.py`, `frame_publisher.py`, `camera_device.py`, `camera_recorder.py`, `calibration_store.py` |
 | `duburi_planner` | YASMIN FSM mission planner | `mission_node.py`, `planner_context.py`, `states/*`, `missions/*` |
+| `duburi_blueos` | BlueOS REST API client for RPi4B companion | `blueos_monitor_node.py`, `blueos_client.py`, `health_checker.py` |
 
 ## Topic Summary
 
 | Topic | Type | Publisher | Subscribers |
 |-------|------|-----------|-------------|
-| `/driver/command` | DriverCommand | runner, mission_executor, planner | inspector, logger |
-| `/driver/teleop` | TeleopCommand | teleop_driver, alignment_controller | inspector |
-| `/mavlink/events` | MavlinkEvent | inspector | runner, logger |
-| `/mavlink/vehicle_state` | VehicleState | inspector | logger, planner, status tools |
+| `/driver/command` | DriverCommand | runner, mission_executor, alignment_controller, planner | inspector, logger |
+| `/driver/feedback` | DriverCommandFeedback | inspector | mission_executor |
+| `/driver/teleop` | TeleopCommand | teleop_driver | inspector |
+| `/mavlink/events` | MavlinkEvent | inspector | runner, mission_executor, logger |
+| `/mavlink/vehicle_state` | VehicleState | inspector | runner, planner, alignment_controller, logger |
+| `/mavlink/diagnostics` | VehicleDiagnostics | inspector | — |
 | `/cmd_vel` | Twist | teleop/joystick nodes | teleop_driver |
+| `/camera/<name>/image_raw` | Image | camera_manager_node (frame_publisher) | detector_node |
+| `/camera/<name>/camera_info` | CameraInfo | camera_manager_node (frame_publisher) | — |
 | `/vision/detections` | DetectionArray | detector_node | alignment_controller, planner |
+| `/vision/annotated_image` | Image | detector_node | — |
 | `/vision/alignment_status` | AlignmentStatus | alignment_controller | planner |
-| `/camera/image_raw` | Image | camera_node | detector_node |
+| `/vision_inspector/status` | CameraStatusArray | camera_manager_node | — |
+| `/blueos/system_status` | String | blueos_monitor_node | — |
 
 ## Execution Order
 
 1. Start `mavlink_inspector` first (it opens the serial port).
-2. Start camera and vision nodes (`camera_node`, `detector_node`, optionally `alignment_controller`).
+2. Start camera and vision nodes (`camera_manager`, `detector_node`, optionally `alignment_controller`).
 3. Start `mavlink_runner` or `mission_executor` or `duburi_planner` as needed.
 4. Optional: start `mavlink_logger` for logging.
 

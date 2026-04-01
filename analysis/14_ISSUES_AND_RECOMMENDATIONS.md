@@ -35,7 +35,7 @@ Post-refactor analysis of the Duburi 4.2 codebase. Identifies current architectu
 
 ### Issue 3: Alignment Controller Publishes Raw DriverCommand (Severity: MEDIUM)
 
-**Problem:** `alignment_controller.py` publishes `DriverCommand` with `command='move_left'`, `command='move_forward'`, etc. Each publish triggers a full command dispatch cycle in the inspector. At 10 Hz control rate, this generates 10 DriverCommand messages per second, each going through `CommandHandler.handle()` → movement lookup → ramp reset.
+**Problem:** `alignment_controller.py` publishes `DriverCommand` to `/driver/command` (confirmed — uses `DriverCommand`, not `TeleopCommand`). Each publish triggers a full command dispatch cycle in the inspector. At 10 Hz control rate, this generates 10 DriverCommand messages per second, each going through `CommandHandler.handle()` → movement lookup → ramp reset.
 
 **Impact:** The trapezoidal ramp in `rc_controller` is constantly being reset by new commands. The visual servo effectively bypasses the ramp and creates jittery motion. Additionally, each alignment command overwrites any concurrent movement from the runner or executor.
 
@@ -90,9 +90,11 @@ Post-refactor analysis of the Duburi 4.2 codebase. Identifies current architectu
 
 ## Part B: Architectural Design Critique
 
-### Critique 1: Absence of a State Machine Layer
+### Critique 1: ~~Absence of~~ State Machine Layer — ✅ NOW IMPLEMENTED
 
-**Current state:** Mission logic is expressed as linear command sequences (text files or semicolons in the runner). There is no concept of "states" (IDLE, NAVIGATING, ALIGNING, TASK_EXECUTING, ERROR_RECOVERY) with defined transitions and guards.
+> **Status (2026):** The `duburi_planner` package now implements YASMIN HFSM with 8 reusable states (`arm`, `submerge`, `drive`, `surface`, `search`, `align`, `wait_feedback`, `send_command`) and 2 missions (`gate.py`, `demo_square.py`). The critique below is preserved for historical context — the core issue is addressed, though not all competition tasks have state machines yet.
+
+**Original critique:** Mission logic was expressed as linear command sequences (text files or semicolons in the runner). There was no concept of "states" (IDLE, NAVIGATING, ALIGNING, TASK_EXECUTING, ERROR_RECOVERY) with defined transitions and guards.
 
 **Why this matters:** Every competition task is fundamentally a state machine:
 
@@ -106,7 +108,7 @@ SEARCHING → DETECTED → APPROACHING → ALIGNED → EXECUTING → COMPLETED
 
 Our current architecture has no way to express this. The alignment controller implements a micro-state machine internally (SEARCHING, ALIGNING, HOLDING), but this isn't exposed to a higher-level planner.
 
-**Recommendation:** This is addressed by Issue #1 in the strategic priorities (13_COMPETITIVE_ANALYSIS.md) — YASMIN hierarchical state machine integration. The alignment controller's internal states (SEARCHING, ALIGNING, HOLDING) map directly to YASMIN `MonitorState` outcomes, and `/vision/alignment_status` provides the feedback signal that YASMIN states consume. See `15_MISSION_PLANNER_ANALYSIS.md` for the full architecture.
+**Recommendation:** ✅ This has been addressed by the `duburi_planner` package. YASMIN hierarchical state machines are implemented with per-task sub-SMs. The alignment controller's internal states (SEARCHING, ALIGNING, HOLDING) map to YASMIN `MonitorState` outcomes, and `/vision/alignment_status` provides the feedback signal that YASMIN states consume. **Next step:** wire the `align` state to consume `/vision/alignment_status` directly for the remaining competition tasks. See `16_PLANNER_DOCUMENTATION.md` for the current implementation.
 
 ---
 
@@ -175,29 +177,21 @@ Our current architecture has no way to express this. The alignment controller im
 
 ## Part C: Concrete Next Steps (Phased Roadmap)
 
-### Phase 1: YASMIN State Machine Foundation (est. 1–2 weeks)
+### Phase 1: YASMIN State Machine Foundation — ✅ COMPLETE
 
 **Goal:** Replace text-based missions with YASMIN hierarchical state machines.
 
-1. Install YASMIN: `sudo apt install ros-humble-yasmin ros-humble-yasmin-ros ros-humble-yasmin-viewer`
-2. Create `duburi_planner` package with:
-   - `mission_node.py` — ROS 2 node, constructs & runs top-level SM
-   - `mission_builder.py` — `build_gate_task()`, `build_slalom_task()`, etc.
-   - `states/` — reusable state classes for each atomic action
-   - `watchdog.py` — background thread for safety conditions
-3. First sub-SM: a GateTask with fallback:
-   ```
-   GateTask (sub-SM)
-   ├── SearchGate ──detected──→ AlignGate
-   ├── SearchGate ──timeout───→ DeadReckonGate (fallback)
-   ├── AlignGate ──aligned───→ PassThrough
-   ├── AlignGate ──lost──────→ SearchGate (retry)
-   └── PassThrough ──passed──→ [gate_done]
-   ```
-4. Each state wraps `driver_client` functions; `MonitorState` subscribes to `/driver/feedback` and `/vision/alignment_status`
-5. Real-time debugging via `yasmin_viewer` web UI at `localhost:5000`
+**Status:** ✅ All items delivered. The `duburi_planner` package is implemented with:
+- 8 reusable states: `arm.py`, `submerge.py`, `drive.py`, `surface.py`, `search.py`, `align.py`, `wait_feedback.py`, `send_command.py`
+- 2 missions: `gate.py` (gate task with search → align → drive-through), `demo_square.py` (test pattern)
+- States inherit directly from `yasmin.State` and use `driver_client` functions
+- YASMIN Viewer available for real-time debugging
 
-**Deliverables:** Working gate task with explicit fallback from vision to dead reckoning. See `15_MISSION_PLANNER_ANALYSIS.md` for the full architecture sketch.
+**Remaining from original plan:**
+- ❌ `watchdog.py` — not yet implemented (safety watchdog for battery/leak monitoring)
+- ❌ Additional task sub-SMs (slalom, torpedoes, bins, octagon) — not yet implemented
+
+See `16_PLANNER_DOCUMENTATION.md` for the complete implementation guide.
 
 ---
 

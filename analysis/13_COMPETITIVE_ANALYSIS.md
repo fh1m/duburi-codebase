@@ -39,15 +39,15 @@ This analysis is read-only — no code changes. Its purpose is to identify archi
 | **Localization** | Pixhawk EKF (IMU + BAR30 + optional DVL) | Custom UKF (IMU + DVL + FOG + vision-based recalibration) | Dead reckoning (DVL + FOG) |
 | **Communication** | pymavlink (serial) → RC_CHANNELS_OVERRIDE | Custom CAN protocol + ROS 2 | Custom telemetry between hulls |
 
-### 2.2 Mission Planning — The Critical Gap
+### 2.2 Mission Planning — Narrowing the Gap
 
 | Feature | Duburi | Bumblebee | Desert WAVE |
 |---------|--------|-----------|-------------|
-| Task sequencing | Linear (text file, semicolons) | Behaviour tree (composable, fallbacks) | Linear waypoints |
-| Runtime re-planning | None — abort or continue | Yes — fallback nodes, condition guards | None |
-| Task independence | No — sequential only | Yes — each task is an independent subtree | No |
-| Error recovery | `stop` + manual retry | Automatic fallback to alternative strategy | None |
-| Simulation validation | None | Heavy Gazebo simulation of full missions | Limited |
+| Task sequencing | YASMIN HFSM (hierarchical state machine) — each task is a sub-SM with explicit transitions | Behaviour tree (composable, fallbacks) | Linear waypoints |
+| Runtime re-planning | Partial — timeout → fallback state transitions within each sub-SM | Yes — fallback nodes, condition guards | None |
+| Task independence | Yes — each task is an independent YASMIN sub-state-machine | Yes — each task is an independent subtree | No |
+| Error recovery | Timeout → fallback states + watchdog thread for critical conditions | Automatic fallback to alternative strategy | None |
+| Simulation validation | None (Gazebo SITL stack documented, not yet connected) | Heavy Gazebo simulation of full missions | Limited |
 
 **Bumblebee's Py Trees** allow them to:
 1. Define each competition task as an independent, testable subtree
@@ -55,7 +55,7 @@ This analysis is read-only — no code changes. Its purpose is to identify archi
 3. Add fallback behaviours when perception fails
 4. Introspect and debug mission state at runtime
 
-**This is the single largest capability gap in Duburi.** Our text-based mission scripts cannot handle the "what if detection fails?" scenario. Every edge case requires manual intervention.
+**Status update (2026):** The `duburi_planner` package now implements YASMIN hierarchical state machines, addressing the core gap. Each competition task is a sub-SM with explicit fallback transitions (e.g., vision timeout → dead reckoning). The YASMIN Viewer web UI provides runtime state introspection comparable to Py Trees' debugging tools. Two missions are implemented: `gate.py` and `demo_square.py`, with reusable states (`arm`, `submerge`, `drive`, `surface`, `search`, `align`, `wait_feedback`, `send_command`). The remaining gap vs Bumblebee is **breadth** (only 2 of 6 tasks implemented) and **reactivity** (no tick-based preemption — fallbacks are timeout-driven).
 
 ### 2.3 Control System
 
@@ -93,7 +93,7 @@ This analysis is read-only — no code changes. Its purpose is to identify archi
 
 | Capability | Priority | Duburi Status | Bumblebee | Desert WAVE | Effort |
 |------------|----------|---------------|-----------|-------------|--------|
-| **Behaviour tree / mission planner** | CRITICAL | Missing | Py Trees | Linear SM | Large |
+| **Behaviour tree / mission planner** | CRITICAL | ✅ Partial — YASMIN HFSM (`duburi_planner`, 2 missions, 8 reusable states) | Py Trees | Linear SM | Large → Medium (foundation done, need more task SMs) |
 | **Simulation environment** | HIGH | Missing | Gazebo | Unreal Engine 5 (Duburi TDR) | Large |
 | **Trajectory planning** | HIGH | Missing | Polynomial interpolation | Waypoint-to-waypoint | Medium |
 | **Pose estimation (PnP/depth)** | HIGH | Missing | XFeat + PnP + DepthAnything | None | Medium |
@@ -102,7 +102,7 @@ This analysis is read-only — no code changes. Its purpose is to identify archi
 | **Actuator integration (torpedo, dropper, grabber)** | HIGH | Grabber only (servo) | Full suite | Pneumatics (limited) | Medium |
 | **DVL integration** | HIGH | Planned (Nortek Nucleus 1000) | Teledyne Pathfinder | Nortek DVL 1000 | Medium |
 | **Telemetry dashboard** | LOW | ANSI CLI status display | Telegram alerts + OCS | Operator camera feed | Small |
-| **Error recovery / fallback** | CRITICAL | None (manual retry) | Behaviour tree fallbacks | None | Medium (tied to BT) |
+| **Error recovery / fallback** | CRITICAL | Partial — YASMIN timeout → fallback transitions per sub-SM | Behaviour tree fallbacks | None | Medium (need more fallback states) |
 | **Sensor fusion (UKF)** | MEDIUM | Pixhawk EKF only | Custom UKF with vision recalibration | Dead reckoning | Large |
 | **Network/comms resilience** | LOW | USB serial + tether | CAN bus + Ethernet + Telegram | Radio (surfaced) | Medium |
 
@@ -111,7 +111,7 @@ This analysis is read-only — no code changes. Its purpose is to identify archi
 ## 4. What Duburi Does Well (Competitive Advantages)
 
 ### 4.1 Clean ROS 2 Architecture
-Our 8-package architecture with single MAVLink connection owner, typed messages, and layered RC override is cleaner than many RoboSub teams. The `duburi_interfaces` package with 11 message types gives us a well-defined API surface. Most teams at our level use monolithic scripts.
+Our 10-package architecture with single MAVLink connection owner, typed messages, and layered RC override is cleaner than many RoboSub teams. The `duburi_interfaces` package with 11 message types gives us a well-defined API surface. Most teams at our level use monolithic scripts.
 
 ### 4.2 Interactive Development Workflow
 The `duburi_runner` CLI with chained commands, mission files, and real-time status is a genuine productivity advantage. Pool testing time is the most expensive resource — being able to type `arm; ~depth 0.5; go forward 90 60% 5s; stop; disarm` in real-time without deploying code is valuable. Bumblebee uses test scripts; we have an interactive REPL.
@@ -133,7 +133,7 @@ Based on the competitive analysis, here are the recommended development prioriti
 
 ### Tier 1: Must-Have for Competition Readiness
 
-1. **State Machine Mission Planner (YASMIN)** — Without this, we cannot handle the non-linear decision-making that competition requires. A gate detection failure should trigger a search pattern, not a mission abort. YASMIN (GPL-3.0, ROS 2 native FSM library) is our proven choice — team placed 8th at RoboSub 2025 using it. While Bumblebee and many top-10 teams use behaviour trees (Py Trees), YASMIN's zero ramp-up time, built-in web viewer, and `MonitorState` integration with our topic architecture make it the higher-ROI path for our team size. See `15_MISSION_PLANNER_ANALYSIS.md` for the full comparison.
+1. **State Machine Mission Planner (YASMIN)** — ✅ **IMPLEMENTED.** The `duburi_planner` package provides YASMIN HFSM with 8 reusable states and 2 missions (`gate.py`, `demo_square.py`). **Remaining work:** implement state machines for slalom, torpedoes, bins, and octagon tasks. See `16_PLANNER_DOCUMENTATION.md` for the full implementation guide.
 
 2. **Simulation Environment** — We cannot rely solely on pool time for testing mission logic. A basic Gazebo simulation with gate and bin props would let us iterate 10x faster on behaviour tree development. Our own TDR mentions Unreal Engine 5 simulation capability — this needs to be connected to the ROS 2 stack.
 
@@ -243,15 +243,16 @@ Fallback: Revert to Stage 1 + proportional approach
 ## 9. Summary: Where We Stand
 
 **Strengths (exploit these):**
-- Clean, well-documented ROS 2 architecture
+- Clean, well-documented ROS 2 architecture (10 packages, 80 Python files)
+- YASMIN hierarchical state machine planner with web viewer — proven at RoboSub 2025 (8th place)
 - Interactive development workflow (runner CLI)
 - Efficient vision pipeline on constrained hardware
 - Rich command vocabulary with clean message interfaces
 - Strong foundation for extension (message types, command dispatch)
 
 **Weaknesses (address these):**
-- No mission planner beyond linear scripts
-- No simulation environment connected to ROS 2
+- ~~No mission planner beyond linear scripts~~ → ✅ YASMIN HFSM implemented (`duburi_planner`), but only 2 of 6 competition tasks have state machines
+- No simulation environment connected to ROS 2 (Gazebo SITL stack documented but not integrated)
 - No trajectory planning (bang-bang only)
 - No pose estimation or depth estimation
 - Single-object tracking only
@@ -263,7 +264,7 @@ Fallback: Revert to Stage 1 + proportional approach
 - Orin Nano thermal limits may constrain adding more perception stages
 
 **Opportunities:**
-- YASMIN is ROS 2-native, apt-installable, and proven by the team at RoboSub 2025
+- YASMIN is ROS 2-native, apt-installable, proven at RoboSub 2025, and **now implemented** in `duburi_planner`
 - DepthAnything V2 and XFeat both have lightweight variants suitable for Orin Nano
 - Our `alignment_controller` already provides the visual servo building block that YASMIN `MonitorState` task nodes need
 - The `duburi_common` pattern can be extended to share task definitions between planner and executor

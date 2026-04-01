@@ -20,14 +20,20 @@ except ImportError:
 
 ## MISSION_PATHS
 
+> **Note (updated):** `MISSION_PATHS` is now defined centrally in `duburi_common.constants` and re-exported by `mavlink_runner.constants`. The runner no longer defines this locally — it imports from the shared module to avoid duplication across runner and mission_executor.
+
 ```python
+# duburi_common/constants.py (canonical definition)
 MISSION_PATHS = [
     Path.cwd() / 'missions',
     Path(__file__).resolve().parent.parent / 'missions',
     Path.home() / '.duburi' / 'missions',
 ]
+
+# mavlink_runner/constants.py (re-export)
+from duburi_common.constants import MISSION_PATHS, HISTORY_FILE
 ```
-**Why:** Search order: current dir, package `missions/`, user `~/.duburi/missions/`. Lets users add missions without changing code.
+**Why:** Search order: current dir, package `missions/`, user `~/.duburi/missions/`. Lets users add missions without changing code. Centralised in `duburi_common` so both `mavlink_runner` and `mavlink_driver.mission_executor` use the same paths.
 
 ---
 

@@ -1,5 +1,12 @@
 # 15 — Mission Planner Analysis: YASMIN (FSM) vs Behaviour Trees
 
+> **✅ IMPLEMENTATION STATUS (2026):** YASMIN has been implemented in the `duburi_planner` package. The analysis below remains valid as the architectural rationale. For the actual implementation details, see `16_PLANNER_DOCUMENTATION.md`.
+>
+> **What exists now:**
+> - 8 reusable states: `arm.py`, `submerge.py`, `drive.py`, `surface.py`, `search.py`, `align.py`, `wait_feedback.py`, `send_command.py`
+> - 2 missions: `gate.py`, `demo_square.py`
+> - States inherit from `yasmin.State`, use `driver_client` functions, publish `DriverCommand` to `/driver/command`
+
 Comprehensive comparison of **YASMIN** (Yet Another State MachINe) against **Py Trees** (behaviour trees) as the mission planning layer for the Duburi 4.2 ROS 2 stack. Evaluates both paradigms against the concrete codebase, existing integration points, and team context — including the 8th-place RoboSub 2025 finish using YASMIN.
 
 > **Verdict: Use YASMIN.** Team experience, ROS 2-native integration, web viewer, and proven competition performance outweigh the structural elegance of behaviour trees at RoboSub scale.
@@ -349,27 +356,36 @@ def build_gate_task():
 
 ### 5.5 Package Structure
 
+**Proposed (from this analysis)** vs **Actual (as implemented):**
+
 ```
-src/
-└── duburi_planner/
-    ├── package.xml                 # depends: yasmin, yasmin_ros, duburi_interfaces
-    ├── setup.py
-    ├── duburi_planner/
-    │   ├── __init__.py
-    │   ├── mission_node.py         # ROS 2 node, constructs & runs top-level SM
-    │   ├── mission_builder.py      # build_gate_task(), build_slalom_task(), etc.
-    │   ├── states/
-    │   │   ├── __init__.py
-    │   │   ├── init_state.py       # arm, submerge, set mode
-    │   │   ├── search_state.py     # generic: move + monitor detections
-    │   │   ├── align_state.py      # MonitorState wrapper for alignment_status
-    │   │   ├── navigate_state.py   # MonitorState wrapper for vehicle_state
-    │   │   ├── drive_state.py      # timed forward drive (pass-through, approach)
-    │   │   └── surface_state.py    # surface and disarm
-    │   └── watchdog.py             # background thread: battery, leak, heartbeat
-    └── launch/
-        └── mission.launch.py       # launch planner + vision + inspector
+src/duburi_planner/                      # ✅ Package exists
+├── package.xml                          # ✅
+├── setup.py                             # ✅
+├── duburi_planner/
+│   ├── __init__.py                      # ✅
+│   ├── mission_node.py                  # ❌ Not implemented (proposed)
+│   ├── mission_builder.py               # ❌ Not implemented (proposed)
+│   ├── states/                          # ✅ Exists with different file names
+│   │   ├── __init__.py                  # ✅
+│   │   ├── arm.py                       # ✅ (was proposed as init_state.py)
+│   │   ├── submerge.py                  # ✅ (was proposed as init_state.py)
+│   │   ├── search.py                    # ✅ (was proposed as search_state.py)
+│   │   ├── align.py                     # ✅ (was proposed as align_state.py)
+│   │   ├── drive.py                     # ✅ (was proposed as drive_state.py)
+│   │   ├── surface.py                   # ✅ (was proposed as surface_state.py)
+│   │   ├── wait_feedback.py             # ✅ (new — waits for /driver/feedback)
+│   │   └── send_command.py              # ✅ (new — publishes DriverCommand)
+│   ├── missions/                        # ✅ Exists (was proposed as mission_builder.py)
+│   │   ├── __init__.py                  # ✅
+│   │   ├── gate.py                      # ✅ Gate task sub-SM
+│   │   └── demo_square.py              # ✅ Test pattern mission
+│   └── watchdog.py                      # ❌ Not implemented yet
+└── launch/
+    └── mission.launch.py                # ❌ Not implemented yet
 ```
+
+**Key differences from proposal:** States use individual files (one per state) rather than grouped files. Missions are in a separate `missions/` subdirectory rather than a single `mission_builder.py`. Two additional states (`wait_feedback`, `send_command`) were added beyond the original proposal. No `mission_node.py` orchestrator yet — missions are run directly.
 
 ---
 
@@ -409,13 +425,13 @@ The revised recommendation is: **use YASMIN** for the mission planner. If future
 
 The current mission system (`mission_executor.py` + `.txt` files) can coexist with YASMIN during the transition:
 
-| Phase | Action | Current System | YASMIN |
-|---|---|---|---|
-| 0 (now) | Add `duburi_planner` package with YASMIN dependency | Fully operational | Empty scaffold |
-| 1 | Implement `InitState` (arm + submerge + mode) | Still used for all missions | Can run init sequence |
-| 2 | Implement `GateTask` sub-SM | Used for non-gate tasks | Handles gate task |
-| 3 | Add remaining task sub-SMs | Gradually retired | Handles all tasks |
-| 4 | Remove `mission_executor.py` | Deprecated | Primary mission system |
+| Phase | Action | Current System | YASMIN | Status |
+|---|---|---|---|---|
+| 0 | Add `duburi_planner` package with YASMIN dependency | Fully operational | Empty scaffold | ✅ Done |
+| 1 | Implement init states (arm + submerge + mode) | Still used for all missions | Can run init sequence | ✅ Done (`arm.py`, `submerge.py`) |
+| 2 | Implement GateTask sub-SM | Used for non-gate tasks | Handles gate task | ✅ Done (`gate.py` with search → align → drive) |
+| 3 | Add remaining task sub-SMs (slalom, torpedoes, bins, octagon) | Gradually retired | Handles all tasks | ⬜ Not started |
+| 4 | Remove `mission_executor.py` | Deprecated | Primary mission system | ⬜ Blocked by Phase 3 |
 
 At every phase, the runner CLI remains available for manual testing and ad-hoc commands. YASMIN handles autonomous missions only.
 

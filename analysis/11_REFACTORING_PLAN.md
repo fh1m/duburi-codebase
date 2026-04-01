@@ -1,7 +1,7 @@
 # 11 — All-Package Refactoring Plan
 
 > Generated after completing the mavlink_inspector refactoring.
-> **Status**: PLAN ONLY — no code changes until approved.
+> **Status**: Phase 1 largely complete, Phase 2 partially complete. See ✅ markers below.
 
 ---
 
@@ -22,13 +22,13 @@
 
 These are safe, mechanical changes. No behavioral difference.
 
-### 1.1  Extract shared constants — Not yet implemented
+### 1.1  Extract shared constants — ✅ Done (duburi_common.constants)
 - `DEFAULT_SPEED = 50` (used in ~40 signatures in driver_client.py, references in runner.py)
 - `MISSION_PATHS` dict (duplicated in runner.py L35-39 and mission_executor.py L75-79)
 - `_DIRECTION_MAP` (duplicated in runner.py L537-542 and L613-618)
 - Topic names (`/driver/command`, `/mavlink/events`, `/camera/image_raw`) scattered across files
 
-### 1.2  Hoist hardcoded wait times to named constants — Not yet implemented
+### 1.2  Hoist hardcoded wait times to named constants — ✅ Done (duburi_common.constants)
 In runner.py:
 - `4.0` arm wait (L361), `2.0` disarm wait (L366)
 - `2.0` surface wait (L424), `1.0` depth wait (L413)
@@ -36,7 +36,7 @@ In runner.py:
 - `16.8`/`14.0` battery voltage bounds (L230)
 - `3.0` health timer interval (L161), `5.0` stale telemetry threshold (L204)
 
-### 1.3  Extract `resolve_aliases()` shared function — Not yet implemented
+### 1.3  Extract `resolve_aliases()` shared function — ✅ Done (duburi_common.command_vocabulary)
 The `dive→depth`, `p_dive→~depth`, `yaw→heading`, `p_yaw→~heading`, `p_turn→~turn`
 alias table is copied verbatim in:
 - runner.py L320-339
@@ -56,7 +56,7 @@ Eliminates ~100 lines of boilerplate.
 
 ### 1.5  Extract `V4L2Camera` helper class — Not yet implemented
 Camera open/configure/read logic is duplicated 4 times across 2 packages:
-- camera_node.py `_open_camera()` (L90-113)
+- camera_manager_node.py / camera_device.py (camera open/configure logic)
 - camera_tester.py `run_test()` (L50-62)
 - camera_calibrator.py `run_calibration()` (L79-89)
 - detector_standalone.py `run()` (L68-77)
@@ -83,15 +83,15 @@ check with `is not None` instead of `hasattr()`.
 
 These change dispatch architecture. Behavioral testing required after each.
 
-### 2.1  Unify command parsing (HIGHEST LEVERAGE)
-**The #1 cross-cutting issue.** Two independent parsers exist:
+### 2.1  Unify command parsing (HIGHEST LEVERAGE) — ✅ Done
+**The #1 cross-cutting issue was resolved.** Two independent parsers existed:
 - runner.py `_parse_one()` (L287-693): regex-based, ~400 lines if/elif
 - mission_executor.py `_parse_file_command()` (L318-478): positional args, ~150 lines if/elif
 
 Both support the same command vocabulary with independently maintained logic.
 Every new command requires dual edits.
 
-**Plan**: Create `command_parser.py` in mavlink_driver:
+**Resolution:** Created `command_parser.py` in `mavlink_runner` and `mission_parser.py` in `mavlink_driver`, both sharing `duburi_common.command_vocabulary`:
 ```
 command_parser.py
 ├── resolve_aliases(cmd) → normalized cmd
@@ -100,16 +100,14 @@ command_parser.py
 └── COMMAND_DISPATCH: dict[str, Callable]
 ```
 
-### 2.2  Convert runner `_parse_one()` to dispatch table
-Replace ~400-line if/elif chain with dispatch dict mapping command names → handlers.
-Same pattern that worked for inspector's command_handler.py and telemetry_parser.py.
+### 2.2  Convert runner `_parse_one()` to dispatch table — ✅ Done
+The runner's `_parse_one()` now delegates to `command_parser.parse_command()` which uses the shared vocabulary and dispatch pattern.
 
-### 2.3  Convert executor `_parse_file_command()` to dispatch table
-Same approach as 2.2, sharing the dispatch dictionary from 2.1.
+### 2.3  Convert executor `_parse_file_command()` to dispatch table — ✅ Done
+Extracted to `mission_parser.parse_file_command()` which uses `duburi_common.command_vocabulary` for shared alias/prefix resolution.
 
-### 2.4  Extract `_print_status()` rendering from business logic
-runner.py L209-274 (65 lines) mixes ANSI rendering with data formatting.
-Separate into a data model (dict) and a renderer function.
+### 2.4  Extract `_print_status()` rendering from business logic — ✅ Done
+Extracted to `mavlink_runner/status_display.py` (75 lines). Clean separation of status data model from ANSI rendering.
 
 ### 2.5  Move `pool_test` hardcoded mission to file
 mission_executor.py `_mission_pool_test()` (L229-262) has an inline mission.
