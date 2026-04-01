@@ -1,11 +1,12 @@
 # 12 — Code Reference: Post-Refactor Module Map
 
-> **Commit:** `f62781f` — "Modularize: split large files into focused modules"  
-> **Date:** 2026-03-06  
-> **Total:** 33 Python source files across 7 packages (~5 600 lines)
+> **Commit:** `d0a48d6` — "BlueOS+Jetson bring-up guide and HEARTBEAT source gating fix"  
+> **Date:** 2026-03-28  
+> **Total:** 72 Python source files across 9 packages (~10,556 lines)
 
 This document maps every package, module, class, and public function in the
-BRACU Duburi AUV 4.2 ROS 2 codebase after the Phase 1 modularization refactor.
+BRACU Duburi AUV 4.2 ROS 2 codebase after the Phase 1 modularization refactor
+and the addition of the YASMIN FSM mission planner.
 
 ---
 
@@ -18,10 +19,11 @@ BRACU Duburi AUV 4.2 ROS 2 codebase after the Phase 1 modularization refactor.
 5. [mavlink_logger](#5-mavlink_logger)
 6. [vision](#6-vision)
 7. [vision_inspector](#7-vision_inspector)
-8. [duburi_common](#8-duburi_common)
-9. [duburi_interfaces](#9-duburi_interfaces)
-10. [Cross-Package Dependency Graph](#10-cross-package-dependency-graph)
-11. [Import Map](#11-import-map)
+8. [duburi_planner](#8-duburi_planner)
+9. [duburi_common](#9-duburi_common)
+10. [duburi_interfaces](#10-duburi_interfaces)
+11. [Cross-Package Dependency Graph](#11-cross-package-dependency-graph)
+12. [Import Map](#12-import-map)
 
 ---
 
@@ -29,13 +31,14 @@ BRACU Duburi AUV 4.2 ROS 2 codebase after the Phase 1 modularization refactor.
 
 | Package | Role | Modules | Lines | ROS Nodes |
 |---|---|---|---|---|
-| `mavlink_inspector` | MAVLink ↔ ROS bridge | 6 | ~2 088 | `mavlink_inspector` |
-| `mavlink_driver` | High-level command API + missions | 5 | ~1 044 | `mission_executor`, `teleop_driver` |
+| `mavlink_inspector` | MAVLink ↔ ROS bridge | 7 | ~2,301 | `mavlink_inspector` |
+| `mavlink_driver` | High-level command API + missions | 5 | ~1,044 | `mission_executor`, `teleop_driver` |
 | `mavlink_runner` | Human-facing CLI | 4 | ~917 | `duburi_runner` |
 | `mavlink_logger` | Topic logging to CSV/JSON | 1 | ~233 | `mavlink_logger` |
-| `vision` | YOLO object detection | 3 | ~501 | `detector_node` |
-| `vision_inspector` | Camera management & calibration | 4 | ~811 | `camera_node`, `camera_enumerator`, `camera_tester`, `camera_calibrator` |
-| `duburi_common` | Shared constants and command vocabulary | 2 | — | — |
+| `vision` | YOLO detection + visual servo + Kalman tracking | 6 | ~1,374 | `detector_node` |
+| `vision_inspector` | Camera management, calibration, recording | 8 | ~1,380 | `camera_node`, `camera_enumerator`, `camera_tester`, `camera_calibrator`, `camera_recorder`, `camera_playback`, `frame_publisher` |
+| `duburi_planner` | YASMIN FSM mission planner | 18 | ~2,100 | `mission_planner` |
+| `duburi_common` | Shared constants and command vocabulary | 2 | ~207 | — |
 | `duburi_interfaces` | ROS 2 msg/srv definitions | — | — | — |
 
 ---
@@ -472,7 +475,8 @@ user input → strip → lowercase
 
 ## 6. vision
 
-> **Purpose:** YOLO-based object detection for underwater gate/buoy recognition.
+> **Purpose:** YOLO-based object detection for underwater gate/buoy recognition,
+> Kalman-filtered bounding box tracking, and closed-loop visual servoing.
 
 ### 6.1 detector_node.py (263 lines)
 
@@ -486,7 +490,53 @@ user input → strip → lowercase
 
 ---
 
-### 6.2 detector_standalone.py (175 lines)
+### 6.2 alignment_controller.py (635 lines)
+
+**Role:** Visual servo controller that aligns AUV to a detected target (gate post,
+buoy). Provides three control modes: PID, proportional, and bang-bang.
+
+| Item | Kind | Purpose |
+|---|---|---|
+| `AlignmentController` | class (Node) | Subscribes to detections, publishes `TeleopCommand` for closed-loop alignment |
+| `ControlMode` | enum | `PID`, `PROPORTIONAL`, `BANG_BANG` |
+| `_on_detection()` | method | Computes error from bounding box center to image center, applies control law |
+| `_pid_control()` | method | Full PID with integral anti-windup and derivative filtering |
+| `_proportional_control()` | method | Simple gain × error |
+| `_bangbang_control()` | method | Fixed-speed control above deadband threshold |
+| `_publish_alignment_status()` | method | Publishes `AlignmentStatus` msg for mission planner feedback |
+| `reset()` | method | Zeros PID integral terms, called on target loss |
+
+**Parameters:** `kp_yaw`, `ki_yaw`, `kd_yaw`, `kp_forward`, `target_class`, `deadband_x`, `deadband_area`, `control_mode`
+
+**Depends on:** `duburi_interfaces.msg.TeleopCommand`, `duburi_interfaces.msg.AlignmentStatus`, `duburi_interfaces.msg.DetectionArray`
+
+---
+
+### 6.3 kalman_tracker.py (238 lines)
+
+**Role:** Kalman filter for smoothing YOLO bounding box detections and handling
+temporary dropouts (occlusion, missed frames).
+
+| Item | Kind | Purpose |
+|---|---|---|
+| `KalmanTracker` | class | Tracks single target with position + velocity state |
+| `predict()` | method | State extrapolation step (called every frame) |
+| `update()` | method | Measurement incorporation when detection available |
+| `get_smoothed_bbox()` | method | Returns filtered bounding box (cx, cy, w, h) |
+| `is_valid()` | property | True if tracker has recent measurements (within dropout threshold) |
+| `reset()` | method | Reinitializes filter state for new target |
+
+**Features:**
+- 8-state vector: [cx, cy, w, h, vx, vy, vw, vh]
+- Configurable process/measurement noise (Q, R matrices)
+- Dropout handling: continues prediction for N frames without measurement
+- Automatic reset on large innovation (new target detection)
+
+**Depends on:** `numpy` (standalone, fully unit-testable)
+
+---
+
+### 6.4 detector_standalone.py (175 lines)
 
 | Item | Kind | Purpose |
 |---|---|---|
@@ -497,7 +547,7 @@ user input → strip → lowercase
 
 ---
 
-### 6.3 image_utils.py (63 lines)
+### 6.5 image_utils.py (63 lines)
 
 **Role:** cv_bridge replacement for ROS 2 Image ↔ OpenCV conversion.
 
@@ -510,9 +560,23 @@ user input → strip → lowercase
 
 ---
 
+### 6.6 config.py (~50 lines)
+
+**Role:** Centralized vision configuration constants.
+
+| Item | Kind | Purpose |
+|---|---|---|
+| `DEFAULT_MODEL_PATH` | constant | Default YOLO model location |
+| `DEFAULT_CONFIDENCE` | constant | Detection confidence threshold |
+| `DEFAULT_IMAGE_SIZE` | constant | YOLO inference resolution |
+
+**Depends on:** nothing (standalone)
+
+---
+
 ## 7. vision_inspector
 
-> **Purpose:** Camera device management, calibration, and raw image publishing.
+> **Purpose:** Camera device management, calibration, recording/playback, and raw image publishing.
 
 ### 7.1 camera_node.py (219 lines)
 
@@ -550,11 +614,212 @@ user input → strip → lowercase
 
 ---
 
-## 8. duburi_common
+### 7.5 camera_recorder.py (~180 lines)
+
+| Item | Kind | Purpose |
+|---|---|---|
+| `CameraRecorderNode` | class (Node) | Records camera stream to video file (MP4/AVI) |
+| `_on_image()` | method | Writes frames to video writer with timestamp overlay |
+| `_start_recording()` / `_stop_recording()` | methods | Lifecycle control |
+
+**Parameters:** `output_dir`, `codec`, `fps`, `record_on_start`
+
+---
+
+### 7.6 camera_playback.py (~150 lines)
+
+| Item | Kind | Purpose |
+|---|---|---|
+| `CameraPlaybackNode` | class (Node) | Replays recorded video as ROS Image topic |
+| `_playback_loop()` | method | Timer-driven frame publishing at original FPS |
+
+**Parameters:** `video_file`, `loop`, `start_paused`
+
+---
+
+### 7.7 frame_publisher.py (~120 lines)
+
+| Item | Kind | Purpose |
+|---|---|---|
+| `FramePublisherNode` | class (Node) | Publishes individual image files as ROS Images |
+| `publish_frame()` | method | Loads image from disk, publishes once |
+
+**Use case:** Testing detection pipeline with static images.
+
+---
+
+### 7.8 calibration_store.py (~100 lines)
+
+| Item | Kind | Purpose |
+|---|---|---|
+| `CalibrationStore` | class | YAML-based camera calibration storage |
+| `load()` / `save()` | methods | Read/write intrinsic matrix, distortion coefficients |
+| `get_undistort_maps()` | method | Returns OpenCV remap arrays for undistortion |
+
+**Depends on:** `pyyaml`, `numpy`, `cv2`
+
+---
+
+## 8. duburi_planner
+
+> **Purpose:** YASMIN-based finite state machine mission planner for autonomous
+> task execution. Implements hierarchical state machines for RoboSub missions.
+
+### 8.1 mission_node.py (~250 lines)
+
+**Role:** Main ROS 2 node that orchestrates mission execution via YASMIN FSM.
+
+| Item | Kind | Purpose |
+|---|---|---|
+| `MissionPlannerNode` | class (Node) | Creates state machine, manages mission lifecycle |
+| `__init__()` | method | Builds FSM from mission config, creates PlannerContext |
+| `run_mission()` | method | Executes selected mission FSM |
+| `_on_abort()` | method | SIGINT handler — transitions to safe state, surfaces |
+
+**Parameters:** `mission_name`, `enable_viz` (YASMIN viewer)
+
+**Depends on:** `yasmin`, `planner_context`, `missions/*`
+
+---
+
+### 8.2 planner_context.py (~200 lines)
+
+**Role:** Shared context object passed to all states via YASMIN blackboard.
+Holds ROS publishers, subscribers, and cached vehicle state.
+
+| Item | Kind | Purpose |
+|---|---|---|
+| `PlannerContext` | class | Container for shared ROS resources |
+| `command_pub` | attribute | Publisher for `/driver/command` |
+| `teleop_pub` | attribute | Publisher for `/driver/teleop` |
+| `vehicle_state` | property | Cached latest `VehicleState` |
+| `detections` | property | Cached latest `DetectionArray` |
+| `alignment_status` | property | Cached latest `AlignmentStatus` |
+| `send_command()` | method | Publishes `DriverCommand` with optional wait |
+| `wait_for_depth()` | method | Blocks until depth within tolerance |
+| `wait_for_alignment()` | method | Blocks until alignment converged |
+
+**Depends on:** `duburi_interfaces.msg.*`, `mavlink_driver.driver_client`
+
+---
+
+### 8.3 planner_config.py (~150 lines)
+
+**Role:** Dataclasses for mission and task configuration.
+
+| Item | Kind | Purpose |
+|---|---|---|
+| `TaskConfig` | dataclass | Per-task tunables (timeouts, thresholds, speeds) |
+| `MissionConfig` | dataclass | Mission-level settings (task sequence, abort behavior) |
+| `load_config()` | function | Loads config from YAML file |
+| `GateConfig`, `BuoyConfig`, etc. | dataclasses | Task-specific configuration |
+
+---
+
+### 8.4 bb_utils.py (~80 lines)
+
+**Role:** YASMIN blackboard utility functions.
+
+| Item | Kind | Purpose |
+|---|---|---|
+| `get_context()` | function | Retrieves `PlannerContext` from blackboard |
+| `set_task_result()` | function | Stores task outcome in blackboard |
+| `get_task_result()` | function | Retrieves previous task outcome |
+
+---
+
+### 8.5 states/ Directory (6 files, ~800 lines total)
+
+**Role:** YASMIN state implementations for mission primitives.
+
+#### states/base_state.py (~100 lines)
+
+| Item | Kind | Purpose |
+|---|---|---|
+| `BaseState` | class (State) | Abstract base with logging, timeout, and abort handling |
+| `on_enter()` | method | Called on state entry (override in subclasses) |
+| `on_exit()` | method | Called on state exit |
+| `execute()` | method | Main state logic (override in subclasses) |
+
+#### states/submerge_state.py (~120 lines)
+
+| Item | Kind | Purpose |
+|---|---|---|
+| `SubmergeState` | class (State) | Arms, sets mode, descends to target depth |
+| Outcomes | | `succeeded`, `failed`, `aborted` |
+
+#### states/search_state.py (~150 lines)
+
+| Item | Kind | Purpose |
+|---|---|---|
+| `SearchState` | class (State) | Searches for target object (yaw sweep or forward cruise) |
+| `_yaw_search()` | method | Rotates in place looking for detection |
+| `_cruise_search()` | method | Moves forward while scanning |
+| Outcomes | | `found`, `not_found`, `aborted` |
+
+#### states/align_state.py (~180 lines)
+
+| Item | Kind | Purpose |
+|---|---|---|
+| `AlignState` | class (State) | Visual servo alignment to detected target |
+| `execute()` | method | Enables alignment controller, waits for convergence |
+| Outcomes | | `aligned`, `lost_target`, `timeout`, `aborted` |
+
+#### states/drive_state.py (~130 lines)
+
+| Item | Kind | Purpose |
+|---|---|---|
+| `DriveState` | class (State) | Drives forward through gate or toward target |
+| `execute()` | method | Sends forward command for configured duration |
+| Outcomes | | `succeeded`, `aborted` |
+
+#### states/surface_state.py (~120 lines)
+
+| Item | Kind | Purpose |
+|---|---|---|
+| `SurfaceState` | class (State) | Ascends to surface, disarms |
+| `execute()` | method | Sends surface command, waits, disarms |
+| Outcomes | | `succeeded`, `failed` |
+
+---
+
+### 8.6 missions/ Directory (3 files, ~400 lines total)
+
+**Role:** Mission-specific state machine definitions.
+
+#### missions/gate_mission.py (~200 lines)
+
+| Item | Kind | Purpose |
+|---|---|---|
+| `create_gate_fsm()` | function | Builds YASMIN state machine for gate task |
+
+**State sequence:**
+```
+START → SubmergeState → SearchState → AlignState → DriveState → SurfaceState → END
+                              ↑              │
+                              └──lost_target─┘
+```
+
+#### missions/buoy_mission.py (~100 lines)
+
+| Item | Kind | Purpose |
+|---|---|---|
+| `create_buoy_fsm()` | function | Builds state machine for buoy touch task |
+
+#### missions/mission_registry.py (~50 lines)
+
+| Item | Kind | Purpose |
+|---|---|---|
+| `MISSIONS` | dict | Registry mapping mission name → FSM factory function |
+| `get_mission()` | function | Returns FSM for requested mission name |
+
+---
+
+## 9. duburi_common
 
 > **Purpose:** Shared Python library (no ROS nodes): command vocabulary and stack-wide constants so `mavlink_runner` and `mavlink_driver` do not duplicate parsing rules, paths, or allow-lists.
 
-### 8.1 command_vocabulary.py
+### 9.1 command_vocabulary.py
 
 | Item | Kind | Purpose |
 |---|---|---|
@@ -567,7 +832,7 @@ user input → strip → lowercase
 
 **Imported by:** `mavlink_runner.command_parser`, `mavlink_driver.mission_parser`
 
-### 8.2 constants.py
+### 9.2 constants.py
 
 | Item | Kind | Purpose |
 |---|---|---|
@@ -582,7 +847,7 @@ user input → strip → lowercase
 
 ---
 
-## 9. duburi_interfaces
+## 10. duburi_interfaces
 
 > **Purpose:** ROS 2 message and service definitions shared by all packages.
 
@@ -590,16 +855,18 @@ user input → strip → lowercase
 
 | Message | Fields | Used By |
 |---|---|---|
-| `DriverCommand` | `command`, `mode`, `depth`, `angle`, `duration`, `speed`, `status` | driver, runner → inspector, logger |
-| `TeleopCommand` | `linear_x`, `linear_y`, `linear_z`, `angular_z`, `speed`, `idle` | teleop_driver → inspector (`/driver/teleop`) |
+| `DriverCommand` | `command`, `mode`, `depth`, `angle`, `duration`, `speed`, `status` | driver, runner, planner → inspector, logger |
+| `TeleopCommand` | `linear_x`, `linear_y`, `linear_z`, `angular_z`, `speed`, `idle` | teleop_driver, alignment_controller → inspector |
 | `VehicleState` | `armed`, `mode`, `heading`, `depth`, `roll`, `pitch`, `yaw`, `battery_voltage`, `battery_current`, `battery_remaining`, `servos[8]`, `rc_channels[8]` | inspector → all |
 | `VehicleDiagnostics` | `cpu_temp`, `board_voltage`, `system_status`, `errors_count` | inspector (not subscribed by mavlink_logger) |
 | `MavlinkEvent` | `event_type`, `description`, `timestamp` | inspector → logger |
-| `DetectionArray` | `detections[]` — each with `class_name`, `confidence`, `bbox` | vision → runner |
+| `DetectionArray` | `detections[]` — each with `class_name`, `confidence`, `bbox` | vision → planner, alignment_controller |
+| `AlignmentStatus` | `aligned`, `error_x`, `error_y`, `error_area`, `target_visible` | alignment_controller → planner |
+| `CameraStatus` | `device_id`, `width`, `height`, `fps`, `is_recording` | vision_inspector → logger |
 
 ---
 
-## 10. Cross-Package Dependency Graph
+## 11. Cross-Package Dependency Graph
 
 ```
 duburi_interfaces (ROS msgs/srv)              duburi_common (Python library)
@@ -614,7 +881,15 @@ duburi_interfaces (ROS msgs/srv)              duburi_common (Python library)
                     + internal mods                       driver_client,
                                                             just_commands
 
-            vision / vision_inspector ──► duburi_interfaces only (+ ultralytics)
+            vision ──────────────────────────► duburi_interfaces + ultralytics
+               │                                         ▲
+               │ (AlignmentStatus, DetectionArray)       │
+               ▼                                         │
+         duburi_planner ─────────────────────────────────┘
+               │
+               └──► yasmin (YASMIN FSM library)
+
+            vision_inspector ──► duburi_interfaces only
 ```
 
 **Key dependency rules:**
@@ -622,11 +897,12 @@ duburi_interfaces (ROS msgs/srv)              duburi_common (Python library)
 - `mavlink_driver` depends on `duburi_interfaces` and `duburi_common`
 - `mavlink_runner` imports from `mavlink_driver` (`driver_client`, `just_commands`) and `duburi_common`
 - `vision` depends on `duburi_interfaces` and `ultralytics`
+- `duburi_planner` depends on `duburi_interfaces`, `mavlink_driver.driver_client`, `yasmin`, and subscribes to `vision` topics
 - All inter-package communication is via ROS 2 topics (loose coupling)
 
 ---
 
-## 11. Import Map
+## 12. Import Map
 
 ### What imports what (Python-level)
 
@@ -672,6 +948,23 @@ mavlink_inspector.movement_commands
 
 vision.detector_node
   ← vision.image_utils              (ros_image_to_cv2, cv2_to_ros_image)
+
+vision.alignment_controller
+  ← vision.kalman_tracker           (KalmanTracker)
+  ← duburi_interfaces.msg           (TeleopCommand, AlignmentStatus, DetectionArray)
+
+duburi_planner.planner_context
+  ← mavlink_driver.driver_client    (make_command, arm, disarm, stop, etc.)
+  ← duburi_interfaces.msg           (DriverCommand, VehicleState, DetectionArray, AlignmentStatus)
+
+duburi_planner.states.*
+  ← duburi_planner.planner_context  (PlannerContext)
+  ← duburi_planner.bb_utils         (get_context, set_task_result)
+  ← yasmin                          (State, Blackboard)
+
+duburi_planner.missions.*
+  ← duburi_planner.states.*         (all state classes)
+  ← yasmin                          (StateMachine)
 ```
 
 ### No circular dependencies
@@ -707,8 +1000,15 @@ resolved by removing the unused re-export block from `driver_client.py`.
 | Channel constants | `rc_controller.py` | mavlink_inspector |
 | Image conversion | `image_utils.py` | vision |
 | YOLO detection | `detector_node.py` | vision |
+| `AlignmentController` | `alignment_controller.py` | vision |
+| `KalmanTracker` | `kalman_tracker.py` | vision |
 | Camera publishing | `camera_node.py` | vision_inspector |
+| Camera recording | `camera_recorder.py` | vision_inspector |
+| `MissionPlannerNode` | `mission_node.py` | duburi_planner |
+| `PlannerContext` | `planner_context.py` | duburi_planner |
+| FSM states | `states/*.py` | duburi_planner |
+| Mission definitions | `missions/*.py` | duburi_planner |
 
 ---
 
-*Document generated from full codebase audit at commit `f62781f`.*
+*Document updated from full codebase audit at commit `d0a48d6`.*

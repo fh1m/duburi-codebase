@@ -132,10 +132,12 @@ Extract to a reusable `YoloInference` class.
 camera_tester.py (L67-131) and detector_standalone.py (L83-151) share the same
 read→FPS→overlay→keyboard→display loop. Extract to a callback-based helper.
 
-### 3.3  Add `TeleopCommand.msg` to duburi_interfaces
+### 3.3  Add `TeleopCommand.msg` to duburi_interfaces — ✅ RESOLVED
 DriverCommand field overloading for teleop (Issue 7 from design issues):
-`speed`, `duration`, `depth`, `angle` are repurposed to carry PWM offsets.
-Need a dedicated message type. Requires interface rebuild.
+`speed`, `duration`, `depth`, `angle` were repurposed to carry PWM offsets.
+**Resolution:** Added dedicated `TeleopCommand.msg` with proper fields:
+`linear_x`, `linear_y`, `linear_z`, `angular_z`, `speed`, `idle`.
+See `teleop_driver.py` and `alignment_controller.py` for usage.
 
 ### 3.4  Add logger error resilience
 Wrap file I/O in logger_node.py (`write()`/`flush()` at L162, L168) in
@@ -201,4 +203,4 @@ For reference, the inspector refactoring addressed:
 Remaining known items:
 - Issue 2: Unit tests (deferred)
 - Issue 6: RC idle optimization (deferred — too risky before testing)
-- Issue 7: DriverCommand overloading (Phase 3.3 above)
+- Issue 7: DriverCommand overloading — ✅ RESOLVED (TeleopCommand.msg added)

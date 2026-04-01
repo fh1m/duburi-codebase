@@ -7,8 +7,9 @@ This ROS 2 workspace controls the **BRACU Duburi AUV 4.2** (RoboSub vehicle). It
 - A single point of MAVLink connection (no multiple nodes opening the same port)
 - High-level movement commands (forward, left, depth, yaw, cruise, body-frame vector, etc.)
 - Interactive CLI for pool testing
-- File-based missions
-- Teleop via Twist
+- File-based missions and YASMIN FSM autonomous missions
+- Teleop via Twist and visual servo alignment
+- YOLO-based object detection with Kalman filtering
 - Logging for debugging
 - Command feedback for mission coordination (DriverCommandFeedback)
 - PWM velocity ramp for smooth thruster control
@@ -21,7 +22,8 @@ This ROS 2 workspace controls the **BRACU Duburi AUV 4.2** (RoboSub vehicle). It
 3. **Command abstraction**: High-level commands (e.g. `move left 50% 10s`) are translated to RC_CHANNELS_OVERRIDE by the inspector.
 4. **Separation of concerns (DESIGN 5)**: Each command only sets the channels it owns. PID layers independently control depth (throttle) and heading (yaw).
 5. **Non-blocking UX**: Arm/disarm and event handling avoid blocking the CLI.
-6. **Mission flexibility**: Missions can be run from the CLI (`run gate`) or from custom Python nodes using `driver_client`.
+6. **Mission flexibility**: Missions can be run from the CLI (`run gate`) or from custom Python nodes using `driver_client` or from the YASMIN FSM planner.
+7. **Vision-control separation**: Detection runs independently; alignment controller closes the loop at camera frame rate.
 
 ## Hardware Context
 
@@ -30,6 +32,7 @@ This ROS 2 workspace controls the **BRACU Duburi AUV 4.2** (RoboSub vehicle). It
 - **Channels**: 1=Pitch, 2=Roll, 3=Throttle (depth), 4=Yaw, 5=Forward, 6=Lateral
 - **PWM**: 1100–1900, neutral 1500
 - **Connection**: Serial 115200 baud
+- **Cameras**: USB cameras via V4L2, typically 640x480 @ 30fps
 
 ## Reference Codebases
 
@@ -38,6 +41,7 @@ This design draws from:
 - `/home/duburi/old_stuff/auv/src/mishu/mishu` – RoboSub-tested control (control.py, basic.py, control_utility.py)
 - ArduSub pymavlink docs (ardusub.com, darksleep.com)
 - ArduPilot Sub documentation
+- YASMIN (Yet Another State MachINe) for ROS 2
 
 ## File Layout
 
@@ -52,7 +56,19 @@ duburi_ws/
 │   ├── mavlink_runner/        # Duburi > CLI
 │   ├── mavlink_logger/        # Session logs under logs/
 │   ├── vision/                # YOLO11 detection, Kalman tracking, PID visual servo
-│   └── vision_inspector/      # Multi-camera management, calibration, recording
+│   ├── vision_inspector/      # Multi-camera management, calibration, recording, playback
+│   └── duburi_planner/        # YASMIN FSM mission planner with hierarchical states
 ├── missions/                  # Mission .txt files (run gate, etc.)
-└── analysis/                  # This documentation (17+ documents)
+├── config/                    # YAML configuration files for planner and vision
+└── analysis/                  # This documentation (20+ documents)
 ```
+
+## Codebase Statistics
+
+| Metric | Value |
+|--------|-------|
+| Python source files | 72 |
+| Total lines of code | ~10,556 |
+| ROS 2 packages | 9 |
+| Custom message types | 8 |
+| ROS nodes | 12+ |
