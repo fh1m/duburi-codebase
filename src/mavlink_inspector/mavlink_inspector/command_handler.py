@@ -4,7 +4,7 @@ System commands (arm, disarm, mode, depth, stop) live here.
 Movement commands live in ``movement_commands.py`` — edit that file
 to add custom maneuvers.
 
-Every movement registered in ``MOVEMENTS`` automatically gets a
+Every movement registered via @register decorator automatically gets a
 ``just_*`` variant that bypasses the velocity ramp.
 """
 
@@ -14,6 +14,8 @@ import math
 import time
 
 from duburi_interfaces.msg import DriverCommand, TeleopCommand
+
+from duburi_common.command_registry import get_command, CommandCategory
 
 from .pid_controller import PidController
 from .rc_controller import (
@@ -121,6 +123,17 @@ class CommandHandler:
         self._cmd_name = cmd.command.lower()
         c = self._cmd_name
 
+        # Check if bypass_ramp is set (new field) or just_* prefix
+        if getattr(cmd, 'bypass_ramp', False) or c.startswith('just_'):
+            self._just_mode = True
+            if c.startswith('just_'):
+                # Check if it's an explicit just_* command in registry first
+                spec = get_command(c)
+                if spec is None or spec.handler is None:
+                    # Not explicitly registered, delegate to auto handler
+                    pass
+                # else: fall through to normal dispatch
+
         # Log every incoming command
         self._log_command(c, cmd)
 
@@ -131,8 +144,12 @@ class CommandHandler:
             n._publish_feedback(c, 'accepted', detail='routed to vision alignment controller')
             return
 
-        # Armed-state gate
-        if not n._telemetry.armed and c not in self.UNARMED_ALLOWED:
+        # Armed-state gate (check registry for requires_armed flag)
+        spec = get_command(c)
+        requires_armed = True
+        if spec is not None:
+            requires_armed = spec.requires_armed
+        if not n._telemetry.armed and c not in self.UNARMED_ALLOWED and requires_armed:
             n.get_logger().warn(
                 f'Rejecting "{c}" - vehicle not armed. Arm first.')
             n._publish_event('command_rejected',
@@ -149,23 +166,29 @@ class CommandHandler:
             handler(cmd)
             return
 
-        # 2. Movement commands (from movement_commands.py)
+        # 2. Try registry lookup first (preferred path)
+        spec = get_command(c)
+        if spec is not None and spec.handler is not None:
+            spec.handler(self, cmd)
+            return
+
+        # 3. Fallback to MOVEMENTS dict (backward compatibility)
         handler = MOVEMENTS.get(c)
         if handler:
             handler(self, cmd)
             return
 
-        # 3. just_* auto-delegation
+        # 4. just_* auto-delegation
         if c.startswith('just_'):
             self._handle_just_auto(c, cmd)
             return
 
-        # 4. go_* prefix (movement + yaw PID)
+        # 5. go_* prefix (movement + yaw PID)
         if c.startswith('go_'):
             handle_go(self, c, cmd)
             return
 
-        # 5. Compound diagonal: move_forward_right, etc.
+        # 6. Compound diagonal: move_forward_right, etc.
         if c.startswith('move_') and '_' in c[5:]:
             handle_compound_move(self, c, cmd)
             return
@@ -187,7 +210,13 @@ class CommandHandler:
 
         self._just_mode = True
         try:
-            # Registered movement?
+            # Try registry lookup first
+            spec = get_command(raw)
+            if spec is not None and spec.handler is not None:
+                spec.handler(self, cmd)
+                return
+
+            # Fallback to MOVEMENTS dict (backward compatibility)
             handler = MOVEMENTS.get(raw)
             if handler:
                 handler(self, cmd)
@@ -335,8 +364,8 @@ class CommandHandler:
             kp=n._yaw_kp, ki=n._yaw_ki, kd=n._yaw_kd,
             output_limit=min(PWM_RANGE, gain_offset),
             max_integral=n._yaw_max_integral,
-            tolerance=0, ema_alpha=1.0,
-            max_rate=n._pid_max_rate, anti_windup=False,
+            tolerance=0, ema_alpha=0.3,  # C3 fix: enable derivative filtering
+            max_rate=n._pid_max_rate, anti_windup=True,  # C3 fix: enable anti-windup
         )
 
     # ── System commands ──────────────────────────────────────────────

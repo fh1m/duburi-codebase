@@ -14,6 +14,7 @@ Channel mapping (Duburi 4.2 / ArduSub):
 from __future__ import annotations
 
 import math
+import time
 
 
 # ── Channel constants ────────────────────────────────────────────────
@@ -97,11 +98,39 @@ class RcController:
     The ramp produces smooth accel/decel profiles instead of instant PWM
     jumps.  ``stop`` bypasses the ramp for immediate safety halt.
     PID layers write directly (inherently smooth).
+
+    Phase-aware movement control:
+    - ramping_up: accelerating toward target speed
+    - cruising: maintaining target speed
+    - ramping_down: decelerating toward neutral before end
+    - braking: applying reverse thrust to stop faster
+    - neutral: no active movement
     """
 
-    def __init__(self, ramp_rate: int = 800):
-        self._ramp_rate = ramp_rate               # PWM per second
-        self._ramped: dict[int, float] = {}  # ch → actual PWM (float)
+    def __init__(
+        self,
+        ramp_rate: int = 800,
+        brake_enabled: bool = True,
+        brake_strength: float = 0.3,
+        brake_duration: float = 0.5,
+        decel_time: float = 1.0,
+        min_speed_pct: float = 10.0,
+    ):
+        self._ramp_rate = ramp_rate
+        self._brake_enabled = brake_enabled
+        self._brake_strength = brake_strength      # Fraction of original speed for reverse
+        self._brake_duration = brake_duration      # Seconds of reverse thrust
+        self._decel_time = decel_time              # Seconds before end to start ramp down
+        self._min_speed_pct = min_speed_pct        # Minimum meaningful speed
+        self._ramped: dict[int, float] = {}
+        self._last_ramp_time: float | None = None  # C4 fix: track real dt for ramp
+
+        # Movement phase tracking
+        self._movement_start_time: float | None = None
+        self._movement_end_time: float | None = None
+        self._movement_original_targets: dict[int, int] = {}
+        self._current_phase: str = 'neutral'  # 'ramping_up', 'cruising', 'ramping_down', 'braking', 'neutral'
+        self._brake_start_time: float | None = None
 
     @property
     def ramp_rate(self) -> int:
@@ -111,6 +140,105 @@ class RcController:
     def ramp_rate(self, value: int):
         self._ramp_rate = value
 
+    @property
+    def brake_enabled(self) -> bool:
+        return self._brake_enabled
+
+    @brake_enabled.setter
+    def brake_enabled(self, value: bool):
+        self._brake_enabled = value
+
+    @property
+    def brake_strength(self) -> float:
+        return self._brake_strength
+
+    @brake_strength.setter
+    def brake_strength(self, value: float):
+        self._brake_strength = value
+
+    @property
+    def brake_duration(self) -> float:
+        return self._brake_duration
+
+    @brake_duration.setter
+    def brake_duration(self, value: float):
+        self._brake_duration = value
+
+    @property
+    def decel_time(self) -> float:
+        return self._decel_time
+
+    @decel_time.setter
+    def decel_time(self, value: float):
+        self._decel_time = value
+
+    @property
+    def min_speed_pct(self) -> float:
+        return self._min_speed_pct
+
+    @min_speed_pct.setter
+    def min_speed_pct(self, value: float):
+        self._min_speed_pct = value
+
+    @property
+    def current_phase(self) -> str:
+        return self._current_phase
+
+    # ── Phase-aware movement control ────────────────────────────────
+
+    def start_movement(self, channels: dict[int, int], end_time: float | None):
+        """Start a new movement with phase tracking."""
+        now = time.time()
+        self._movement_start_time = now
+        self._movement_end_time = end_time
+        self._movement_original_targets = dict(channels)
+        self._current_phase = 'ramping_up'
+        self._brake_start_time = None
+
+    def get_current_phase(self, end_time: float | None) -> str:
+        """Determine current movement phase."""
+        if end_time is None:
+            return 'cruising' if self._current_phase != 'neutral' else 'neutral'
+
+        now = time.time()
+        time_remaining = end_time - now
+
+        if time_remaining <= 0:
+            if self._brake_enabled and self._current_phase == 'ramping_down':
+                return 'braking'
+            return 'neutral'
+        elif time_remaining <= self._decel_time:
+            return 'ramping_down'
+        elif self._current_phase == 'ramping_up':
+            # Check if we've reached target speed
+            all_at_target = all(
+                abs(self._ramped.get(ch, NEUTRAL_PWM) - tgt) < 5
+                for ch, tgt in self._movement_original_targets.items()
+                if ch in RAMP_CHANNELS
+            )
+            if all_at_target:
+                return 'cruising'
+            return 'ramping_up'
+        return 'cruising'
+
+    def compute_braking_targets(self) -> dict[int, int]:
+        """Compute reverse thrust targets for braking."""
+        targets = {}
+        for ch, original in self._movement_original_targets.items():
+            if ch in RAMP_CHANNELS:
+                offset = original - NEUTRAL_PWM
+                reverse_offset = -int(offset * self._brake_strength)
+                targets[ch] = NEUTRAL_PWM + reverse_offset
+        return targets
+
+    def end_movement(self):
+        """End current movement and reset phase tracking."""
+        self._movement_start_time = None
+        self._movement_end_time = None
+        self._movement_original_targets.clear()
+        self._current_phase = 'neutral'
+        self._brake_start_time = None
+
     # ── Ramp management ──────────────────────────────────────────────
 
     def apply_movement(
@@ -118,6 +246,7 @@ class RcController:
         channels: dict[int, int],
         movement: dict | None,
         bypass_ramp: bool = False,
+        end_time: float | None = None,
     ) -> dict[int, int]:
         """Apply movement targets with optional ramping to *channels*.
 
@@ -125,6 +254,7 @@ class RcController:
             channels: base channels dict (start with a copy of NEUTRAL_CHANNELS).
             movement: movement dict with ``'channels'`` key, or *None*.
             bypass_ramp: skip ramp — instant PWM (``just_*`` commands).
+            end_time: optional movement end time for phase-aware control.
 
         Returns:
             The mutated *channels* dict.
@@ -136,11 +266,40 @@ class RcController:
                 val = float(targets.get(ch, NEUTRAL_PWM))
                 self._ramped[ch] = val
                 channels[ch] = int(round(val))
+            self._last_ramp_time = time.time()  # C4 fix: update time on bypass too
+            self._current_phase = 'neutral'
         else:
-            dt = 0.05  # 20 Hz tick period
+            # C4 fix: calculate real dt instead of hardcoded 0.05
+            now = time.time()
+            dt = now - self._last_ramp_time if self._last_ramp_time else 0.05
+            self._last_ramp_time = now
             max_step = self._ramp_rate * dt
+
+            # Update phase if we have end_time
+            if end_time is not None and self._movement_original_targets:
+                new_phase = self.get_current_phase(end_time)
+                self._current_phase = new_phase
+
+            # Determine effective targets based on phase
+            effective_targets = dict(targets)
+            if self._current_phase == 'ramping_down':
+                # Ramp toward neutral
+                effective_targets = {ch: NEUTRAL_PWM for ch in RAMP_CHANNELS}
+            elif self._current_phase == 'braking':
+                # Apply reverse thrust
+                if self._brake_start_time is None:
+                    self._brake_start_time = now
+                brake_elapsed = now - self._brake_start_time
+                if brake_elapsed < self._brake_duration:
+                    effective_targets = self.compute_braking_targets()
+                else:
+                    # Braking complete, return to neutral
+                    effective_targets = {ch: NEUTRAL_PWM for ch in RAMP_CHANNELS}
+                    self._current_phase = 'neutral'
+                    self.end_movement()
+
             for ch in RAMP_CHANNELS:
-                target = float(targets.get(ch, NEUTRAL_PWM))
+                target = float(effective_targets.get(ch, NEUTRAL_PWM))
                 current = self._ramped.get(ch, float(NEUTRAL_PWM))
                 diff = target - current
                 if abs(diff) <= max_step:
@@ -155,6 +314,8 @@ class RcController:
     def clear_ramp(self):
         """Reset ramp state — instant neutral for safety stop."""
         self._ramped.clear()
+        self._last_ramp_time = None  # C4 fix: reset time tracking
+        self.end_movement()  # Reset phase tracking
 
     def snap_channels_neutral(self, *channel_ids: int):
         """Snap specific channels to neutral in ramp state.

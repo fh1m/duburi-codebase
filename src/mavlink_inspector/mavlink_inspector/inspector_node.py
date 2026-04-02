@@ -32,6 +32,7 @@ from duburi_interfaces.msg import (
     DriverCommand, DriverCommandFeedback, MavlinkEvent,
     TeleopCommand, VehicleDiagnostics, VehicleState,
 )
+from duburi_interfaces.srv import AuvCommand
 
 from .connection_manager import ConnectionManager
 from .telemetry_parser import TelemetryParser
@@ -94,6 +95,22 @@ class MavlinkInspectorNode(Node):
         self._surface_throttle_duration = self.declare_parameter(
             'surface_throttle_duration', 10.0).value
 
+        # RC watchdog (C1 safety fix)
+        self._rc_watchdog_timeout = self.declare_parameter(
+            'rc_watchdog_timeout', 0.5).value
+        self._last_rc_success = 0.0
+
+        # Movement parameters (NEW)
+        self._decel_time = self.declare_parameter('decel_time', 1.0).value
+        self._brake_enabled = self.declare_parameter('brake_enabled', True).value
+        self._brake_strength = self.declare_parameter('brake_strength', 0.3).value
+        self._brake_duration = self.declare_parameter('brake_duration', 0.5).value
+        self._min_speed_pct = self.declare_parameter('min_speed_pct', 10.0).value
+
+        # Yaw PID enhancements (NEW)
+        self._yaw_ema_alpha = self.declare_parameter('yaw_ema_alpha', 0.3).value
+        self._yaw_anti_windup = self.declare_parameter('yaw_anti_windup', True).value
+
         # Connection health (Design Issue 3: parameterized timing)
         heartbeat_timeout = self.declare_parameter(
             'heartbeat_timeout', 3.0).value
@@ -125,7 +142,14 @@ class MavlinkInspectorNode(Node):
             on_event=self._publish_event,
         )
         self._telemetry = TelemetryParser(yaw_source=yaw_source)
-        self._rc = RcController(ramp_rate=self._ramp_rate)
+        self._rc = RcController(
+            ramp_rate=self._ramp_rate,
+            brake_enabled=self._brake_enabled,
+            brake_strength=self._brake_strength,
+            brake_duration=self._brake_duration,
+            decel_time=self._decel_time,
+            min_speed_pct=self._min_speed_pct,
+        )
         self._cmd_handler = CommandHandler(self)
 
         # ── Movement state ───────────────────────────────────────────
@@ -168,6 +192,13 @@ class MavlinkInspectorNode(Node):
         self._feedback_pub = self.create_publisher(
             DriverCommandFeedback, '/driver/feedback', reliable_qos)
 
+        # ── Service server ────────────────────────────────────────────
+        self._auv_command_srv = self.create_service(
+            AuvCommand,
+            '/auv/command',
+            self._handle_auv_command
+        )
+
         # ── Subscribers ──────────────────────────────────────────────
         self.create_subscription(
             DriverCommand, '/driver/command',
@@ -184,6 +215,10 @@ class MavlinkInspectorNode(Node):
         self.create_timer(0.5, self._publish_diagnostics) # 2 Hz
         self.create_timer(0.5, self._resend_depth_target) # 2 Hz
         self.create_timer(0.5, self._check_ack_timeouts)  # 2 Hz
+
+        # Dynamic reconfigure callback
+        from rcl_interfaces.msg import SetParametersResult
+        self.add_on_set_parameters_callback(self._on_param_change)
 
         # ── Start connection ─────────────────────────────────────────
         self._conn.start_background()
@@ -204,8 +239,8 @@ class MavlinkInspectorNode(Node):
             msg.raw_data = raw_data
             self._event_pub.publish(msg)
             self.get_logger().info(f'[{event_type}] {description}')
-        except Exception:
-            pass
+        except Exception as e:
+            self.get_logger().error(f'Event publish failed: {e}')
 
     def _publish_feedback(self, command: str, status: str,
                           error: float = 0.0, detail: str = ''):
@@ -221,8 +256,83 @@ class MavlinkInspectorNode(Node):
             msg.error = float(error)
             msg.detail = detail
             self._feedback_pub.publish(msg)
-        except Exception:
-            pass
+        except Exception as e:
+            self.get_logger().error(f'Feedback publish failed: {e}')
+
+    # ── Dynamic parameter callback ───────────────────────────────────
+
+    def _on_param_change(self, params) -> 'SetParametersResult':
+        """Handle dynamic parameter updates."""
+        from rcl_interfaces.msg import SetParametersResult
+        for param in params:
+            name = param.name
+            value = param.value
+            
+            # Depth PID parameters
+            if name == 'depth_kp' and hasattr(self, '_depth_pid') and self._depth_pid:
+                self._depth_pid.kp = value
+            elif name == 'depth_ki' and hasattr(self, '_depth_pid') and self._depth_pid:
+                self._depth_pid.ki = value
+            elif name == 'depth_kd' and hasattr(self, '_depth_pid') and self._depth_pid:
+                self._depth_pid.kd = value
+            elif name == 'depth_max_integral':
+                self._depth_max_integral = value
+                if hasattr(self, '_depth_pid') and self._depth_pid:
+                    self._depth_pid.max_integral = value
+            elif name == 'depth_tolerance':
+                self._depth_tolerance = value
+                if hasattr(self, '_depth_pid') and self._depth_pid:
+                    self._depth_pid.tolerance = value
+            
+            # Yaw PID parameters
+            elif name == 'yaw_kp':
+                self._yaw_kp = value
+            elif name == 'yaw_ki':
+                self._yaw_ki = value
+            elif name == 'yaw_kd':
+                self._yaw_kd = value
+            elif name == 'yaw_max_integral':
+                self._yaw_max_integral = value
+            elif name == 'yaw_ema_alpha':
+                self._yaw_ema_alpha = value
+            elif name == 'yaw_anti_windup':
+                self._yaw_anti_windup = value
+            
+            # Movement/ramp parameters
+            elif name == 'ramp_rate':
+                self._ramp_rate = value
+                self._rc.ramp_rate = value
+            elif name == 'decel_time':
+                self._decel_time = value
+                self._rc.decel_time = value
+            elif name == 'brake_enabled':
+                self._brake_enabled = value
+                self._rc.brake_enabled = value
+            elif name == 'brake_strength':
+                self._brake_strength = value
+                self._rc.brake_strength = value
+            elif name == 'brake_duration':
+                self._brake_duration = value
+                self._rc.brake_duration = value
+            elif name == 'min_speed_pct':
+                self._min_speed_pct = value
+                self._rc.min_speed_pct = value
+            
+            # Other parameters
+            elif name == 'pid_max_rate':
+                self._pid_max_rate = value
+            elif name == 'nominal_voltage':
+                self._nominal_voltage = value
+            elif name == 'surface_depth':
+                self._surface_depth = value
+            elif name == 'ack_timeout':
+                self._ack_timeout = value
+            elif name == 'rc_watchdog_timeout':
+                self._rc_watchdog_timeout = value
+            
+            self.get_logger().info(f'Parameter updated: {name} = {value}')
+        
+        return SetParametersResult(successful=True)
 
     # ── State publishing ─────────────────────────────────────────────
 
@@ -243,8 +353,8 @@ class MavlinkInspectorNode(Node):
             msg.voltage = float(t.voltage)
             msg.current = float(t.current)
             self._state_pub.publish(msg)
-        except Exception:
-            pass
+        except Exception as e:
+            self.get_logger().error(f'State publish failed: {e}')
 
     def _publish_diagnostics(self):
         try:
@@ -261,8 +371,8 @@ class MavlinkInspectorNode(Node):
             msg.rc_channels = [int(v) for v in t.rc_channels]
             msg.cpu_load = float(t.cpu_load)
             self._diag_pub.publish(msg)
-        except Exception:
-            pass
+        except Exception as e:
+            self.get_logger().error(f'Diagnostics publish failed: {e}')
 
     # ── MAVLink reading ──────────────────────────────────────────────
 
@@ -410,9 +520,36 @@ class MavlinkInspectorNode(Node):
                     yaw_bang if err > 0 else -yaw_bang)
 
         # ── Send combined channels ───────────────────────────────────
-        if not self._rc.send_rc(channels, self._conn.master,
-                                self.get_logger()):
+        if self._rc.send_rc(channels, self._conn.master,
+                            self.get_logger()):
+            self._last_rc_success = time.time()
+        else:
             self._conn.connected = False
+
+        # ── RC watchdog (C1 safety fix) ──────────────────────────────
+        if self._last_rc_success > 0 and \
+           time.time() - self._last_rc_success > self._rc_watchdog_timeout:
+            self.get_logger().fatal(
+                f'RC watchdog timeout! No successful RC send for '
+                f'{self._rc_watchdog_timeout}s - forcing emergency neutral')
+            self._emergency_neutral()
+
+    def _emergency_neutral(self):
+        """Force all RC channels to NEUTRAL_PWM (1500) for emergency safety."""
+        if self._conn.master is None:
+            return
+        try:
+            rc = [NEUTRAL_PWM] * 8 + [65535] * 10
+            self._conn.master.mav.rc_channels_override_send(
+                self._conn.master.target_system,
+                self._conn.master.target_component, *rc)
+            self._last_rc_success = time.time()
+            self._rc.clear_ramp()
+            with self._movement_lock:
+                self._current_movement = None
+            self._publish_event('safety', 'Emergency neutral applied')
+        except Exception as e:
+            self.get_logger().error(f'Emergency neutral failed: {e}')
 
     # ── MAVLink command infrastructure ───────────────────────────────
 
@@ -633,6 +770,52 @@ class MavlinkInspectorNode(Node):
             mavutil.mavlink.MAV_CMD_DO_SET_SERVO, 0,
             servo_n + 8, microseconds, 0, 0, 0, 0, 0)
 
+    # ── Service handler ──────────────────────────────────────────────
+
+    def _handle_auv_command(self, request, response):
+        """Handle AuvCommand service calls."""
+        cmd = request.command.lower()
+
+        try:
+            if cmd == 'arm':
+                self._cmd_handler._cmd_arm(None)
+                response.success = True
+                response.message = 'Armed'
+            elif cmd == 'disarm':
+                self._cmd_handler._cmd_disarm(None)
+                response.success = True
+                response.message = 'Disarmed'
+            elif cmd == 'stop':
+                self._stop_all()
+                response.success = True
+                response.message = 'Stopped'
+            elif cmd == 'set_mode':
+                mode = request.flight_mode.upper()
+                if mode in ('MANUAL', 'STABILIZE', 'ALT_HOLD'):
+                    self._set_mode(mode)
+                    response.success = True
+                    response.message = f'Mode set to {mode}'
+                else:
+                    response.success = False
+                    response.message = f'Unknown mode: {mode}'
+            elif cmd == 'calibrate_depth':
+                self._cmd_handler._cmd_calibrate_depth(None)
+                response.success = True
+                response.message = 'Depth calibrated'
+            elif cmd == 'pid_depth_off':
+                self._cmd_handler._cmd_pid_depth_off(None)
+                response.success = True
+                response.message = 'PID depth disabled'
+            else:
+                response.success = False
+                response.message = f'Unknown command: {cmd}'
+        except Exception as e:
+            response.success = False
+            response.message = str(e)
+            self.get_logger().error(f'Service command failed: {e}')
+
+        return response
+
 
 # ── Entry point ──────────────────────────────────────────────────────
 
@@ -652,16 +835,16 @@ def main(args=None):
                 master.mav.rc_channels_override_send(
                     master.target_system,
                     master.target_component, *rc)
-        except Exception:
-            pass
+        except Exception as e:
+            print(f'Shutdown RC neutral failed: {e}')
         try:
             node.destroy_node()
-        except Exception:
-            pass
+        except Exception as e:
+            print(f'Shutdown destroy_node failed: {e}')
         try:
             rclpy.shutdown()
-        except Exception:
-            pass
+        except Exception as e:
+            print(f'Shutdown rclpy failed: {e}')
 
 
 if __name__ == '__main__':

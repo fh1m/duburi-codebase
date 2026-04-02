@@ -3,26 +3,24 @@
 This file contains all movement, yaw, cruise, and teleop handlers.
 Each movement gets an automatic ``just_*`` variant (bypasses ramp).
 
+Commands are registered using the @register decorator from command_registry.
+The MOVEMENTS dict is auto-populated from the registry for backward compatibility.
+
 Adding a New Movement
 =====================
 
-1. Define a handler function::
+1. Define a handler function with the @register decorator::
 
+       @register('my_maneuver', CommandCategory.TRANSLATION, CommandTransport.TOPIC,
+                 description='My custom maneuver',
+                 channels=['CH_FORWARD', 'CH_YAW'])
        def cmd_my_maneuver(h, cmd):
            h.set_movement(
                {CH_FORWARD: NEUTRAL_PWM + h.offset,
                 CH_YAW: NEUTRAL_PWM - h.offset // 3},
                f'My maneuver (speed={h.speed})')
 
-2. Register it in the ``MOVEMENTS`` dict at the bottom::
-
-       MOVEMENTS['my_maneuver'] = cmd_my_maneuver
-
-3. (Optional) Add an alias::
-
-       MOVEMENTS['maneuver'] = cmd_my_maneuver
-
-4. ``just_my_maneuver`` works automatically (bypasses ramp).
+2. ``just_my_maneuver`` works automatically (bypasses ramp).
 
 Available Context (``h``)
 =========================
@@ -57,6 +55,10 @@ from __future__ import annotations
 import math
 import time
 
+from duburi_common.command_registry import (
+    register, CommandCategory, CommandTransport, get_all_commands,
+)
+
 from .rc_controller import (
     CH_FORWARD, CH_LATERAL, CH_THROTTLE, CH_YAW,
     NEUTRAL_PWM, PWM_RANGE,
@@ -66,38 +68,69 @@ from .rc_controller import (
 
 # ── Basic directional movements ─────────────────────────────────────
 
+@register('move_forward', CommandCategory.TRANSLATION, CommandTransport.TOPIC,
+          description='Thrust forward on CH_FORWARD',
+          channels=['CH_FORWARD', 'CH_LATERAL'],
+          aliases=['forward'])
 def cmd_move_forward(h, cmd):
     h.set_movement(
         {CH_FORWARD: NEUTRAL_PWM + h.offset, CH_LATERAL: NEUTRAL_PWM},
         f'Moving forward (speed={h.speed})')
 
 
+@register('move_back', CommandCategory.TRANSLATION, CommandTransport.TOPIC,
+          description='Thrust backward on CH_FORWARD',
+          channels=['CH_FORWARD', 'CH_LATERAL'],
+          aliases=['back', 'backward'])
 def cmd_move_back(h, cmd):
     h.set_movement(
         {CH_FORWARD: NEUTRAL_PWM - h.offset, CH_LATERAL: NEUTRAL_PWM},
         'Moving backward')
 
 
+@register('move_left', CommandCategory.TRANSLATION, CommandTransport.TOPIC,
+          description='Strafe left on CH_LATERAL',
+          channels=['CH_FORWARD', 'CH_LATERAL'],
+          aliases=['left'])
 def cmd_move_left(h, cmd):
     h.set_movement(
         {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM - h.offset},
         'Moving left')
 
 
+@register('move_right', CommandCategory.TRANSLATION, CommandTransport.TOPIC,
+          description='Strafe right on CH_LATERAL',
+          channels=['CH_FORWARD', 'CH_LATERAL'],
+          aliases=['right'])
 def cmd_move_right(h, cmd):
     h.set_movement(
         {CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM + h.offset},
         'Moving right')
 
 
+@register('move_up', CommandCategory.TRANSLATION, CommandTransport.TOPIC,
+          description='Thrust up on CH_THROTTLE',
+          channels=['CH_THROTTLE'],
+          supports_depth=True,
+          aliases=['up'])
 def cmd_move_up(h, cmd):
     h.set_movement({CH_THROTTLE: NEUTRAL_PWM + h.offset}, 'Moving up')
 
 
+@register('move_down', CommandCategory.TRANSLATION, CommandTransport.TOPIC,
+          description='Thrust down on CH_THROTTLE',
+          channels=['CH_THROTTLE'],
+          supports_depth=True,
+          aliases=['down'])
 def cmd_move_down(h, cmd):
     h.set_movement({CH_THROTTLE: NEUTRAL_PWM - h.offset}, 'Moving down')
 
 
+@register('move_at', CommandCategory.TRANSLATION, CommandTransport.TOPIC,
+          description='Move at arbitrary angle (body-frame vector)',
+          channels=['CH_FORWARD', 'CH_LATERAL'],
+          supports_bearing=True,
+          supports_angle=True)
 def cmd_move_at(h, cmd):
     """Move at an arbitrary angle (body-frame vector control)."""
     rad = math.radians(cmd.angle)
@@ -134,6 +167,10 @@ def handle_compound_move(h, c: str, cmd):
 
 # ── Yaw commands ─────────────────────────────────────────────────────
 
+@register('yaw_angle', CommandCategory.HEADING, CommandTransport.ACTION,
+          description='Set heading via SET_ATTITUDE_TARGET (firmware-level)',
+          channels=['CH_YAW'],
+          supports_angle=True)
 def cmd_yaw_angle(h, cmd):
     """Set heading via SET_ATTITUDE_TARGET (firmware-level)."""
     n = h.node
@@ -143,6 +180,10 @@ def cmd_yaw_angle(h, cmd):
                         detail=f'target={cmd.angle}° (attitude target)')
 
 
+@register('yaw_to_heading', CommandCategory.HEADING, CommandTransport.ACTION,
+          description='Bang-bang yaw to target heading',
+          channels=['CH_YAW'],
+          supports_angle=True)
 def cmd_yaw_to_heading(h, cmd):
     """Bang-bang yaw to a target heading."""
     n = h.node
@@ -157,6 +198,11 @@ def cmd_yaw_to_heading(h, cmd):
                         detail=f'target={cmd.angle % 360}° bang-bang')
 
 
+@register('pid_yaw_to_heading', CommandCategory.HEADING, CommandTransport.ACTION,
+          description='PID-controlled yaw to target heading',
+          channels=['CH_YAW'],
+          supports_angle=True,
+          is_pid=True)
 def cmd_pid_yaw_to_heading(h, cmd):
     """PID-controlled yaw to a target heading."""
     n = h.node
@@ -173,16 +219,27 @@ def cmd_pid_yaw_to_heading(h, cmd):
                         detail=f'target={cmd.angle % 360}° PID')
 
 
+@register('yaw_left', CommandCategory.HEADING, CommandTransport.TOPIC,
+          description='Continuous yaw left on CH_YAW',
+          channels=['CH_YAW'])
 def cmd_yaw_left(h, cmd):
     h.set_movement({CH_YAW: NEUTRAL_PWM - h.offset}, 'Yaw left')
 
 
+@register('yaw_right', CommandCategory.HEADING, CommandTransport.TOPIC,
+          description='Continuous yaw right on CH_YAW',
+          channels=['CH_YAW'])
 def cmd_yaw_right(h, cmd):
     h.set_movement({CH_YAW: NEUTRAL_PWM + h.offset}, 'Yaw right')
 
 
 # ── Surface ──────────────────────────────────────────────────────────
 
+@register('surface', CommandCategory.DEPTH, CommandTransport.ACTION,
+          description='Ascend to surface (ALT_HOLD or MANUAL throttle)',
+          channels=['CH_THROTTLE'],
+          supports_depth=True,
+          requires_armed=False)
 def cmd_surface(h, cmd):
     """Surface: ALT_HOLD → firmware target −0.1 m, MANUAL → throttle up."""
     n = h.node
@@ -205,10 +262,25 @@ def cmd_surface(h, cmd):
 
 # ── Cruise (movement + depth PID + yaw PID) ─────────────────────────
 
+@register('cruise', CommandCategory.COMPOUND, CommandTransport.ACTION,
+          description='Coordinated movement + depth PID + yaw PID',
+          channels=['CH_FORWARD', 'CH_LATERAL', 'CH_THROTTLE', 'CH_YAW'],
+          supports_bearing=True,
+          supports_angle=True,
+          supports_depth=True,
+          is_pid=True)
 def cmd_cruise(h, cmd):
     _cruise_common(h, cmd, bypass_ramp=False)
 
 
+@register('just_cruise', CommandCategory.COMPOUND, CommandTransport.ACTION,
+          description='Cruise with bypass ramp (instant)',
+          channels=['CH_FORWARD', 'CH_LATERAL', 'CH_THROTTLE', 'CH_YAW'],
+          supports_bearing=True,
+          supports_angle=True,
+          supports_depth=True,
+          is_pid=True,
+          is_instant=True)
 def cmd_just_cruise(h, cmd):
     _cruise_common(h, cmd, bypass_ramp=True)
 
@@ -248,6 +320,11 @@ def _cruise_common(h, cmd, bypass_ramp: bool):
 
 # ── Teleop ───────────────────────────────────────────────────────────
 
+@register('teleop', CommandCategory.COMPOUND, CommandTransport.TOPIC,
+          description='Direct PWM teleop (fields repurposed as axis offsets)',
+          channels=['CH_FORWARD', 'CH_LATERAL', 'CH_THROTTLE', 'CH_YAW'],
+          supports_duration=False,
+          supports_speed=False)
 def cmd_teleop(h, cmd):
     """Direct PWM teleop — fields repurposed as axis offsets."""
     clamp = lambda v: max(-PWM_RANGE, min(PWM_RANGE, int(v)))
@@ -323,49 +400,29 @@ def handle_go(h, c: str, cmd):
 
 
 # ═════════════════════════════════════════════════════════════════════
-#  MOVEMENT REGISTRY
+#  MOVEMENT REGISTRY - BACKWARD COMPATIBILITY
 # ═════════════════════════════════════════════════════════════════════
-# Every entry automatically gets a ``just_*`` variant for free.
-# To add a custom movement, define a function above and register it
-# here.  Aliases are just additional dict entries to the same handler.
+# Build MOVEMENTS dict from the registry for backward compatibility.
+# New code should use get_command() from command_registry instead.
 #
+# Every entry automatically gets a ``just_*`` variant for free.
 # Prefix-based commands (go_*, move_*_*) are matched automatically
 # and do NOT need registry entries.
 
-MOVEMENTS: dict[str, callable] = {
-    # ── Directional ──────────────────────────────────────────────
-    'move_forward':       cmd_move_forward,
-    'forward':            cmd_move_forward,
-    'move_back':          cmd_move_back,
-    'back':               cmd_move_back,
-    'backward':           cmd_move_back,
-    'move_left':          cmd_move_left,
-    'left':               cmd_move_left,
-    'move_right':         cmd_move_right,
-    'right':              cmd_move_right,
-    'move_up':            cmd_move_up,
-    'up':                 cmd_move_up,
-    'move_down':          cmd_move_down,
-    'down':               cmd_move_down,
-    'move_at':            cmd_move_at,
+def _build_movements_dict() -> dict[str, callable]:
+    """Build MOVEMENTS dict from registry + aliases."""
+    result = {}
+    for name, spec in get_all_commands().items():
+        if spec.handler is not None and spec.category in (
+                CommandCategory.TRANSLATION, CommandCategory.HEADING,
+                CommandCategory.COMPOUND, CommandCategory.DEPTH):
+            result[name] = spec.handler
+            # Add aliases
+            for alias in spec.aliases:
+                result[alias] = spec.handler
+    return result
 
-    # ── Yaw ──────────────────────────────────────────────────────
-    'yaw_angle':          cmd_yaw_angle,
-    'yaw_to_heading':     cmd_yaw_to_heading,
-    'pid_yaw_to_heading': cmd_pid_yaw_to_heading,
-    'yaw_left':           cmd_yaw_left,
-    'yaw_right':          cmd_yaw_right,
-
-    # ── Surface ──────────────────────────────────────────────────
-    'surface':            cmd_surface,
-
-    # ── Cruise (movement + depth PID + yaw PID) ──────────────────
-    'cruise':             cmd_cruise,
-    'just_cruise':        cmd_just_cruise,
-
-    # ── Teleop (legacy DriverCommand fallback — prefer /driver/teleop topic)
-    'teleop':             cmd_teleop,
-}
+MOVEMENTS: dict[str, callable] = _build_movements_dict()
 
 
 # ═════════════════════════════════════════════════════════════════════

@@ -1,0 +1,8 @@
+# AuvCommand.srv - Service for instant system commands
+# Used for arm, disarm, set_mode, stop, calibrate_depth, pid_depth_off
+
+string command           # Command name: arm, disarm, set_mode, stop, etc.
+string flight_mode       # For set_mode: MANUAL, ALT_HOLD, STABILIZE
+---
+bool success            # True if command executed successfully
+string message          # Status message or error description

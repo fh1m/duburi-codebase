@@ -10,59 +10,58 @@
 
 mavlink_inspector:
   ros__parameters:
-    # ── Connection ─────────────────────────────────────────────────
-    # SITL example: sim_vehicle --out=udp:127.0.0.1:5760 → use udpin:127.0.0.1:5760
-    # (not tcp:127.0.0.1:5760; that is a different socket and often stays idle.)
+    # ═══════════════════════════════════════════════════════════════════
+    # CONNECTION
+    # ═══════════════════════════════════════════════════════════════════
     connection_port: "/dev/ttyACM0"
     baud: 115200
-
-    # ── Connection health ──────────────────────────────────────────
-    heartbeat_timeout: 3.0       # seconds before heartbeat loss warning
-    reconnect_backoff: 2.0       # initial reconnect delay (doubles on failure)
-    reconnect_max: 15.0          # max reconnect delay (seconds)
-
-    # ── Telemetry ──────────────────────────────────────────────────
-    # Which MAVLink message supplies yaw: 'attitude', 'ahrs2', or 'both'
-    yaw_source: "attitude"
-
-    # ── Movement ramp ──────────────────────────────────────────────
-    # PWM/second — controls accel/decel smoothness.
-    # 800 = 0.5s full-range ramp. Lower = smoother but slower response.
-    ramp_rate: 800
-
-    # ── Depth PID (software, via RC throttle) ──────────────────────
-    # POOL-TUNED defaults (2026-03-09 session):
-    depth_kp: 800.0       # Proportional gain
-    depth_ki: 50.0        # Integral gain (buoyancy compensation)
-    depth_kd: 100.0       # Derivative gain (damping)
-    depth_max_integral: 1.0   # Integral clamp (prevents windup)
-    depth_tolerance: 0.08     # Deadband in metres (suppress sensor noise)
-
-    # ── Yaw PID (heading hold via RC yaw channel) ──────────────────
+    heartbeat_timeout: 3.0
+    reconnect_backoff: 2.0
+    reconnect_max: 15.0
+    ack_timeout: 3.0
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # DEPTH PID (POOL-TUNED)
+    # ═══════════════════════════════════════════════════════════════════
+    depth_kp: 800.0
+    depth_ki: 50.0
+    depth_kd: 100.0
+    depth_max_integral: 1.0
+    depth_tolerance: 0.08  # meters deadband
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # YAW PID
+    # ═══════════════════════════════════════════════════════════════════
     yaw_kp: 2.0
     yaw_ki: 0.05
     yaw_kd: 0.5
     yaw_max_integral: 50.0
-
-    # ── PID rate limiting ──────────────────────────────────────────
-    # Max PWM change per tick — prevents thruster hunting.
-    pid_max_rate: 50
-
-    # ── Battery voltage compensation ───────────────────────────────
-    # Set to nominal pack voltage (e.g. 14.8 for 4S LiPo) to scale
-    # thrust as battery depletes.  0.0 = disabled.
-    nominal_voltage: 0.0
-
-    # ── Surface depth offset ───────────────────────────────────────
-    # Barometer reading at water surface. Auto-calibrated on first arm.
-    # Set manually if auto-calibration is unreliable.
-    surface_depth: 0.0
-
-    # ── Command ACK ────────────────────────────────────────────────
-    ack_timeout: 3.0    # seconds to wait for COMMAND_ACK
-
-    # ── Surface command ────────────────────────────────────────────
-    surface_throttle_duration: 10.0  # seconds of throttle-up in MANUAL mode
+    yaw_ema_alpha: 0.3       # NEW: Derivative EMA filter (0.3 = filtered, 1.0 = raw)
+    yaw_anti_windup: true    # NEW: Enable anti-windup for yaw PID
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # MOVEMENT / RAMP
+    # ═══════════════════════════════════════════════════════════════════
+    ramp_rate: 800           # PWM per second
+    decel_time: 1.0          # NEW: Seconds before end to start ramp down
+    brake_enabled: true      # NEW: Enable active braking
+    brake_strength: 0.3      # NEW: Fraction of speed for reverse thrust
+    brake_duration: 0.5      # NEW: Seconds of reverse thrust
+    min_speed_pct: 10.0      # NEW: Minimum meaningful speed percentage
+    pid_max_rate: 50         # Max PID output change per tick
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # SYSTEM
+    # ═══════════════════════════════════════════════════════════════════
+    nominal_voltage: 0.0     # 0 = disable voltage compensation
+    surface_depth: 0.0       # Auto-calibrated on arm
+    surface_throttle_duration: 10.0
+    yaw_source: "attitude"   # 'attitude' or 'gps'
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # SAFETY (NEW SECTION)
+    # ═══════════════════════════════════════════════════════════════════
+    rc_watchdog_timeout: 0.5  # NEW: Seconds without RC success → emergency neutral
 
 mavlink_logger:
   ros__parameters:

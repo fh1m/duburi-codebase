@@ -30,8 +30,8 @@ class PidController:
     """
 
     __slots__ = (
-        'kp', 'ki', 'kd', 'output_limit', 'max_integral',
-        'tolerance', 'ema_alpha', 'max_rate', 'anti_windup',
+        '_kp', '_ki', '_kd', '_output_limit', '_max_integral',
+        '_tolerance', '_ema_alpha', '_max_rate', '_anti_windup',
         '_integral', '_filtered_rate', '_last_output', '_in_deadband',
     )
 
@@ -48,19 +48,19 @@ class PidController:
         anti_windup: bool = True,
     ):
         # Gains
-        self.kp = kp
-        self.ki = ki
-        self.kd = kd
+        self._kp = kp
+        self._ki = ki
+        self._kd = kd
 
         # Limits
-        self.output_limit = output_limit  # max |PWM offset|
-        self.max_integral = max_integral
-        self.tolerance = tolerance        # deadband width (0 = disabled)
-        self.max_rate = max_rate          # max output change per tick
+        self._output_limit = output_limit  # max |PWM offset|
+        self._max_integral = max_integral
+        self._tolerance = tolerance        # deadband width (0 = disabled)
+        self._max_rate = max_rate          # max output change per tick
 
         # Behaviour
-        self.ema_alpha = ema_alpha        # EMA coefficient (1.0 = no filtering)
-        self.anti_windup = anti_windup    # only integrate when not saturated
+        self._ema_alpha = ema_alpha        # EMA coefficient (1.0 = no filtering)
+        self._anti_windup = anti_windup    # only integrate when not saturated
 
         # State
         self._integral = 0.0
@@ -95,44 +95,51 @@ class PidController:
             dt = 0.05  # fallback to one 20 Hz tick
 
         # ── Deadband ─────────────────────────────────────────────────
-        if self.tolerance > 0 and abs(error) < self.tolerance:
+        if self._tolerance > 0 and abs(error) < self._tolerance:
             self._in_deadband = True
             # Smoothly decay rate-limiter state toward 0 so re-entry
             # doesn't cause a PWM jump.
-            if abs(self._last_output) <= self.max_rate:
+            if abs(self._last_output) <= self._max_rate:
                 self._last_output = 0
             elif self._last_output > 0:
-                self._last_output -= self.max_rate
+                self._last_output -= self._max_rate
             else:
-                self._last_output += self.max_rate
+                self._last_output += self._max_rate
             return 0
 
         self._in_deadband = False
 
         # ── Proportional ─────────────────────────────────────────────
-        p_out = self.kp * error
-
-        # ── Integral (with conditional anti-windup) ──────────────────
-        if not self.anti_windup or abs(self._last_output) < self.output_limit:
-            self._integral += error * dt
-        self._integral = max(-self.max_integral,
-                             min(self.max_integral, self._integral))
-        i_out = self.ki * self._integral
+        p_out = self._kp * error
 
         # ── Derivative (EMA-filtered measurement rate) ───────────────
         if measurement_rate is not None:
             self._filtered_rate = (
-                self.ema_alpha * measurement_rate
-                + (1.0 - self.ema_alpha) * self._filtered_rate
+                self._ema_alpha * measurement_rate
+                + (1.0 - self._ema_alpha) * self._filtered_rate
             )
-        d_out = -self.kd * self._filtered_rate
+        d_out = -self._kd * self._filtered_rate
+
+        # ── Integral (with anti-windup checking CURRENT output) ──────
+        # C2 safety fix: Check preliminary output BEFORE integrating
+        ki_term = error * dt
+        preliminary = p_out + (self._integral + ki_term) * self._ki + d_out
+
+        # Only integrate if not saturating
+        if not self._anti_windup or abs(preliminary) < self._output_limit:
+            self._integral += ki_term
+            self._integral = max(-self._max_integral,
+                                 min(self._max_integral, self._integral))
+        # else: Saturating - do not accumulate integral (anti-windup)
+
+        i_out = self._ki * self._integral
 
         # ── Total → clamp → rate-limit ───────────────────────────────
         pid_output = p_out + i_out + d_out
-        output = max(-self.output_limit,
-                     min(self.output_limit, int(pid_output)))
-        output = max(self._last_output - self.max_rate,
-                     min(self._last_output + self.max_rate, output))
+        output = max(-self._output_limit,
+                     min(self._output_limit, int(pid_output)))
+        output = max(self._last_output - self._max_rate,
+                     min(self._last_output + self._max_rate, output))
         self._last_output = output
         return output
 
@@ -159,3 +166,91 @@ class PidController:
     def integral(self) -> float:
         """Current integral accumulator value."""
         return self._integral
+
+    # ── Dynamic reconfigure setters ──────────────────────────────────────
+
+    @property
+    def kp(self) -> float:
+        return self._kp
+
+    @kp.setter
+    def kp(self, value: float):
+        """Update proportional gain (for dynamic reconfigure)."""
+        self._kp = value
+
+    @property
+    def ki(self) -> float:
+        return self._ki
+
+    @ki.setter
+    def ki(self, value: float):
+        """Update integral gain (for dynamic reconfigure)."""
+        self._ki = value
+
+    @property
+    def kd(self) -> float:
+        return self._kd
+
+    @kd.setter
+    def kd(self, value: float):
+        """Update derivative gain (for dynamic reconfigure)."""
+        self._kd = value
+
+    @property
+    def output_limit(self) -> int:
+        return self._output_limit
+
+    @output_limit.setter
+    def output_limit(self, value: int):
+        """Update output limit (for dynamic reconfigure)."""
+        self._output_limit = value
+
+    @property
+    def max_integral(self) -> float:
+        return self._max_integral
+
+    @max_integral.setter
+    def max_integral(self, value: float):
+        """Update max integral accumulator (for dynamic reconfigure)."""
+        self._max_integral = value
+        # Clamp current integral if it exceeds new limit
+        if self._integral > value:
+            self._integral = value
+        elif self._integral < -value:
+            self._integral = -value
+
+    @property
+    def tolerance(self) -> float:
+        return self._tolerance
+
+    @tolerance.setter
+    def tolerance(self, value: float):
+        """Update deadband tolerance (for dynamic reconfigure)."""
+        self._tolerance = value
+
+    @property
+    def ema_alpha(self) -> float:
+        return self._ema_alpha
+
+    @ema_alpha.setter
+    def ema_alpha(self, value: float):
+        """Update EMA filter coefficient (for dynamic reconfigure)."""
+        self._ema_alpha = max(0.0, min(1.0, value))  # Clamp to [0, 1]
+
+    @property
+    def max_rate(self) -> int:
+        return self._max_rate
+
+    @max_rate.setter
+    def max_rate(self, value: int):
+        """Update max output rate change (for dynamic reconfigure)."""
+        self._max_rate = value
+
+    @property
+    def anti_windup(self) -> bool:
+        return self._anti_windup
+
+    @anti_windup.setter
+    def anti_windup(self, value: bool):
+        """Enable/disable anti-windup (for dynamic reconfigure)."""
+        self._anti_windup = value

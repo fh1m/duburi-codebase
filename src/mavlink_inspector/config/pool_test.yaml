@@ -8,36 +8,29 @@
 
 mavlink_inspector:
   ros__parameters:
+    # Pool testing overrides - conservative settings
     connection_port: "/dev/ttyACM0"
-    baud: 115200
-    yaw_source: "attitude"
-
-    # Connection health
-    heartbeat_timeout: 3.0
-    reconnect_backoff: 2.0
-    reconnect_max: 15.0
-
-    # Slower ramp for controlled pool testing
-    ramp_rate: 600
-
-    # Pool-tuned depth PID
-    depth_kp: 800.0
-    depth_ki: 50.0
+    
+    # Depth PID - shallow pool
+    depth_kp: 500.0
+    depth_ki: 25.0
     depth_kd: 100.0
-    depth_max_integral: 1.0
-    depth_tolerance: 0.08
-
-    # Gentle yaw — pools have walls nearby
-    yaw_kp: 2.0
-    yaw_ki: 0.05
-    yaw_kd: 0.5
-    yaw_max_integral: 50.0
-
-    pid_max_rate: 50
-    nominal_voltage: 0.0
-    surface_depth: 0.0
-    ack_timeout: 3.0
-    surface_throttle_duration: 10.0
+    depth_tolerance: 0.05
+    
+    # Yaw PID
+    yaw_ema_alpha: 0.3
+    yaw_anti_windup: true
+    
+    # Movement - conservative for pool
+    ramp_rate: 600
+    decel_time: 0.8
+    brake_enabled: true
+    brake_strength: 0.25
+    brake_duration: 0.4
+    min_speed_pct: 15.0
+    
+    # Safety
+    rc_watchdog_timeout: 0.5
 
 mavlink_logger:
   ros__parameters:

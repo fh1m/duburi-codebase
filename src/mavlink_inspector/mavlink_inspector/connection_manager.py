@@ -103,20 +103,26 @@ class ConnectionManager:
         self._last_heartbeat = 0.0
         self._heartbeat_lost_notified = False
 
+        # Thread safety lock for shared state (_master, _connected, _reconnecting)
+        self._lock = threading.Lock()
+
     # ── Properties ───────────────────────────────────────────────────
 
     @property
     def master(self):
         """The pymavlink MAVLink connection object (or None)."""
-        return self._master
+        with self._lock:
+            return self._master
 
     @property
     def connected(self) -> bool:
-        return self._connected
+        with self._lock:
+            return self._connected
 
     @connected.setter
     def connected(self, value: bool):
-        self._connected = value
+        with self._lock:
+            self._connected = value
 
     @property
     def port(self) -> str:
@@ -147,12 +153,14 @@ class ConnectionManager:
 
     def close(self):
         """Safely close and null the MAVLink connection."""
-        if self._master is not None:
-            try:
-                self._master.close()
-            except Exception:
-                pass
-            self._master = None
+        with self._lock:
+            if self._master is not None:
+                try:
+                    self._master.close()
+                except Exception as e:
+                    if self._logger:
+                        self._logger.warning(f'Close connection failed: {e}')
+                self._master = None
 
     def _find_port(self) -> str | None:
         """Resolve connection endpoint: network (tcp/udp), serial, or BlueOS UDP.
@@ -201,7 +209,8 @@ class ConnectionManager:
         Searches serial ports and UDP endpoints automatically.
         For BlueOS setup, will try udpin:0.0.0.0:14550 if no serial found.
         """
-        self._reconnecting = True
+        with self._lock:
+            self._reconnecting = True
         try:
             self.close()  # clean up any stale connection
 
@@ -222,14 +231,16 @@ class ConnectionManager:
                     label = 'Pixhawk (serial)'
                 self._logger.info(f'Connecting to {label} at {port}...')
 
-            self._master = mavutil.mavlink_connection(port, self._baud)
-            self._master.wait_heartbeat(timeout=10)
+            master = mavutil.mavlink_connection(port, self._baud)
+            master.wait_heartbeat(timeout=10)
 
-            self._connected = True
-            self._last_heartbeat = time.time()
-            self._heartbeat_lost_notified = False
-            self._reconnect_current = self._reconnect_backoff
-            self._port = port
+            with self._lock:
+                self._master = master
+                self._connected = True
+                self._last_heartbeat = time.time()
+                self._heartbeat_lost_notified = False
+                self._reconnect_current = self._reconnect_backoff
+                self._port = port
 
             self._on_event('connected', f'MAVLink connected on {port}')
             if self._logger:
@@ -238,13 +249,15 @@ class ConnectionManager:
             if self._logger:
                 self._logger.error(f'Failed to connect: {e}')
             self._on_event('connection_failed', str(e))
-            self._connected = False
+            with self._lock:
+                self._connected = False
             self.close()
             self._reconnect_current = min(
                 self._reconnect_current * 2, self._reconnect_max
             )
         finally:
-            self._reconnecting = False
+            with self._lock:
+                self._reconnecting = False
 
     def start_background(self) -> threading.Thread:
         """Start connection attempt in a background thread."""
@@ -263,8 +276,12 @@ class ConnectionManager:
         - Marking disconnected after prolonged loss (3× timeout)
         """
         # --- Reconnection when disconnected ---
-        if not self._connected:
-            if not self._reconnecting:
+        with self._lock:
+            connected = self._connected
+            reconnecting = self._reconnecting
+
+        if not connected:
+            if not reconnecting:
                 delay = self._reconnect_current
                 if self._logger:
                     self._logger.info(
@@ -273,7 +290,9 @@ class ConnectionManager:
 
                 def _delayed_reconnect():
                     time.sleep(delay)
-                    if not self._connected and not self._reconnecting:
+                    with self._lock:
+                        should_connect = not self._connected and not self._reconnecting
+                    if should_connect:
                         self.connect()
 
                 threading.Thread(
@@ -281,7 +300,9 @@ class ConnectionManager:
                 ).start()
             return
 
-        if self._master is None:
+        with self._lock:
+            master = self._master
+        if master is None:
             return
 
         # --- Heartbeat loss detection ---
@@ -306,21 +327,23 @@ class ConnectionManager:
                         'Heartbeat lost too long — marking disconnected '
                         'for reconnect.'
                     )
-                self._connected = False
+                with self._lock:
+                    self._connected = False
                 self._on_event('connection_lost',
                                'Heartbeat timeout exceeded, will reconnect')
             return  # don't send heartbeat to a dead link
 
         # --- Send GCS heartbeat ---
         try:
-            self._master.mav.heartbeat_send(
+            master.mav.heartbeat_send(
                 mavutil.mavlink.MAV_TYPE_ONBOARD_CONTROLLER,
                 mavutil.mavlink.MAV_AUTOPILOT_INVALID, 0, 0, 0,
             )
         except Exception as e:
             if self._logger:
                 self._logger.warning(f'Heartbeat send failed: {e}')
-            self._connected = False
+            with self._lock:
+                self._connected = False
 
     # ── Message reading ──────────────────────────────────────────────
 
@@ -331,17 +354,21 @@ class ConnectionManager:
         On mid-batch failure, returns messages already collected (preserving
         partial telemetry rather than discarding it).
         """
-        if not self._connected or self._master is None:
+        with self._lock:
+            connected = self._connected
+            master = self._master
+        if not connected or master is None:
             return []
         msgs = []
         try:
-            msg = self._master.recv_match(blocking=False)
+            msg = master.recv_match(blocking=False)
             while msg is not None:
                 msgs.append(msg)
-                msg = self._master.recv_match(blocking=False)
+                msg = master.recv_match(blocking=False)
         except Exception as e:
             if self._logger:
                 self._logger.error(f'Read error: {e}')
-            self._connected = False
+            with self._lock:
+                self._connected = False
             self._on_event('connection_lost', str(e))
         return msgs

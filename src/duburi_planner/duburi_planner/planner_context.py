@@ -31,6 +31,7 @@ from duburi_interfaces.msg import (
     VehicleState,
 )
 from mavlink_driver.driver_client import make_command
+from mavlink_driver.duburi_client import DuburiClient
 
 from .planner_config import PlannerConfig
 
@@ -47,13 +48,14 @@ class PlannerContext:
         '_alignment_sub', '_detection_sub',
         '_vehicle_state', '_alignment_status',
         '_detections', '_last_feedback',
-        '_feedback_event',
+        '_feedback_event', 'duburi',
     )
 
     def __init__(self, node: Node, cfg: PlannerConfig) -> None:
         self.node = node
         self.cfg = cfg
         self._lock = threading.Lock()
+        self.duburi = DuburiClient(node)
 
         self._vehicle_state: VehicleState | None = None
         self._alignment_status: AlignmentStatus | None = None
@@ -115,7 +117,16 @@ class PlannerContext:
         )
 
     def send(self, command: str, **kwargs) -> None:
-        """Shorthand: build a DriverCommand and publish it."""
+        """Send a command (backward compatible wrapper).
+
+        Prefers DuburiClient methods when available, falls back to raw publish.
+        """
+        # Try to find matching DuburiClient method
+        method = getattr(self.duburi, command, None)
+        if method is not None and callable(method):
+            return method(**kwargs)
+
+        # Fallback: publish raw DriverCommand
         self.publish_command(make_command(command, **kwargs))
 
     # ── Subscription callbacks ────────────────────────────────────────

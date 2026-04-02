@@ -21,6 +21,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/CameraStatus.msg"
   "msg/CameraStatusArray.msg"
   "msg/AlignmentStatus.msg"
+  "srv/AuvCommand.srv"
   DEPENDENCIES std_msgs
 )
 
