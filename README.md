@@ -2,7 +2,9 @@
 
 ROS 2 Humble workspace for the BRACU Duburi AUV 4.2. Controls the vehicle through a Pixhawk 2.4.8 running ArduSub via pymavlink. Perception via YOLO11 object detection with CUDA-accelerated inference, Kalman-filtered tracking, and PID-based visual servoing.
 
-**~40 Python source files · 8 packages · ~6 500 lines**
+> **Branch:** `Control-Redesign-V2` — Advanced control features (convergence gates, cascade control, DVL integration)
+
+**83 Python source files · 10 packages · ~16,500 lines**
 
 ```mermaid
 flowchart LR
@@ -29,6 +31,15 @@ flowchart LR
         TRACK --> ALIGN[Alignment PID]
         ALIGN --> VISION
     end
+    
+    subgraph V2["V2 Control Modules"]
+        VE[VelocityEstimator]
+        CG[ConvergenceGate]
+        GS[GainScheduler]
+        SSM[SensorSourceManager]
+    end
+    
+    INS --> V2
 ```
 
 ---
@@ -166,32 +177,39 @@ See [`analysis/design-decisions/control-stack-redesign.md`](analysis/design-deci
 | Package | Modules | Lines | ROS Nodes | Description |
 |---------|---------|-------|-----------|-------------|
 | `duburi_interfaces` | — | — | — | Shared ROS 2 messages: `DriverCommand`, `TeleopCommand`, `VehicleState`, `VehicleDiagnostics`, `MavlinkEvent`, `DriverCommandFeedback`, `Detection`, `DetectionArray`, `AlignmentStatus`, `CameraStatus` |
-| `duburi_common` | 2 | ~120 | — | Shared constants (`MISSION_PATHS`, `UNARMED_ALLOWED`) and command vocabulary (aliases, direction maps, prefix resolution) |
-| `mavlink_inspector` | 7 | ~2 250 | `inspector` | MAVLink ↔ ROS bridge. Owns serial port, RC override, PID controllers, command dispatch, telemetry publishing |
-| `mavlink_driver` | 5 | ~1 040 | `mission_executor`, `teleop_driver` | High-level command API (`driver_client.py`), mission file execution, joystick/teleop via `TeleopCommand` |
+| `duburi_common` | 2 | ~200 | — | Shared constants (`MISSION_PATHS`, `UNARMED_ALLOWED`) and command vocabulary (aliases, direction maps, prefix resolution) |
+| `mavlink_inspector` | 9 | ~5,760 | `inspector` | MAVLink ↔ ROS bridge. Owns serial port, RC override, PID controllers, command dispatch, telemetry publishing. **V2 adds** velocity_control.py, sensor_sources.py |
+| `mavlink_driver` | 5 | ~1,040 | `mission_executor`, `teleop_driver` | High-level command API (`driver_client.py`), mission file execution, joystick/teleop via `TeleopCommand` |
 | `mavlink_runner` | 4 | ~920 | `runner` | Interactive `Duburi >` CLI with history, status dashboard, file-based missions |
 | `mavlink_logger` | 1 | ~230 | `logger` | Logs all ROS topics to session-based CSV/JSON files |
 | `vision` | 5 | ~900 | `detector_node`, `detector_standalone`, `alignment_controller` | YOLO11 detection, Kalman-filtered tracking, PID-based visual servoing |
 | `vision_inspector` | 8 | ~810 | `camera_manager`, `camera_enum`, `camera_test`, `camera_calibrate`, `camera_record`, `camera_playback` | Multi-camera management, enumeration, testing, calibration, recording/playback |
+| `duburi_planner` | 18 | ~2,100 | `mission_planner` | YASMIN FSM mission planner with reusable states |
+| `duburi_blueos` | 6 | ~450 | `blueos_monitor` | BlueOS REST API companion client |
 
-### Inspector Module Breakdown
+### Inspector Module Breakdown (V2)
 
-The inspector (the core MAVLink bridge) is decomposed into focused modules:
+The inspector (the core MAVLink bridge) is decomposed into 9 focused modules:
 
 ```
 mavlink_inspector/
-├── inspector_node.py       (641 lines)  Thin orchestrator — timers, publishers, wiring
-├── command_handler.py      (440 lines)  DriverCommand dispatch table → handlers
-├── movement_commands.py    (399 lines)  MOVEMENTS registry — 30+ movement handlers
-├── connection_manager.py   (246 lines)  Serial lifecycle, heartbeat, reconnect with backoff
-├── rc_controller.py        (206 lines)  PWM math, channel constants, trapezoidal ramp
-├── pid_controller.py       (162 lines)  Generic PID — deadband, anti-windup, EMA derivative
-└── telemetry_parser.py     (159 lines)  MAVLink message dispatch → vehicle state
+├── inspector_node.py       (1,212 lines)  Orchestrator — timers, publishers, V2 module wiring
+├── command_handler.py        (987 lines)  DriverCommand dispatch + V2 helpers
+├── movement_commands.py      (599 lines)  MOVEMENTS registry — 30+ handlers + rotate-in-place
+├── connection_manager.py     (374 lines)  Serial lifecycle, heartbeat, reconnect with backoff
+├── rc_controller.py          (373 lines)  PWM math, channel constants, trapezoidal ramp
+├── pid_controller.py         (256 lines)  Generic PID — deadband, anti-windup, EMA derivative
+├── telemetry_parser.py       (180 lines)  MAVLink message dispatch → vehicle state
+├── velocity_control.py       (907 lines)  **V2** VelocityEstimator, ConvergenceGate, CascadeController, GainScheduler, AccelerationLimiter
+└── sensor_sources.py         (871 lines)  **V2** DVLSource, ExternalYawSource, SensorSourceManager
 ```
 
-> **Note:** With the Control Stack Redesign V1, additional files were added:
-> - `command_registry.py` - Decorator-based command registry
-> - `duburi_client.py` (in mavlink_driver) - Clean Python API
+### V2 Control Modules
+
+| Module | Classes | Purpose |
+|--------|---------|---------|
+| `velocity_control.py` | VelocityEstimator, ConvergenceGate, PositionEstimator, CascadeController, GainScheduler, AccelerationLimiter | Phase 1-4 control improvements |
+| `sensor_sources.py` | DVLSource, DVLIMUSource, ExternalYawSource, PixhawkYawSource, SensorSourceManager | Phase 5 multi-source sensors |
 
 ### Driver Module Breakdown
 

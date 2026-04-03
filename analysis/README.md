@@ -154,8 +154,9 @@ Why we made the decisions we made.
 
 | Document | Description |
 |----------|-------------|
-| [control-stack-redesign.md](design-decisions/control-stack-redesign.md) | **NEW** V1 control stack redesign |
-| [core-decisions.md](design-decisions/core-decisions.md) | Core design decisions |
+| [control-stack-v2.md](design-decisions/control-stack-v2.md) | **V2** Complete Phase 1-5 design documentation |
+| [control-stack-redesign.md](design-decisions/control-stack-redesign.md) | V1 control stack redesign |
+| [core-decisions.md](design-decisions/core-decisions.md) | Core design decisions (26 entries) |
 | [decisions-deep-dive.md](design-decisions/decisions-deep-dive.md) | Deep dive into design choices |
 | [ardusub-constraints.md](design-decisions/ardusub-constraints.md) | ArduSub firmware constraints |
 | [movement-vocabulary.md](design-decisions/movement-vocabulary.md) | Movement command vocabulary |
@@ -172,6 +173,7 @@ How-to guides for users and developers.
 | [blueos-network-setup.md](guides/blueos-network-setup.md) | BlueOS/Jetson network |
 | [planner-guide.md](guides/planner-guide.md) | YASMIN state machine guide |
 | [mission-planning.md](guides/mission-planning.md) | Mission planning analysis |
+| [pool-testing/](guides/pool-testing/) | **V2** Pool testing guides and checklists |
 
 ### 📚 [reference/](reference/)
 
