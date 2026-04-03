@@ -1,5 +1,19 @@
 # ROADMAP — Duburi 4.2 → RoboSub 2026
 
+> ⚠️ **This document has been reorganized!** See the new structure in [`roadmap/`](roadmap/):
+>
+> | Document | Description |
+> |----------|-------------|
+> | [roadmap/README.md](roadmap/README.md) | Overview with visual timeline |
+> | [roadmap/completed.md](roadmap/completed.md) | What we've accomplished |
+> | [roadmap/current.md](roadmap/current.md) | Active development |
+> | [roadmap/future.md](roadmap/future.md) | Planned features |
+> | [roadmap/timeline.md](roadmap/timeline.md) | Competition timeline & Gantt chart |
+>
+> This file is retained as a **legacy reference** with full details.
+
+---
+
 > **Living document.** Check off items as they're completed. Last updated: 2026-04-02.
 >
 > **Mission:** Win RoboSub 2026. Theme: *"Restore and Recovery"* — underwater pipeline maintenance scenario.

@@ -1,0 +1,35 @@
+# Movement.action - Action for long-running movement commands
+# Used for: move_*, go_*, cruise, yaw_to_heading, pid_yaw_to_heading, surface, pid_depth
+#
+# Features:
+# - Preemptible (cancel mid-execution)
+# - Feedback during execution
+# - Goal success/failure reporting
+
+# Goal: What movement to execute
+string command              # Command name: move_forward, yaw_to_heading, cruise, etc.
+float32 speed_pct           # Speed as percentage 0-100
+float32 duration            # Duration in seconds (0 = until preempted)
+float32 target_heading      # Target heading in degrees (for yaw commands)
+float32 target_depth        # Target depth in meters (for depth commands)
+float32 bearing             # Movement bearing in degrees (for move_at, cruise)
+string direction            # Direction: forward, back, left, right, etc.
+bool bypass_ramp            # If true, skip PWM ramping (just_* commands)
+bool use_pid                # If true, use PID variant
+---
+# Result: Final outcome
+bool success                # True if completed successfully
+string message              # Status message
+float32 final_heading       # Heading at completion
+float32 final_depth         # Depth at completion
+float32 distance_traveled   # Estimated distance traveled (if available)
+float32 elapsed_time        # Actual time elapsed
+---
+# Feedback: Progress updates during execution
+string phase                # Current phase: ramping_up, cruising, ramping_down, braking
+float32 progress_pct        # 0-100 completion percentage
+float32 current_heading     # Current heading
+float32 current_depth       # Current depth
+float32 heading_error       # Error from target heading (if yaw PID active)
+float32 depth_error         # Error from target depth (if depth PID active)
+float32 elapsed_time        # Time since command started

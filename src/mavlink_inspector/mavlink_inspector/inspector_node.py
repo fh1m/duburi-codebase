@@ -33,6 +33,9 @@ from duburi_interfaces.msg import (
     TeleopCommand, VehicleDiagnostics, VehicleState,
 )
 from duburi_interfaces.srv import AuvCommand
+from duburi_interfaces.action import Movement
+
+from rclpy.action import ActionServer, CancelResponse, GoalResponse
 
 from .connection_manager import ConnectionManager
 from .telemetry_parser import TelemetryParser
@@ -198,6 +201,18 @@ class MavlinkInspectorNode(Node):
             '/auv/command',
             self._handle_auv_command
         )
+
+        # ── Action server for long-running movements ──────────────────
+        self._movement_action_server = ActionServer(
+            self,
+            Movement,
+            '/auv/movement',
+            execute_callback=self._execute_movement,
+            goal_callback=self._movement_goal_callback,
+            cancel_callback=self._movement_cancel_callback
+        )
+        self._active_goal_handle = None
+        self._movement_cancelled = False
 
         # ── Subscribers ──────────────────────────────────────────────
         self.create_subscription(
@@ -815,6 +830,123 @@ class MavlinkInspectorNode(Node):
             self.get_logger().error(f'Service command failed: {e}')
 
         return response
+
+    # ── Action server callbacks ───────────────────────────────────────
+
+    def _movement_goal_callback(self, goal_request):
+        """Accept or reject a movement goal."""
+        self.get_logger().info(f'Received movement goal: {goal_request.command}')
+        # Accept all goals for now; could add validation here
+        return GoalResponse.ACCEPT
+
+    def _movement_cancel_callback(self, goal_handle):
+        """Handle cancellation request."""
+        self.get_logger().info('Movement cancel requested')
+        return CancelResponse.ACCEPT
+
+    def _execute_movement(self, goal_handle):
+        """Execute a long-running movement command with feedback."""
+        self._active_goal_handle = goal_handle
+        self._movement_cancelled = False
+        
+        goal = goal_handle.request
+        start_time = time.time()
+        
+        self.get_logger().info(
+            f'Executing movement: {goal.command} '
+            f'speed={goal.speed_pct}% duration={goal.duration}s'
+        )
+
+        # Create DriverCommand from goal
+        cmd = DriverCommand()
+        cmd.command = goal.command
+        cmd.speed_pct = goal.speed_pct
+        cmd.duration = goal.duration
+        cmd.target_heading = goal.target_heading
+        cmd.target_depth = goal.target_depth
+        cmd.bearing = goal.bearing
+        cmd.direction = goal.direction
+        cmd.bypass_ramp = goal.bypass_ramp
+        cmd.use_pid = goal.use_pid
+
+        # Dispatch the command
+        try:
+            self._cmd_handler.handle(cmd)
+        except Exception as e:
+            self.get_logger().error(f'Movement command failed: {e}')
+            goal_handle.abort()
+            result = Movement.Result()
+            result.success = False
+            result.message = str(e)
+            result.elapsed_time = time.time() - start_time
+            self._active_goal_handle = None
+            return result
+
+        # Monitor progress and publish feedback
+        feedback_msg = Movement.Feedback()
+        duration = goal.duration if goal.duration > 0 else float('inf')
+        
+        while time.time() - start_time < duration:
+            # Check for cancellation
+            if goal_handle.is_cancel_requested:
+                self.get_logger().info('Movement cancelled')
+                self._stop_all()
+                goal_handle.canceled()
+                result = Movement.Result()
+                result.success = False
+                result.message = 'Cancelled'
+                result.elapsed_time = time.time() - start_time
+                result.final_heading = self._telem.heading
+                result.final_depth = self._telem.depth
+                self._active_goal_handle = None
+                return result
+
+            # Build feedback
+            elapsed = time.time() - start_time
+            feedback_msg.elapsed_time = elapsed
+            feedback_msg.progress_pct = min(100.0, (elapsed / duration) * 100) if duration > 0 else 0.0
+            feedback_msg.current_heading = self._telem.heading
+            feedback_msg.current_depth = self._telem.depth
+            
+            # Get phase from RC controller if available
+            if hasattr(self._rc, 'get_current_phase'):
+                feedback_msg.phase = self._rc.get_current_phase()
+            else:
+                feedback_msg.phase = 'cruising'
+            
+            # Calculate errors if PIDs are active
+            if hasattr(self._cmd_handler, '_depth_pid_enabled') and self._cmd_handler._depth_pid_enabled:
+                feedback_msg.depth_error = abs(self._cmd_handler._depth_pid_setpoint - self._telem.depth)
+            if hasattr(self._cmd_handler, '_yaw_pid_enabled') and self._cmd_handler._yaw_pid_enabled:
+                heading_error = self._cmd_handler._yaw_pid_setpoint - self._telem.heading
+                # Normalize to -180 to 180
+                while heading_error > 180:
+                    heading_error -= 360
+                while heading_error < -180:
+                    heading_error += 360
+                feedback_msg.heading_error = abs(heading_error)
+
+            goal_handle.publish_feedback(feedback_msg)
+            time.sleep(0.1)  # 10 Hz feedback
+
+        # Movement complete - stop and return success
+        self._stop_all()
+        
+        result = Movement.Result()
+        result.success = True
+        result.message = 'Movement completed'
+        result.elapsed_time = time.time() - start_time
+        result.final_heading = self._telem.heading
+        result.final_depth = self._telem.depth
+
+        goal_handle.succeed()
+        self._active_goal_handle = None
+        
+        self.get_logger().info(
+            f'Movement complete: {goal.command} in {result.elapsed_time:.2f}s'
+        )
+        
+        return result
 
 
 # ── Entry point ──────────────────────────────────────────────────────

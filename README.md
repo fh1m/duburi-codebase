@@ -34,20 +34,24 @@ flowchart LR
 
 1. [Hardware](#hardware)
 2. [Packages & Codebase Structure](#packages--codebase-structure)
-3. [Build & Quick Start](#build--quick-start)
-4. [Architecture](#architecture)
-5. [Configuration Profiles](#configuration-profiles)
-6. [Using the Duburi CLI (Runner)](#using-the-duburi-cli-runner)
-7. [Planning Missions Without the Runner](#planning-missions-without-the-runner)
-8. [Logging](#logging)
-9. [Vision & Perception](#vision--perception)
-10. [Simulation: Gazebo and ArduSub SITL](#simulation-gazebo-and-ardusub-sitl)
-11. [Topics & Messages](#topics--messages)
-12. [Inspector Parameters](#inspector-parameters)
-13. [Troubleshooting](#troubleshooting)
-14. [Analysis & Documentation](#analysis--documentation)
-15. [Dependencies](#dependencies)
-16. [License](#license)
+3. [Package Dependencies](#package-dependencies)
+4. [Build & Quick Start](#build--quick-start)
+5. [Getting Up and Running](#getting-up-and-running)
+6. [Architecture](#architecture)
+7. [System Architecture Deep Dive](#system-architecture-deep-dive)
+8. [Configuration Profiles](#configuration-profiles)
+9. [Live Parameter Tuning](#live-parameter-tuning)
+10. [Using the Duburi CLI (Runner)](#using-the-duburi-cli-runner)
+11. [Planning Missions Without the Runner](#planning-missions-without-the-runner)
+12. [Logging](#logging)
+13. [Vision & Perception](#vision--perception)
+14. [Simulation: Gazebo and ArduSub SITL](#simulation-gazebo-and-ardusub-sitl)
+15. [Topics & Messages](#topics--messages)
+16. [Inspector Parameters](#inspector-parameters)
+17. [Troubleshooting](#troubleshooting)
+18. [Analysis & Documentation](#analysis--documentation)
+19. [Dependencies](#dependencies)
+20. [License](#license)
 
 ---
 
@@ -134,6 +138,108 @@ mavlink_inspector/
 > **Note:** With the Control Stack Redesign V1, additional files were added:
 > - `command_registry.py` - Decorator-based command registry
 > - `duburi_client.py` (in mavlink_driver) - Clean Python API
+
+---
+
+## Package Dependencies
+
+Understanding how packages depend on each other is critical for builds, debugging, and extending the system.
+
+```mermaid
+flowchart BT
+    subgraph Core["Core Layer (Built First)"]
+        INT[duburi_interfaces<br/>Messages/Services]
+        COM[duburi_common<br/>Shared Constants]
+    end
+    
+    subgraph Control["Control Layer"]
+        INS[mavlink_inspector<br/>MAVLink Bridge]
+        DRV[mavlink_driver<br/>High-Level API]
+        RUN[mavlink_runner<br/>CLI]
+        LOG[mavlink_logger<br/>Recording]
+    end
+    
+    subgraph Perception["Perception Layer"]
+        VIS[vision<br/>YOLO + Servo]
+        VISI[vision_inspector<br/>Camera Mgmt]
+    end
+    
+    subgraph Planning["Planning Layer"]
+        PLAN[duburi_planner<br/>YASMIN HFSM]
+        BLUE[duburi_blueos<br/>REST Client]
+    end
+    
+    INT --> INS
+    INT --> DRV
+    INT --> VIS
+    INT --> LOG
+    COM --> INS
+    COM --> DRV
+    COM --> RUN
+    
+    INS --> DRV
+    DRV --> RUN
+    DRV --> PLAN
+    
+    VIS --> PLAN
+    VISI --> VIS
+    
+    BLUE --> PLAN
+```
+
+### Build Order
+
+The packages must be built in dependency order. `colcon build` handles this automatically, but if you're building selectively:
+
+```bash
+# 1. Core (always first)
+colcon build --packages-select duburi_interfaces duburi_common
+
+# 2. Control stack
+colcon build --packages-select mavlink_inspector mavlink_driver mavlink_runner mavlink_logger
+
+# 3. Perception stack  
+colcon build --packages-select vision_inspector vision
+
+# 4. Planning (depends on control + perception)
+colcon build --packages-select duburi_blueos duburi_planner
+```
+
+### Inter-Package Communication
+
+```mermaid
+flowchart LR
+    subgraph Runtime["Runtime Communication"]
+        direction TB
+        
+        subgraph Topics["ROS 2 Topics"]
+            CMD["/driver/command<br/>DriverCommand"]
+            STATE["/mavlink/vehicle_state<br/>VehicleState"]
+            DET["/vision/detections<br/>DetectionArray"]
+            IMG["/camera/*/image_raw<br/>Image"]
+        end
+        
+        subgraph Nodes["Active Nodes"]
+            INS_N[inspector]
+            RUN_N[runner]
+            DET_N[detector_node]
+            CAM_N[camera_manager]
+            ALIGN_N[alignment_controller]
+        end
+    end
+    
+    RUN_N -->|publish| CMD
+    CMD -->|subscribe| INS_N
+    INS_N -->|publish| STATE
+    STATE -->|subscribe| RUN_N
+    STATE -->|subscribe| ALIGN_N
+    
+    CAM_N -->|publish| IMG
+    IMG -->|subscribe| DET_N
+    DET_N -->|publish| DET
+    DET -->|subscribe| ALIGN_N
+    ALIGN_N -->|publish| CMD
+```
 
 ### Driver Module Breakdown
 
@@ -232,6 +338,257 @@ ros2 launch mavlink_inspector duburi_control.launch.py \
 
 # Camera + detector together
 ros2 launch vision vision.launch.py enable_display:=True confidence:=0.4
+```
+
+---
+
+## Getting Up and Running
+
+This section provides a comprehensive guide to starting each package, understanding the boot sequence, and verifying everything is working.
+
+### Prerequisites Checklist
+
+```mermaid
+flowchart TD
+    A[Ubuntu 22.04] --> B[ROS 2 Humble]
+    B --> C[Python 3.10+]
+    C --> D[pip packages]
+    D --> E{CUDA needed?}
+    E -->|Yes| F[CUDA 12.x + PyTorch]
+    E -->|No| G[CPU-only mode]
+    F --> H[Workspace Ready]
+    G --> H
+```
+
+| Requirement | Install Command | Verify |
+|-------------|-----------------|--------|
+| ROS 2 Humble | `sudo apt install ros-humble-desktop` | `ros2 --version` |
+| pymavlink | `pip install pymavlink` | `python3 -c "import pymavlink"` |
+| ultralytics | `pip install ultralytics` | `yolo version` |
+| opencv | `pip install opencv-python` | `python3 -c "import cv2"` |
+| supervision | `pip install supervision` | `python3 -c "import supervision"` |
+| simple-pid | `pip install simple-pid` | `python3 -c "import simple_pid"` |
+
+### Package Startup Order
+
+The startup order matters. Always start the inspector first — it's the bridge to hardware.
+
+```mermaid
+sequenceDiagram
+    participant User
+    participant Inspector as mavlink_inspector
+    participant Runner as mavlink_runner
+    participant Logger as mavlink_logger
+    participant Vision as vision
+    
+    Note over User,Vision: CONTROLS STACK
+    User->>Inspector: ros2 run mavlink_inspector inspector
+    Inspector->>Inspector: Connect to Pixhawk
+    Inspector-->>User: "Connected, waiting for commands"
+    
+    User->>Runner: ros2 run mavlink_runner runner
+    Runner-->>User: "Duburi >" prompt ready
+    
+    User->>Logger: ros2 run mavlink_logger logger (optional)
+    Logger-->>User: "Logging to session_XXXXX/"
+    
+    Note over User,Vision: PERCEPTION STACK
+    User->>Vision: ros2 run vision_inspector camera_manager
+    Vision-->>User: "Camera streaming"
+    
+    User->>Vision: ros2 run vision detector_node
+    Vision-->>User: "YOLO loaded, detecting..."
+```
+
+### Package-by-Package Startup
+
+#### 1. mavlink_inspector (REQUIRED FIRST)
+
+The inspector is the core MAVLink bridge. It must be running before any other control nodes.
+
+```bash
+# Basic startup
+ros2 run mavlink_inspector inspector
+
+# With custom serial port
+ros2 run mavlink_inspector inspector --ros-args \
+    -p connection_port:=/dev/ttyACM1
+
+# For simulation (UDP)
+ros2 run mavlink_inspector inspector --ros-args \
+    -p connection_port:=udpin:127.0.0.1:5760
+
+# With tuned PID
+ros2 run mavlink_inspector inspector --ros-args \
+    --params-file src/mavlink_inspector/config/pool_test.yaml
+```
+
+**Verification:**
+```bash
+# Should show ~10 Hz
+ros2 topic hz /mavlink/vehicle_state
+
+# Should show armed=false, mode, depth, heading
+ros2 topic echo /mavlink/vehicle_state --once
+```
+
+#### 2. mavlink_runner (Interactive Control)
+
+The runner provides the `Duburi >` CLI for interactive control.
+
+```bash
+# Start CLI
+ros2 run mavlink_runner runner
+```
+
+**Available commands at the prompt:**
+```
+arm           - Arm motors
+disarm        - Disarm motors
+move forward 50% 5s   - Move forward at 50% for 5 seconds
+~depth 0.5    - PID depth to 0.5m
+go forward 90 50%     - Move forward while holding 90° heading
+status        - Show vehicle status
+help          - Show all commands
+```
+
+#### 3. mavlink_logger (Telemetry Recording)
+
+Records all ROS topics to session-based log files.
+
+```bash
+# Start logging
+ros2 run mavlink_logger logger
+
+# Custom log directory
+ros2 run mavlink_logger logger --ros-args -p log_directory:=/path/to/logs
+```
+
+**Logs saved to:** `logs/session_YYYYMMDD_HHMMSS/`
+- `vehicle_state.csv` - Telemetry
+- `commands.json` - All commands
+- `events.json` - Arm/disarm/mode events
+
+#### 4. vision_inspector (Camera Management)
+
+Manages camera enumeration, streaming, and calibration.
+
+```bash
+# Enumerate available cameras
+ros2 run vision_inspector camera_enum
+
+# Start multi-camera manager
+ros2 run vision_inspector camera_manager
+
+# Test single camera
+ros2 run vision_inspector camera_test --ros-args -p device_id:=0
+
+# Calibrate camera
+ros2 run vision_inspector camera_calibrate --ros-args \
+    -p board_width:=9 -p board_height:=6 -p square_size:=0.025
+```
+
+**Verification:**
+```bash
+# Should show image topic
+ros2 topic list | grep camera
+
+# Should show ~30 Hz
+ros2 topic hz /camera/forward/image_raw
+```
+
+#### 5. vision (Detection + Servoing)
+
+YOLO object detection and visual servoing.
+
+```bash
+# Start YOLO detector
+ros2 run vision detector_node --ros-args \
+    -p confidence:=0.5 \
+    -p enable_display:=true
+
+# Start visual servoing
+ros2 run vision alignment_controller
+```
+
+**Verification:**
+```bash
+# Should show detections
+ros2 topic echo /vision/detections
+
+# Check FPS
+ros2 topic hz /vision/detections
+```
+
+### Full Stack Startup Script
+
+For convenience, here's a tmux-based startup sequence:
+
+```bash
+#!/bin/bash
+# start_duburi.sh - Full stack startup
+
+# Source workspace
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+
+# Start in tmux
+tmux new-session -d -s duburi
+
+# Pane 0: Inspector
+tmux send-keys "ros2 run mavlink_inspector inspector" C-m
+
+# Pane 1: Runner
+tmux split-window -h
+tmux send-keys "sleep 3 && ros2 run mavlink_runner runner" C-m
+
+# Pane 2: Logger
+tmux split-window -v
+tmux send-keys "ros2 run mavlink_logger logger" C-m
+
+# Pane 3: Camera
+tmux select-pane -t 0
+tmux split-window -v
+tmux send-keys "ros2 run vision_inspector camera_manager" C-m
+
+# Attach
+tmux attach -t duburi
+```
+
+### System Health Check
+
+```mermaid
+flowchart TD
+    START[System Check] --> Q1{Inspector running?}
+    Q1 -->|No| A1[ros2 run mavlink_inspector inspector]
+    Q1 -->|Yes| Q2{Telemetry flowing?}
+    
+    Q2 -->|No| A2[Check USB cable<br/>ls /dev/ttyACM*]
+    Q2 -->|Yes| Q3{Runner connected?}
+    
+    Q3 -->|No| A3[ros2 run mavlink_runner runner]
+    Q3 -->|Yes| Q4{Camera streaming?}
+    
+    Q4 -->|No| A4[ros2 run vision_inspector camera_enum]
+    Q4 -->|Yes| Q5{YOLO detecting?}
+    
+    Q5 -->|No| A5[Check CUDA<br/>pip install ultralytics]
+    Q5 -->|Yes| SUCCESS[✓ System Ready]
+    
+    A1 --> Q2
+    A2 --> Q2
+    A3 --> Q4
+    A4 --> Q5
+    A5 --> SUCCESS
+```
+
+```bash
+# Quick health check commands
+ros2 node list                           # Should show /mavlink_inspector
+ros2 topic hz /mavlink/vehicle_state     # Should be ~10 Hz
+ros2 topic echo /mavlink/vehicle_state --once  # Should show data
+ros2 topic list | grep camera            # Should show /camera/*/image_raw
+python3 -c "import torch; print(torch.cuda.is_available())"  # True for GPU
 ```
 
 ---
@@ -439,6 +796,381 @@ sequenceDiagram
 
 ---
 
+## System Architecture Deep Dive
+
+This section provides detailed diagrams for each major subsystem, showing exactly how data flows and how components interact.
+
+### Control Flow Overview
+
+```mermaid
+flowchart TB
+    subgraph Input["Command Input Layer"]
+        CLI[Runner CLI<br/>Interactive REPL]
+        MISSION[Mission Files<br/>.mission/.yaml]
+        PLANNER[YASMIN Planner<br/>State Machine]
+        TELEOP[Teleop Driver<br/>Joystick/cmd_vel]
+        VISION[Visual Servo<br/>Alignment PID]
+    end
+    
+    subgraph Parser["Command Processing"]
+        CP[Command Parser<br/>Grammar + Aliases]
+        REG[("Command Registry<br/>@register")]
+        VOC[Command Vocabulary<br/>Alias Resolution]
+    end
+    
+    subgraph Inspector["mavlink_inspector (Core)"]
+        direction TB
+        HAND[Command Handler<br/>Dispatch + Execution]
+        MOV[Movement Commands<br/>26 Handlers]
+        RC[RC Controller<br/>PWM Ramping]
+        PID_D[Depth PID<br/>Software Control]
+        PID_Y[Yaw PID<br/>Heading Hold]
+        CONN[Connection Manager<br/>Serial + Reconnect]
+        TEL[Telemetry Parser<br/>MAVLink Decode]
+    end
+    
+    subgraph MAV["MAVLink Layer"]
+        PIX[Pixhawk 2.4.8<br/>ArduSub Firmware]
+        THR[T200 Thrusters<br/>8 channels]
+        BAR[BAR30 Barometer<br/>Depth Sensor]
+    end
+    
+    Input --> Parser
+    CP --> VOC
+    CP --> REG
+    Parser --> HAND
+    HAND --> MOV
+    MOV --> RC
+    PID_D --> RC
+    PID_Y --> RC
+    RC -->|RC_CHANNELS_OVERRIDE<br/>20 Hz| PIX
+    PIX --> THR
+    BAR --> PIX
+    PIX -->|MAVLink| CONN
+    CONN --> TEL
+    TEL -->|/mavlink/vehicle_state| Input
+```
+
+### PWM Ramp System
+
+The RC controller implements a trapezoidal velocity profile for smooth thruster control. This prevents mechanical stress and provides predictable motion.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Idle: System Start
+    Idle --> RampUp: Command Received
+    RampUp --> Cruise: Target PWM Reached
+    Cruise --> RampDown: Duration - decel_time
+    RampDown --> Brake: Duration Complete
+    Brake --> Idle: brake_duration elapsed
+    
+    note right of RampUp
+        PWM increases at ramp_rate
+        (800 PWM/s default = 0.5s full range)
+    end note
+    
+    note right of Brake
+        Reverse thrust at brake_strength
+        (30% default for 0.5s)
+    end note
+```
+
+**PWM Timeline Example:**
+
+```
+PWM
+1900 ┤                  ╭────────────╮
+     │                 ╱              ╲
+1700 ┤                ╱                ╲
+     │               ╱                  ╲
+1500 ┼──────────────╱                    ╲────────────
+     │ Idle       Ramp    Cruise      Ramp   Brake
+     └──────────────────────────────────────────────── Time
+     0s          0.5s                4.5s  5.0s  5.5s
+```
+
+### PID Controllers
+
+The inspector implements two PID controllers for depth and heading. Both use derivative-on-measurement and conditional integration to prevent overshoot.
+
+```mermaid
+flowchart LR
+    subgraph DepthPID["Depth PID Controller"]
+        DS[Setpoint<br/>meters] --> DE[Error]
+        DM[BAR30<br/>Measurement] --> DE
+        DE --> DP[P: kp × error]
+        DE --> DI[I: ki × ∫error]
+        DE --> DD[D: kd × d/dt]
+        DP --> DSUM((Σ))
+        DI --> DSUM
+        DD --> DSUM
+        DSUM --> DOUT[Throttle PWM<br/>±400]
+    end
+    
+    subgraph YawPID["Yaw PID Controller"]
+        YS[Setpoint<br/>degrees] --> YE[Error]
+        YM[IMU Heading<br/>Measurement] --> YE
+        YE --> YP[P: kp × error]
+        YE --> YI[I: ki × ∫error]
+        YE --> YD[D: kd × d/dt<br/>EMA filtered]
+        YP --> YSUM((Σ))
+        YI --> YSUM
+        YD --> YSUM
+        YSUM --> YOUT[Yaw PWM<br/>±400]
+    end
+```
+
+### PID Tuning Visualization
+
+```mermaid
+flowchart TD
+    subgraph Response["PID Response Characteristics"]
+        direction LR
+        
+        subgraph Underdamped["Underdamped (kp too high)"]
+            U1[Overshoots target]
+            U2[Oscillates before settling]
+            U3[Risk of instability]
+        end
+        
+        subgraph Overdamped["Overdamped (kp too low)"]
+            O1[Slow to reach target]
+            O2[May not reach target]
+            O3[Steady-state error]
+        end
+        
+        subgraph Optimal["Well-Tuned"]
+            W1[Quick response]
+            W2[Minimal overshoot]
+            W3[Settles quickly]
+        end
+    end
+    
+    subgraph Gains["Gain Effects"]
+        KP[kp ↑] --> |More| Faster[Faster response]
+        KP --> |Too much| Overshoot[Overshoot]
+        KI[ki ↑] --> |Eliminates| Error[Steady-state error]
+        KI --> |Too much| Wind[Integral windup]
+        KD[kd ↑] --> |Reduces| Osc[Oscillation]
+        KD --> |Too much| Slow[Sluggish response]
+    end
+```
+
+### RC Override Layering System
+
+The inspector builds a single PWM message from multiple layers. Higher layers override lower ones.
+
+```mermaid
+flowchart TB
+    subgraph Layers["PWM Layer Stack (Priority Bottom→Top)"]
+        direction TB
+        L1[Layer 1: Neutral<br/>1500 on all channels]
+        L2[Layer 2: Movement<br/>Ramped thrust]
+        L3[Layer 3: Depth PID<br/>Throttle override]
+        L4[Layer 4: Yaw PID<br/>Yaw override]
+    end
+    
+    subgraph Merge["Channel Merge (20 Hz)"]
+        M1[CH_FORWARD ← L2]
+        M2[CH_LATERAL ← L2]
+        M3[CH_THROTTLE ← L3 or L2]
+        M4[CH_YAW ← L4 or L2]
+    end
+    
+    subgraph Output["RC_CHANNELS_OVERRIDE"]
+        OUT[Combined PWM Message<br/>All 8 channels]
+    end
+    
+    L1 --> L2
+    L2 --> L3
+    L3 --> L4
+    L4 --> Merge
+    Merge --> OUT
+```
+
+**Example Layer Combination:**
+
+| Command | L2 (Movement) | L3 (Depth) | L4 (Yaw) | Result |
+|---------|---------------|------------|----------|--------|
+| `move forward` | CH5=1700 | — | — | Forward only |
+| `move forward` + `~depth 0.5` | CH5=1700 | CH3=PID | — | Forward + depth hold |
+| `go forward 90` | CH5=1700 | — | CH4=PID | Forward + yaw to 90° |
+| `go forward 90` + `~depth 0.5` | CH5=1700 | CH3=PID | CH4=PID | All three PIDs active |
+
+### Command Registry Architecture
+
+The `@register` decorator system provides a single source of truth for all commands.
+
+```mermaid
+flowchart LR
+    subgraph Definition["Command Definition"]
+        DEC["@register('move_forward',<br/>    aliases=['forward'],<br/>    category=MOVEMENT)"]
+        FUNC["def handler(ctx):<br/>    ctx.set_channel(CH_FWD, pwm)"]
+    end
+    
+    subgraph Registry["Command Registry"]
+        REG[(COMMANDS<br/>dict)]
+        ALIAS[(ALIASES<br/>dict)]
+        CAT[(CATEGORIES<br/>dict)]
+    end
+    
+    subgraph Lookup["Runtime Lookup"]
+        PARSE[Parser Input<br/>'forward 50%']
+        RESOLVE[Alias Resolution<br/>'move_forward']
+        EXEC[Handler Execution]
+    end
+    
+    DEC --> REG
+    DEC --> ALIAS
+    DEC --> CAT
+    
+    PARSE --> ALIAS
+    ALIAS --> RESOLVE
+    RESOLVE --> REG
+    REG --> EXEC
+```
+
+### Connection Manager State Machine
+
+The connection manager handles serial port lifecycle, reconnection with backoff, and heartbeat monitoring.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Disconnected: Start
+    
+    Disconnected --> Connecting: Open port
+    Connecting --> Connected: Heartbeat received
+    Connecting --> Disconnected: Timeout (1s)
+    
+    Connected --> HeartbeatLost: No heartbeat (3s)
+    HeartbeatLost --> Connected: Heartbeat received
+    HeartbeatLost --> Reconnecting: Timeout (5s)
+    
+    Reconnecting --> Connecting: Backoff complete
+    Reconnecting --> Reconnecting: Port busy (exponential backoff)
+    
+    Connected --> Disconnected: Port error
+    
+    note right of Connected
+        Normal operation
+        MAVLink bidirectional
+        Telemetry at 50 Hz
+    end note
+    
+    note right of Reconnecting
+        Exponential backoff:
+        1s → 2s → 4s → 8s (max)
+    end note
+```
+
+### Vision Pipeline Architecture
+
+```mermaid
+flowchart TB
+    subgraph Capture["Camera Capture"]
+        CAM1[/dev/video0<br/>Forward Camera]
+        CAM2[/dev/video1<br/>Down Camera]
+        V4L[V4L2 Driver]
+    end
+    
+    subgraph Manager["camera_manager Node"]
+        ENUM[Camera Enumeration]
+        STREAM[Frame Streaming]
+        CALIB[Calibration Load]
+    end
+    
+    subgraph Detection["detector_node"]
+        YOLO[YOLO11 Model<br/>CUDA GPU]
+        NMS[Non-Max Suppression]
+        TRACK[Kalman Filter<br/>Object Tracking]
+    end
+    
+    subgraph Servo["alignment_controller"]
+        LATERAL[Lateral PID<br/>Center X → Yaw]
+        VERTICAL[Vertical PID<br/>Center Y → Throttle]
+        FORWARD[Forward PID<br/>Size → Speed]
+    end
+    
+    subgraph Control["mavlink_inspector"]
+        CMD[/driver/command]
+    end
+    
+    CAM1 --> V4L
+    CAM2 --> V4L
+    V4L --> Manager
+    Manager -->|/camera/*/image_raw| Detection
+    Detection -->|/vision/detections| Servo
+    Servo -->|DriverCommand| Control
+```
+
+### Visual Servoing Control Loop
+
+```mermaid
+flowchart LR
+    subgraph Input["Detection Input"]
+        DET[DetectionArray<br/>center_x, center_y, area]
+    end
+    
+    subgraph Error["Error Calculation"]
+        EX[error_x = center_x - 0.5]
+        EY[error_y = center_y - 0.5]
+        EA[error_area = target_area - area]
+    end
+    
+    subgraph PID["PID Controllers"]
+        PX[Lateral PID] --> YAW[Yaw PWM]
+        PY[Vertical PID] --> THR[Throttle PWM]
+        PA[Forward PID] --> FWD[Forward PWM]
+    end
+    
+    subgraph Output["DriverCommand"]
+        CMD[Combined Movement<br/>+ Heading Hold]
+    end
+    
+    DET --> EX
+    DET --> EY
+    DET --> EA
+    EX --> PX
+    EY --> PY
+    EA --> PA
+    YAW --> CMD
+    THR --> CMD
+    FWD --> CMD
+```
+
+### Message Flow Timing
+
+```mermaid
+sequenceDiagram
+    participant PIX as Pixhawk
+    participant CONN as Connection Mgr
+    participant TEL as Telemetry Parser
+    participant PUB as ROS Publisher
+    participant SUB as Subscribers
+    
+    loop 50 Hz (20ms)
+        PIX->>CONN: MAVLink messages
+        CONN->>TEL: parse_message()
+        TEL->>TEL: Update internal state
+    end
+    
+    loop 10 Hz (100ms)
+        TEL->>PUB: VehicleState
+        PUB->>SUB: /mavlink/vehicle_state
+    end
+    
+    loop 2 Hz (500ms)
+        TEL->>PUB: VehicleDiagnostics
+        PUB->>SUB: /mavlink/diagnostics
+    end
+    
+    loop 20 Hz (50ms)
+        Note over PIX: RC_CHANNELS_OVERRIDE
+    end
+```
+
+---
+
 ## Configuration Profiles
 
 Three YAML config profiles live in `src/mavlink_inspector/config/`:
@@ -476,6 +1208,153 @@ cp src/mavlink_inspector/config/defaults.yaml src/mavlink_inspector/config/my_po
 colcon build --packages-select mavlink_inspector
 ros2 launch mavlink_inspector duburi_control.launch.py \
     params_file:=src/mavlink_inspector/config/my_pool.yaml
+```
+
+---
+
+## Live Parameter Tuning
+
+All PID gains, brake settings, and control parameters can be tuned at runtime without restarting. This is critical for in-water tuning sessions.
+
+```mermaid
+flowchart LR
+    subgraph Tunable["Tunable Parameters"]
+        PID[PID Gains<br/>kp, ki, kd]
+        RAMP[Ramp Rate<br/>PWM/second]
+        BRAKE[Brake Settings<br/>strength, duration]
+        TOL[Tolerances<br/>depth, heading]
+    end
+    
+    CMD[ros2 param set] --> PID
+    CMD --> RAMP
+    CMD --> BRAKE
+    CMD --> TOL
+    
+    PID --> LIVE[Live Update<br/>No Restart]
+    RAMP --> LIVE
+    BRAKE --> LIVE
+    TOL --> LIVE
+```
+
+### Quick Tuning Commands
+
+```bash
+# Depth PID
+ros2 param set /mavlink_inspector depth_kp 600.0
+ros2 param set /mavlink_inspector depth_ki 30.0
+ros2 param set /mavlink_inspector depth_kd 150.0
+
+# Yaw PID
+ros2 param set /mavlink_inspector yaw_kp 2.5
+ros2 param set /mavlink_inspector yaw_ki 0.1
+ros2 param set /mavlink_inspector yaw_kd 0.8
+
+# Ramp and Brake
+ros2 param set /mavlink_inspector ramp_rate 600   # Slower ramp
+ros2 param set /mavlink_inspector brake_strength 0.4  # Stronger brake
+ros2 param set /mavlink_inspector brake_duration 0.7  # Longer brake
+
+# Tolerances
+ros2 param set /mavlink_inspector depth_tolerance 0.08  # Tighter deadband
+
+# View all parameters
+ros2 param list /mavlink_inspector
+ros2 param dump /mavlink_inspector
+```
+
+### Parameter Reference Table
+
+| Parameter | Default | Range | Effect |
+|-----------|---------|-------|--------|
+| `depth_kp` | 500.0 | 100-2000 | ↑ = faster response, risk overshoot |
+| `depth_ki` | 25.0 | 0-200 | ↑ = eliminates steady-state error |
+| `depth_kd` | 200.0 | 0-500 | ↑ = dampens oscillation |
+| `depth_max_integral` | 0.5 | 0.1-2.0 | Anti-windup cap for integral |
+| `depth_tolerance` | 0.05 | 0.01-0.2 | Deadband in metres |
+| `yaw_kp` | 2.0 | 0.5-10 | ↑ = faster rotation |
+| `yaw_ki` | 0.05 | 0-1 | ↑ = eliminates heading drift |
+| `yaw_kd` | 0.5 | 0-5 | ↑ = dampens oscillation |
+| `yaw_max_integral` | 50.0 | 10-200 | Anti-windup cap for integral |
+| `ramp_rate` | 800 | 200-2000 | PWM/s — ↑ = faster acceleration |
+| `brake_strength` | 0.3 | 0-1 | ↑ = harder stop (reverse thrust %) |
+| `brake_duration` | 0.5 | 0.1-2.0 | ↑ = longer brake pulse |
+
+### Tuning Workflow
+
+```mermaid
+flowchart TD
+    START[Start Tuning] --> BASELINE[Load conservative profile<br/>pool_test.yaml]
+    BASELINE --> TEST1[Test depth hold<br/>~depth 0.3]
+    
+    TEST1 --> Q1{Oscillating?}
+    Q1 -->|Yes| DEC_KP[Decrease depth_kp<br/>by 20%]
+    Q1 -->|No| Q2{Slow response?}
+    
+    DEC_KP --> TEST1
+    
+    Q2 -->|Yes| INC_KP[Increase depth_kp<br/>by 20%]
+    Q2 -->|No| Q3{Steady-state error?}
+    
+    INC_KP --> TEST1
+    
+    Q3 -->|Yes| INC_KI[Increase depth_ki<br/>by 50%]
+    Q3 -->|No| DEPTH_DONE[Depth PID tuned ✓]
+    
+    INC_KI --> TEST1
+    
+    DEPTH_DONE --> TEST2[Test heading hold<br/>go forward 90 50%]
+    TEST2 --> Q4{Yaw oscillating?}
+    
+    Q4 -->|Yes| DEC_YKP[Decrease yaw_kp]
+    Q4 -->|No| Q5{Heading drift?}
+    
+    DEC_YKP --> TEST2
+    
+    Q5 -->|Yes| INC_YKI[Increase yaw_ki]
+    Q5 -->|No| YAW_DONE[Yaw PID tuned ✓]
+    
+    INC_YKI --> TEST2
+    
+    YAW_DONE --> SAVE[Save to custom profile]
+```
+
+### Pool Tuning Session Checklist
+
+```bash
+# 1. Start with conservative settings
+ros2 run mavlink_inspector inspector --ros-args \
+    --params-file src/mavlink_inspector/config/pool_test.yaml
+
+# 2. Test depth response
+ros2 run mavlink_runner runner
+# At prompt: arm; mode MANUAL; ~depth 0.3
+
+# 3. Watch behavior, tune live
+ros2 param set /mavlink_inspector depth_kp 400.0   # If oscillating
+ros2 param set /mavlink_inspector depth_kp 700.0   # If slow
+
+# 4. Test heading hold
+# At prompt: go forward 90 50% 10s
+
+# 5. Tune yaw
+ros2 param set /mavlink_inspector yaw_kp 1.5       # If overshooting
+ros2 param set /mavlink_inspector yaw_kp 3.0       # If sluggish
+
+# 6. Save working parameters
+ros2 param dump /mavlink_inspector > my_tuned_params.yaml
+```
+
+### Real-Time Parameter Monitoring
+
+```bash
+# Watch PID output in real-time
+ros2 topic echo /mavlink/diagnostics --field servo_outputs
+
+# Watch depth and heading
+ros2 topic echo /mavlink/vehicle_state --field depth --field heading
+
+# Continuous parameter check
+watch -n 1 "ros2 param get /mavlink_inspector depth_kp"
 ```
 
 ---
