@@ -73,9 +73,22 @@ from .rc_controller import (
           channels=['CH_FORWARD', 'CH_LATERAL'],
           aliases=['forward'])
 def cmd_move_forward(h, cmd):
+    """
+    Move forward with optional distance-based control (Phase 3).
+    
+    Time-based (current):
+        forward 30% 5s
+    
+    Distance-based (Phase 3 - requires cascade_enabled: true):
+        To use distance control, call programmatically:
+        h.move_distance_cascade('surge', distance=2.0, max_speed_pct=30)
+        
+        Future: Add 'distance' field to DriverCommand message
+    """
     h.set_movement(
         {CH_FORWARD: NEUTRAL_PWM + h.offset, CH_LATERAL: NEUTRAL_PWM},
         f'Moving forward (speed={h.speed})')
+
 
 
 @register('move_back', CommandCategory.TRANSLATION, CommandTransport.TOPIC,
@@ -217,6 +230,137 @@ def cmd_pid_yaw_to_heading(h, cmd):
         f'(Kp={n._yaw_kp} Ki={n._yaw_ki} Kd={n._yaw_kd})')
     n._publish_feedback('pid_yaw_to_heading', 'accepted',
                         detail=f'target={cmd.angle % 360}° PID')
+
+
+# ── Phase 2: Rotate-in-Place Commands ────────────────────────────────
+
+@register('turn', CommandCategory.HEADING, CommandTransport.ACTION,
+          description='Rotate in place to relative heading (Phase 2)',
+          channels=['CH_YAW'],
+          supports_angle=True,
+          aliases=['rotate'])
+def cmd_turn_relative(h, cmd):
+    """
+    Rotate in place to relative heading (Phase 2).
+    
+    Syntax: turn left|right <degrees> [<speed%>]
+    Example: turn left 90 50%
+    
+    Three-phase execution:
+    1. Stop all translation (wait for convergence)
+    2. Rotate using precision PID (sharp, on-axis turn)
+    3. Brief stability hold
+    """
+    n = h.node
+    
+    # Check if rotate-in-place is enabled
+    if not n._rotate_in_place_enabled:
+        n.get_logger().warning("Rotate-in-place disabled - using legacy yaw command")
+        # Fallback to old PID yaw
+        h.activate_yaw_pid(cmd.angle)
+        n._publish_feedback('turn', 'accepted', detail='legacy mode')
+        return
+    
+    # Parse direction from command text or angle
+    # Assuming cmd has 'text' field with something like "turn left 90"
+    # For now, determine direction from angle sign or parse cmd.text
+    direction = 'right' if cmd.angle >= 0 else 'left'
+    angle_abs = abs(cmd.angle)
+    speed_pct = h.raw_speed if h.raw_speed > 0 else 50.0
+    
+    # Calculate target heading
+    current_heading = n._telemetry.yaw
+    if direction == 'left':
+        target_heading = (current_heading + angle_abs) % 360
+    else:
+        target_heading = (current_heading - angle_abs) % 360
+    
+    n.get_logger().info(
+        f"Rotate-in-place: {direction} {angle_abs:.0f}° "
+        f"(from {current_heading:.1f}° to {target_heading:.1f}°)")
+    
+    # PHASE 1: Stop all translation
+    n.get_logger().debug("Phase 1: Stopping translation...")
+    h.stop_all_translation(keep_depth=True)
+    
+    # PHASE 2: Pure rotation with precision PID
+    n.get_logger().debug("Phase 2: Rotating...")
+    gain_offset = int(PWM_RANGE * speed_pct / 100)
+    success = h.activate_yaw_pid_precise(
+        heading_deg=target_heading,
+        gain_offset=gain_offset
+    )
+    
+    # PHASE 3: Stability hold (brief)
+    if success:
+        n.get_logger().debug("Phase 3: Stability hold...")
+        time.sleep(0.3)  # Brief hold
+        
+        # Final convergence check on yaw rate
+        if n._convergence_enabled:
+            # Check heading rate < 1 deg/s for 200ms
+            stable_count = 0
+            for _ in range(4):  # 4 × 50ms = 200ms
+                if abs(n._telemetry.heading_rate) < 1.0:
+                    stable_count += 1
+                time.sleep(0.05)
+            
+            if stable_count >= 3:
+                n.get_logger().info("✓ Rotation complete and stable")
+            else:
+                n.get_logger().warning("⚠ Heading still moving after rotation")
+        
+        n._publish_feedback('turn', 'reached',
+                           detail=f'{direction} {angle_abs:.0f}° complete')
+    else:
+        n._publish_feedback('turn', 'timeout',
+                           detail=f'{direction} {angle_abs:.0f}° timeout')
+
+
+@register('turn_to', CommandCategory.HEADING, CommandTransport.ACTION,
+          description='Rotate in place to absolute heading (Phase 2)',
+          channels=['CH_YAW'],
+          supports_angle=True)
+def cmd_turn_absolute(h, cmd):
+    """
+    Rotate in place to absolute heading.
+    
+    Syntax: turn_to <heading>
+    Example: turn_to 180
+    """
+    n = h.node
+    
+    if not n._rotate_in_place_enabled:
+        n.get_logger().warning("Rotate-in-place disabled - using legacy yaw command")
+        h.activate_yaw_pid(cmd.angle)
+        n._publish_feedback('turn_to', 'accepted', detail='legacy mode')
+        return
+    
+    target_heading = cmd.angle % 360
+    current_heading = n._telemetry.yaw
+    
+    n.get_logger().info(
+        f"Rotate-in-place to {target_heading:.1f}° "
+        f"(currently {current_heading:.1f}°)")
+    
+    # Same three-phase approach
+    h.stop_all_translation(keep_depth=True)
+    
+    speed_pct = h.raw_speed if h.raw_speed > 0 else 50.0
+    gain_offset = int(PWM_RANGE * speed_pct / 100)
+    
+    success = h.activate_yaw_pid_precise(
+        heading_deg=target_heading,
+        gain_offset=gain_offset
+    )
+    
+    if success:
+        time.sleep(0.3)  # Stability hold
+        n._publish_feedback('turn_to', 'reached',
+                           detail=f'heading {target_heading:.1f}° reached')
+    else:
+        n._publish_feedback('turn_to', 'timeout',
+                           detail=f'heading {target_heading:.1f}° timeout')
 
 
 @register('yaw_left', CommandCategory.HEADING, CommandTransport.TOPIC,

@@ -222,12 +222,19 @@ class RcController:
         return 'cruising'
 
     def compute_braking_targets(self) -> dict[int, int]:
-        """Compute reverse thrust targets for braking."""
+        """Compute reverse thrust targets for braking.
+        
+        Uses dynamic brake strength: higher speeds get stronger braking.
+        """
         targets = {}
         for ch, original in self._movement_original_targets.items():
             if ch in RAMP_CHANNELS:
                 offset = original - NEUTRAL_PWM
-                reverse_offset = -int(offset * self._brake_strength)
+                # Dynamic brake strength: scale based on speed
+                # Higher speed (larger offset) = stronger brake
+                speed_factor = abs(offset) / PWM_RANGE  # 0.0 to 1.0
+                dynamic_strength = min(1.0, self._brake_strength * (1.0 + speed_factor))
+                reverse_offset = -int(offset * dynamic_strength)
                 targets[ch] = NEUTRAL_PWM + reverse_offset
         return targets
 

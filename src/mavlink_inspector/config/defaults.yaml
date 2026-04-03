@@ -36,19 +36,31 @@ mavlink_inspector:
     yaw_ki: 0.05
     yaw_kd: 0.5
     yaw_max_integral: 50.0
-    yaw_ema_alpha: 0.3       # NEW: Derivative EMA filter (0.3 = filtered, 1.0 = raw)
-    yaw_anti_windup: true    # NEW: Enable anti-windup for yaw PID
+    yaw_ema_alpha: 0.3       # Derivative EMA filter (0.3 = filtered, 1.0 = raw)
+    yaw_anti_windup: true    # Enable anti-windup for yaw PID
     
     # ═══════════════════════════════════════════════════════════════════
     # MOVEMENT / RAMP
     # ═══════════════════════════════════════════════════════════════════
     ramp_rate: 800           # PWM per second
-    decel_time: 1.0          # NEW: Seconds before end to start ramp down
-    brake_enabled: true      # NEW: Enable active braking
-    brake_strength: 0.3      # NEW: Fraction of speed for reverse thrust
-    brake_duration: 0.5      # NEW: Seconds of reverse thrust
-    min_speed_pct: 10.0      # NEW: Minimum meaningful speed percentage
+    decel_time: 1.0          # Seconds before end to start ramp down
+    brake_enabled: true      # Enable active braking
+    brake_strength: 0.3      # Fraction of speed for reverse thrust (dynamic scaling applied)
+    brake_duration: 0.5      # Seconds of reverse thrust
+    min_speed_pct: 10.0      # Minimum meaningful speed percentage
     pid_max_rate: 50         # Max PID output change per tick
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # AUTO STATION-KEEPING (NEW)
+    # ═══════════════════════════════════════════════════════════════════
+    auto_depth_hold: true    # Enable depth PID after movement completes
+    auto_heading_hold: true  # Enable heading PID after movement completes
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # YAW SETTLING
+    # ═══════════════════════════════════════════════════════════════════
+    yaw_tolerance: 3.0       # Degrees tolerance for "reached" (also PID deadband)
+    yaw_settle_duration: 0.3 # Seconds to stay in tolerance before "reached"
     
     # ═══════════════════════════════════════════════════════════════════
     # SYSTEM
@@ -59,9 +71,107 @@ mavlink_inspector:
     yaw_source: "attitude"   # 'attitude' or 'gps'
     
     # ═══════════════════════════════════════════════════════════════════
-    # SAFETY (NEW SECTION)
+    # SAFETY
     # ═══════════════════════════════════════════════════════════════════
-    rc_watchdog_timeout: 0.5  # NEW: Seconds without RC success → emergency neutral
+    rc_watchdog_timeout: 0.5  # Seconds without RC success → emergency neutral
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # VELOCITY ESTIMATION & CONVERGENCE (Phase 1)
+    # ═══════════════════════════════════════════════════════════════════
+    # Convergence gate - blocks next command until vehicle stops
+    convergence_velocity_threshold: 0.05  # m/s - max velocity to consider "stopped"
+    convergence_settling_time: 200        # milliseconds to stay below threshold
+    convergence_timeout: 5.0              # seconds max wait (safety)
+    
+    # IMU velocity estimation - body-frame integration with ZUPT
+    imu_stopped_accel_threshold: 0.02     # m/s² - accel below this = stopped (for ZUPT)
+    imu_stopped_time_required: 0.3        # seconds - time at low accel to trigger ZUPT
+    imu_bias_x: 0.0                       # m/s² - forward accel bias correction
+    imu_bias_y: 0.0                       # m/s² - lateral accel bias correction
+    # Enable convergence checks after movements (Phase 1)  
+    convergence_enabled: true             # If true, wait for vehicle to stop after each movement
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # PRECISION YAW CONTROL (Phase 2 - Rotate-in-Place)
+    # ═══════════════════════════════════════════════════════════════════
+    rotate_in_place_enabled: true         # Master enable for rotate-in-place mode
+    yaw_precision_deadband: 5.0           # degrees - enter precision zone below this error
+    yaw_final_deadband: 1.0               # degrees - must stay within this to converge
+    yaw_settling_time: 0.5                # seconds - time in final zone before "reached"
+    yaw_precision_kp_reduction: 0.5       # Multiply Kp by this in precision zone (0.5 = half gain)
+    yaw_precision_kd_reduction: 0.7       # Multiply Kd by this in precision zone
+    
+    # Yaw feedforward (optional - requires calibration)
+    yaw_feedforward_enabled: false        # Predict torque for smoother turns (disabled until tuned)
+    yaw_rate_to_pwm_ratio: 20.0          # PWM per deg/s (empirical - tune in pool)
+    
+    # ═══════════════════════════════════════════════════════════════════
+    # CASCADE CONTROL (Phase 3 - Experimental)
+    # ═══════════════════════════════════════════════════════════════════
+    cascade_enabled: false                # Master enable for cascade control (disabled by default)
+    
+    # Position loop (outer) - converts position error to velocity setpoint
+    position_kp: 0.5                      # Velocity per meter of error
+    position_ki: 0.0                      # Usually 0 (velocity loop handles steady-state)
+    position_kd: 0.1                      # Damping
+    position_tolerance: 0.1               # meters - target reached threshold
+    
+    # Velocity loop (inner) - converts velocity error to thrust (PWM)
+    velocity_kp: 400.0                    # PWM per m/s of velocity error
+    velocity_ki: 50.0                     # Integral for steady-state
+    velocity_kd: 30.0                     # Damping
+    
+    # Cascade limits
+    max_velocity_setpoint: 0.5            # m/s - max velocity commanded by position loop
+    position_update_rate: 20.0            # Hz - position estimation update rate
+    
+    # ────────────────────────────────────────────────────────────
+    # Phase 4: Gain Scheduling & Acceleration Limiting
+    # ────────────────────────────────────────────────────────────
+    
+    # Master enables
+    gain_scheduling_enabled: false        # Speed-adaptive PID gains (requires pool tuning)
+    accel_limiting_enabled: false         # Smooth speed ramping (50%/sec default)
+    
+    # Speed range breakpoints
+    speed_range_low_max: 30               # 0-30% = low speed range
+    speed_range_medium_max: 60            # 30-60% = medium, 60-100% = high
+    
+    # Yaw gain sets (3 ranges)
+    yaw_gains_low_kp: 2.5                 # Low speed (0-30%): more aggressive
+    yaw_gains_low_ki: 0.08
+    yaw_gains_low_kd: 0.6
+    yaw_gains_medium_kp: 2.0              # Medium speed (30-60%): default/balanced
+    yaw_gains_medium_ki: 0.05
+    yaw_gains_medium_kd: 0.5
+    yaw_gains_high_kp: 1.2                # High speed (60-100%): conservative
+    yaw_gains_high_ki: 0.02
+    yaw_gains_high_kd: 0.3
+    
+    # Depth gain sets (3 ranges)
+    depth_gains_low_kp: 900               # Low speed: more aggressive
+    depth_gains_low_ki: 60
+    depth_gains_low_kd: 120
+    depth_gains_medium_kp: 800            # Medium speed: default
+    depth_gains_medium_ki: 50
+    depth_gains_medium_kd: 100
+    depth_gains_high_kp: 600              # High speed: conservative
+    depth_gains_high_ki: 30
+    depth_gains_high_kd: 70
+    
+    # Velocity cascade gain sets (3 ranges - Phase 3 inner loop)
+    velocity_gains_low_kp: 450            # Low speed: more aggressive
+    velocity_gains_low_ki: 60
+    velocity_gains_low_kd: 35
+    velocity_gains_medium_kp: 400         # Medium speed: default
+    velocity_gains_medium_ki: 50
+    velocity_gains_medium_kd: 30
+    velocity_gains_high_kp: 300           # High speed: conservative
+    velocity_gains_high_ki: 35
+    velocity_gains_high_kd: 20
+    
+    # Acceleration limiting
+    max_accel_pct_per_sec: 50.0           # Max speed ramp rate (%/sec)
 
 mavlink_logger:
   ros__parameters:

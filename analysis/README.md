@@ -97,32 +97,9 @@ Guidelines for contributors.
 
 | Document | Description |
 |----------|-------------|
-| [how-to-add-commands.md](contributing/how-to-add-commands.md) | **Step-by-step guide for adding new commands** |
 | [known-issues.md](contributing/known-issues.md) | Known issues & gotchas |
 | [recommendations.md](contributing/recommendations.md) | Improvement recommendations |
 | [refactoring-plan.md](contributing/refactoring-plan.md) | Refactoring roadmap |
-
-### 🗺️ [roadmap/](roadmap/)
-
-Development timeline and planning.
-
-| Document | Description |
-|----------|-------------|
-| [completed.md](roadmap/completed.md) | What we've accomplished |
-| [current.md](roadmap/current.md) | Active development |
-| [future.md](roadmap/future.md) | Planned features for RoboSub 2026 |
-| [timeline.md](roadmap/timeline.md) | Gantt chart and sprint planning |
-
-### 🏆 [robosub-analysis/](robosub-analysis/)
-
-RoboSub competition resources.
-
-| Document | Description |
-|----------|-------------|
-| [competition-guide.md](robosub-analysis/competition-guide.md) | Rules, scoring, logistics |
-| [task-analysis.md](robosub-analysis/task-analysis.md) | Detailed task breakdown |
-| [team-analysis.md](robosub-analysis/team-analysis.md) | Competitor TDR review |
-| [hardware-comparison.md](robosub-analysis/hardware-comparison.md) | Hardware approaches |
 
 ### 🔍 [code-review/](code-review/)
 
@@ -145,28 +122,18 @@ Line-by-line code analysis.
 3. Check [design-decisions/core-decisions.md](design-decisions/core-decisions.md)
 
 ### "I want to add a new command"
-1. Read [contributing/how-to-add-commands.md](contributing/how-to-add-commands.md)
-2. See [design-decisions/control-stack-redesign.md](design-decisions/control-stack-redesign.md)
+1. Read [design-decisions/control-stack-redesign.md](design-decisions/control-stack-redesign.md)
+2. See the `@register` pattern in `movement_commands.py`
 3. Check [reference/command-reference.md](reference/command-reference.md)
 
 ### "I want to run simulations"
 1. [guides/simulation-setup.md](guides/simulation-setup.md)
 2. [guides/desk-testing.md](guides/desk-testing.md)
 
-### "I want to test at the pool"
-1. [guides/pool-testing/](guides/pool-testing/) — Field manual
-2. [guides/pool-testing/startup-sequence.md](guides/pool-testing/startup-sequence.md)
-3. [guides/pool-testing/tuning-guide.md](guides/pool-testing/tuning-guide.md)
-
 ### "I want to fix a bug"
 1. [contributing/known-issues.md](contributing/known-issues.md)
 2. [code-review/](code-review/) for relevant module
 3. [contributing/recommendations.md](contributing/recommendations.md)
-
-### "I want to prepare for RoboSub"
-1. [robosub-analysis/task-analysis.md](robosub-analysis/task-analysis.md)
-2. [roadmap/future.md](roadmap/future.md)
-3. [roadmap/timeline.md](roadmap/timeline.md)
 
 ---
 

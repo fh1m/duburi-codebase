@@ -54,6 +54,7 @@ class TelemetryParser:
             'SCALED_PRESSURE': self._handle_scaled_pressure,
             'SERVO_OUTPUT_RAW': self._handle_servo_output,
             'RC_CHANNELS':     self._handle_rc_channels,
+            'SCALED_IMU2':     self._handle_scaled_imu,  # Primary IMU with body-frame accel
         }
 
     # ── Public API ───────────────────────────────────────────────────
@@ -150,6 +151,21 @@ class TelemetryParser:
             msg.chan1_raw, msg.chan2_raw, msg.chan3_raw, msg.chan4_raw,
             msg.chan5_raw, msg.chan6_raw, msg.chan7_raw, msg.chan8_raw,
         ]
+    
+    def _handle_scaled_imu(self, msg, _master, _events):
+        """
+        Parse SCALED_IMU2 message for body-frame acceleration.
+        
+        SCALED_IMU2 provides calibrated IMU data in body frame:
+        - xacc, yacc, zacc in milliG (1000 = 1G = 9.81 m/s²)
+        
+        Body frame: X=forward, Y=right, Z=down (NED convention)
+        """
+        # Convert milliG to m/s²
+        G = 9.81
+        self.accel_x = (msg.xacc / 1000.0) * G  # Forward
+        self.accel_y = (msg.yacc / 1000.0) * G  # Right  
+        self.accel_z = (msg.zacc / 1000.0) * G  # Down
 
     # ── Helpers ──────────────────────────────────────────────────────
 

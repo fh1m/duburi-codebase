@@ -11,6 +11,7 @@ Features:
   - Ctrl+C gracefully aborts the mission (sends stop, does NOT kill the node)
   - ``pause`` / ``resume`` commands in mission files
   - Interruptible sleeps — abort takes effect within 0.1 s
+  - **Blocking mode**: Commands ending with ``!`` wait for completion feedback
 
 Usage:
   ros2 run mavlink_driver mission_executor --ros-args -p mission:=pool_test
@@ -25,7 +26,9 @@ from pathlib import Path
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
-from duburi_interfaces.msg import DriverCommand, MavlinkEvent, VehicleState
+from duburi_interfaces.msg import (
+    DriverCommand, MavlinkEvent, VehicleState, DriverCommandFeedback
+)
 
 from mavlink_driver.driver_client import (
     arm,
@@ -51,6 +54,7 @@ class MissionExecutorNode(Node):
     Supports:
       - Built-in named missions (param: mission)
       - Mission files with one command per line (param: mission_file)
+      - Blocking commands with ``!`` suffix (waits for feedback)
     """
 
     def __init__(self):
@@ -69,14 +73,29 @@ class MissionExecutorNode(Node):
             VehicleState, '/mavlink/vehicle_state', self._on_state,
             QoSProfile(reliability=ReliabilityPolicy.RELIABLE, depth=1)
         )
+        # Subscribe to driver feedback for blocking mode
+        self._feedback_sub = self.create_subscription(
+            DriverCommandFeedback, '/driver/feedback', self._on_feedback,
+            QoSProfile(reliability=ReliabilityPolicy.RELIABLE, depth=10)
+        )
+
         self._current_heading = 0.0  # updated from telemetry
         self._mission_name = self.declare_parameter('mission', 'pool_test').value
         self._mission_file = self.declare_parameter('mission_file', '').value
+
+        # Blocking mode parameters
+        self._blocking_timeout = self.declare_parameter('blocking_timeout', 30.0).value
+        self._inter_command_delay = self.declare_parameter('inter_command_delay', 0.5).value
 
         # ── Abort / pause state ──────────────────────────────────────────
         self._abort = False
         self._paused = threading.Event()
         self._paused.set()  # starts UN-paused (set = not waiting)
+
+        # ── Blocking command state ───────────────────────────────────────
+        self._pending_command = None  # command name waiting for feedback
+        self._command_complete = threading.Event()
+        self._command_lock = threading.Lock()
 
         # Install SIGINT handler so Ctrl+C aborts mission gracefully
         signal.signal(signal.SIGINT, self._sigint_handler)
@@ -112,6 +131,79 @@ class MissionExecutorNode(Node):
     def _on_state(self, msg: VehicleState):
         """Track current heading for relative turn commands."""
         self._current_heading = msg.yaw
+
+    def _on_feedback(self, msg: DriverCommandFeedback):
+        """Handle command feedback for blocking mode."""
+        with self._command_lock:
+            if self._pending_command is None:
+                return
+            # Check if this feedback is for the command we're waiting for
+            # Allow partial match for command names (e.g., 'move_forward' matches 'forward')
+            pending = self._pending_command.lower()
+            received = msg.command.lower()
+            if pending in received or received in pending or pending == received:
+                if msg.status in ('reached', 'completed', 'rejected'):
+                    self.get_logger().info(
+                        f'  << Feedback: {msg.command} -> {msg.status}'
+                        f'{f" ({msg.detail})" if msg.detail else ""}'
+                    )
+                    self._pending_command = None
+                    self._command_complete.set()
+
+    def _publish_blocking(self, cmd: DriverCommand, timeout: float | None = None) -> bool:
+        """Publish command and wait for completion feedback.
+
+        Args:
+            cmd: Command to execute
+            timeout: Max seconds to wait (default: self._blocking_timeout)
+
+        Returns:
+            True if completed successfully, False if aborted/timeout
+        """
+        if self._abort:
+            return False
+
+        # Honour pause
+        self._paused.wait()
+        if self._abort:
+            return False
+
+        if timeout is None:
+            timeout = self._blocking_timeout
+
+        # Setup blocking state
+        with self._command_lock:
+            self._pending_command = cmd.command
+            self._command_complete.clear()
+
+        # Publish the command
+        self._cmd_pub.publish(cmd)
+        self.get_logger().info(
+            f'  >> {cmd.command} [BLOCKING]'
+            f'{f" depth={cmd.depth}" if cmd.depth != 0.0 else ""}'
+            f'{f" angle={cmd.angle}" if cmd.angle != 0.0 else ""}'
+            f'{f" speed={cmd.speed}" if cmd.speed != 0 else ""}'
+            f'{f" duration={cmd.duration}s" if cmd.duration != 0.0 else ""}'
+        )
+
+        # Wait for completion with periodic abort checks
+        start = time.monotonic()
+        while time.monotonic() - start < timeout:
+            if self._abort:
+                with self._command_lock:
+                    self._pending_command = None
+                return False
+            if self._command_complete.wait(timeout=0.1):
+                # Inter-command settling delay
+                if self._inter_command_delay > 0:
+                    self._interruptible_sleep(self._inter_command_delay)
+                return True
+
+        # Timeout
+        self.get_logger().warn(f'  Timeout waiting for {cmd.command} (>{timeout}s)')
+        with self._command_lock:
+            self._pending_command = None
+        return True  # Continue mission despite timeout
 
     def _publish(self, cmd: DriverCommand, delay: float = 0.5):
         """Publish command and wait. Returns False if mission aborted."""
@@ -220,7 +312,13 @@ class MissionExecutorNode(Node):
         return None
 
     def _run_file_mission(self, name: str):
-        """Run a mission from a text file (same format as runner missions)."""
+        """Run a mission from a text file (same format as runner missions).
+        
+        Commands ending with ``!`` are blocking (wait for feedback).
+        Example:
+            forward 30% 5s!    # Wait for completion
+            turn left 90!      # Wait for heading reached
+        """
         path = self._find_file(name)
         if not path:
             self.get_logger().error(f'Mission file not found: {name}')
@@ -233,24 +331,30 @@ class MissionExecutorNode(Node):
                 line = line.strip()
                 if not line or line.startswith('#'):
                     continue
-                self.get_logger().info(f'  [{num}] {line}')
+                
+                # Check for blocking suffix
+                blocking = line.endswith('!')
+                if blocking:
+                    line = line[:-1].strip()  # Remove '!' suffix
+                
+                self.get_logger().info(f'  [{num}] {line}{"!" if blocking else ""}')
                 parts = line.split()
                 cmd = parts[0].lower()
                 args = parts[1:]
 
-                if cmd in ('sleep', 'wait'):
+                if cmd in ('sleep', 'wait', 'delay'):
                     secs = float(args[0]) if args else 1.0
                     if not self._interruptible_sleep(secs):
                         break
                     continue
 
                 if cmd == 'pause':
-                    self.get_logger().info('  ⏸  Mission paused. Send resume to continue.')
+                    self.get_logger().info('  Mission paused. Send resume to continue.')
                     self._paused.clear()  # block until set()
                     self._paused.wait()
                     if self._abort:
                         break
-                    self.get_logger().info('  ▶  Resumed.')
+                    self.get_logger().info('  Resumed.')
                     continue
 
                 if cmd == 'resume':
@@ -260,13 +364,20 @@ class MissionExecutorNode(Node):
                 # Map text commands to DriverCommand
                 driver_cmd = self._parse_file_command(cmd, args)
                 if driver_cmd:
-                    if not self._publish(driver_cmd, delay=0.3):
-                        self.get_logger().warn('Mission aborted.')
-                        return
-                    # If command has duration, wait for it
-                    if driver_cmd.duration > 0:
-                        if not self._interruptible_sleep(driver_cmd.duration + 0.5):
-                            break
+                    if blocking:
+                        # Blocking mode: wait for feedback
+                        if not self._publish_blocking(driver_cmd):
+                            self.get_logger().warn('Mission aborted.')
+                            return
+                    else:
+                        # Non-blocking: use delay
+                        if not self._publish(driver_cmd, delay=0.3):
+                            self.get_logger().warn('Mission aborted.')
+                            return
+                        # If command has duration, wait for it
+                        if driver_cmd.duration > 0:
+                            if not self._interruptible_sleep(driver_cmd.duration + 0.5):
+                                break
                 else:
                     self.get_logger().warn(f'  Skipping unknown command: {line}')
 

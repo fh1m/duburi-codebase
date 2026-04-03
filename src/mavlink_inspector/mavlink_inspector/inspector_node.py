@@ -44,6 +44,11 @@ from .rc_controller import (
     CH_FORWARD, CH_LATERAL, CH_THROTTLE, CH_YAW,
 )
 from .command_handler import CommandHandler
+from .velocity_control import (
+    VelocityEstimator, ConvergenceGate, 
+    PositionEstimator, CascadeController,  # Phase 3
+    GainScheduler, AccelerationLimiter     # Phase 4
+)
 
 
 class MavlinkInspectorNode(Node):
@@ -110,9 +115,109 @@ class MavlinkInspectorNode(Node):
         self._brake_duration = self.declare_parameter('brake_duration', 0.5).value
         self._min_speed_pct = self.declare_parameter('min_speed_pct', 10.0).value
 
+        # Auto station-keeping after movement (NEW)
+        self._auto_depth_hold = self.declare_parameter('auto_depth_hold', True).value
+        self._auto_heading_hold = self.declare_parameter('auto_heading_hold', True).value
+
         # Yaw PID enhancements (NEW)
         self._yaw_ema_alpha = self.declare_parameter('yaw_ema_alpha', 0.3).value
         self._yaw_anti_windup = self.declare_parameter('yaw_anti_windup', True).value
+        
+        # Convergence gate parameters (Phase 1)
+        self._convergence_velocity_threshold = self.declare_parameter(
+            'convergence_velocity_threshold', 0.05).value  # m/s
+        self._convergence_settling_time = self.declare_parameter(
+            'convergence_settling_time', 200).value  # ms
+        self._convergence_timeout = self.declare_parameter(
+            'convergence_timeout', 5.0).value  # sec
+        
+        # IMU velocity estimation parameters (Phase 1)
+        self._imu_stopped_accel_threshold = self.declare_parameter(
+            'imu_stopped_accel_threshold', 0.02).value  # m/s²
+        self._imu_stopped_time_required = self.declare_parameter(
+            'imu_stopped_time_required', 0.3).value  # sec
+        self._imu_bias_x = self.declare_parameter('imu_bias_x', 0.0).value
+        self._imu_bias_y = self.declare_parameter('imu_bias_y', 0.0).value
+        self._imu_bias_z = self.declare_parameter('imu_bias_z', 0.0).value
+        
+        # Enable convergence checks after movements (Phase 1)
+        self._convergence_enabled = self.declare_parameter(
+            'convergence_enabled', True).value
+        
+        # Precision yaw control (Phase 2)
+        self._yaw_precision_deadband = self.declare_parameter(
+            'yaw_precision_deadband', 5.0).value  # degrees
+        self._yaw_final_deadband = self.declare_parameter(
+            'yaw_final_deadband', 1.0).value  # degrees
+        self._yaw_settling_time = self.declare_parameter(
+            'yaw_settling_time', 0.5).value  # seconds
+        self._yaw_precision_kp_reduction = self.declare_parameter(
+            'yaw_precision_kp_reduction', 0.5).value  # multiply Kp by this
+        self._yaw_precision_kd_reduction = self.declare_parameter(
+            'yaw_precision_kd_reduction', 0.7).value  # multiply Kd by this
+        self._rotate_in_place_enabled = self.declare_parameter(
+            'rotate_in_place_enabled', True).value  # master enable for Phase 2
+        
+        # Yaw feedforward (Phase 2 - optional)
+        self._yaw_feedforward_enabled = self.declare_parameter(
+            'yaw_feedforward_enabled', False).value  # disabled by default (needs calibration)
+        self._yaw_rate_to_pwm_ratio = self.declare_parameter(
+            'yaw_rate_to_pwm_ratio', 20.0).value  # PWM per deg/s (empirical)
+        
+        # Cascade control (Phase 3)
+        self._cascade_enabled = self.declare_parameter(
+            'cascade_enabled', False).value  # disabled by default (experimental)
+        self._position_kp = self.declare_parameter('position_kp', 0.5).value
+        self._position_ki = self.declare_parameter('position_ki', 0.0).value
+        self._position_kd = self.declare_parameter('position_kd', 0.1).value
+        self._velocity_kp = self.declare_parameter('velocity_kp', 400.0).value
+        self._velocity_ki = self.declare_parameter('velocity_ki', 50.0).value
+        self._velocity_kd = self.declare_parameter('velocity_kd', 30.0).value
+        self._max_velocity_setpoint = self.declare_parameter('max_velocity_setpoint', 0.5).value  # m/s
+        self._position_tolerance = self.declare_parameter('position_tolerance', 0.1).value  # meters
+        self._position_update_rate = self.declare_parameter('position_update_rate', 20.0).value  # Hz
+        
+        # ─── Phase 4: Gain Scheduling & Acceleration Limiting ───
+        self._gain_scheduling_enabled = self.declare_parameter('gain_scheduling_enabled', False).value
+        self._accel_limiting_enabled = self.declare_parameter('accel_limiting_enabled', False).value
+        self._speed_range_low_max = self.declare_parameter('speed_range_low_max', 30).value
+        self._speed_range_medium_max = self.declare_parameter('speed_range_medium_max', 60).value
+        
+        # Yaw gain sets
+        self._yaw_gains_low_kp = self.declare_parameter('yaw_gains_low_kp', 2.5).value
+        self._yaw_gains_low_ki = self.declare_parameter('yaw_gains_low_ki', 0.08).value
+        self._yaw_gains_low_kd = self.declare_parameter('yaw_gains_low_kd', 0.6).value
+        self._yaw_gains_medium_kp = self.declare_parameter('yaw_gains_medium_kp', 2.0).value
+        self._yaw_gains_medium_ki = self.declare_parameter('yaw_gains_medium_ki', 0.05).value
+        self._yaw_gains_medium_kd = self.declare_parameter('yaw_gains_medium_kd', 0.5).value
+        self._yaw_gains_high_kp = self.declare_parameter('yaw_gains_high_kp', 1.2).value
+        self._yaw_gains_high_ki = self.declare_parameter('yaw_gains_high_ki', 0.02).value
+        self._yaw_gains_high_kd = self.declare_parameter('yaw_gains_high_kd', 0.3).value
+        
+        # Depth gain sets
+        self._depth_gains_low_kp = self.declare_parameter('depth_gains_low_kp', 900).value
+        self._depth_gains_low_ki = self.declare_parameter('depth_gains_low_ki', 60).value
+        self._depth_gains_low_kd = self.declare_parameter('depth_gains_low_kd', 120).value
+        self._depth_gains_medium_kp = self.declare_parameter('depth_gains_medium_kp', 800).value
+        self._depth_gains_medium_ki = self.declare_parameter('depth_gains_medium_ki', 50).value
+        self._depth_gains_medium_kd = self.declare_parameter('depth_gains_medium_kd', 100).value
+        self._depth_gains_high_kp = self.declare_parameter('depth_gains_high_kp', 600).value
+        self._depth_gains_high_ki = self.declare_parameter('depth_gains_high_ki', 30).value
+        self._depth_gains_high_kd = self.declare_parameter('depth_gains_high_kd', 70).value
+        
+        # Velocity cascade gain sets
+        self._velocity_gains_low_kp = self.declare_parameter('velocity_gains_low_kp', 450).value
+        self._velocity_gains_low_ki = self.declare_parameter('velocity_gains_low_ki', 60).value
+        self._velocity_gains_low_kd = self.declare_parameter('velocity_gains_low_kd', 35).value
+        self._velocity_gains_medium_kp = self.declare_parameter('velocity_gains_medium_kp', 400).value
+        self._velocity_gains_medium_ki = self.declare_parameter('velocity_gains_medium_ki', 50).value
+        self._velocity_gains_medium_kd = self.declare_parameter('velocity_gains_medium_kd', 30).value
+        self._velocity_gains_high_kp = self.declare_parameter('velocity_gains_high_kp', 300).value
+        self._velocity_gains_high_ki = self.declare_parameter('velocity_gains_high_ki', 35).value
+        self._velocity_gains_high_kd = self.declare_parameter('velocity_gains_high_kd', 20).value
+        
+        # Acceleration limiting
+        self._max_accel_pct_per_sec = self.declare_parameter('max_accel_pct_per_sec', 50.0).value
 
         # Connection health (Design Issue 3: parameterized timing)
         heartbeat_timeout = self.declare_parameter(
@@ -154,6 +259,103 @@ class MavlinkInspectorNode(Node):
             min_speed_pct=self._min_speed_pct,
         )
         self._cmd_handler = CommandHandler(self)
+        
+        # ── Velocity estimation & convergence (Phase 1) ──────────────
+        vel_est_config = {
+            'imu_stopped_accel_threshold': self._imu_stopped_accel_threshold,
+            'imu_stopped_time_required': self._imu_stopped_time_required,
+            'imu_bias_x': self._imu_bias_x,
+            'imu_bias_y': self._imu_bias_y,
+            'imu_bias_z': self._imu_bias_z,
+        }
+        self._velocity_estimator = VelocityEstimator(
+            logger=self.get_logger(),
+            config=vel_est_config
+        )
+        
+        convergence_config = {
+            'convergence_velocity_threshold': self._convergence_velocity_threshold,
+            'convergence_settling_time': self._convergence_settling_time,
+            'convergence_timeout': self._convergence_timeout,
+        }
+        self._convergence_gate = ConvergenceGate(
+            logger=self.get_logger(),
+            velocity_estimator=self._velocity_estimator,
+            config=convergence_config
+        )
+        
+        # ── Position estimation & cascade control (Phase 3) ──────────
+        self._position_estimator = PositionEstimator(
+            logger=self.get_logger(),
+            velocity_estimator=self._velocity_estimator
+        )
+        
+        cascade_config = {
+            'position_kp': self._position_kp,
+            'position_ki': self._position_ki,
+            'position_kd': self._position_kd,
+            'velocity_kp': self._velocity_kp,
+            'velocity_ki': self._velocity_ki,
+            'velocity_kd': self._velocity_kd,
+            'max_velocity': self._max_velocity_setpoint,
+            'position_tolerance': self._position_tolerance,
+        }
+        self._cascade_controller = CascadeController(
+            logger=self.get_logger(),
+            config=cascade_config
+        )
+        
+        # ─── Phase 4: Gain Scheduler & Acceleration Limiter ───
+        gain_scheduler_config = {
+            'gain_scheduling_enabled': self._gain_scheduling_enabled,
+            'speed_range_low_max': self._speed_range_low_max,
+            'speed_range_medium_max': self._speed_range_medium_max,
+            # Yaw gains
+            'yaw_gains_low_kp': self._yaw_gains_low_kp,
+            'yaw_gains_low_ki': self._yaw_gains_low_ki,
+            'yaw_gains_low_kd': self._yaw_gains_low_kd,
+            'yaw_gains_medium_kp': self._yaw_gains_medium_kp,
+            'yaw_gains_medium_ki': self._yaw_gains_medium_ki,
+            'yaw_gains_medium_kd': self._yaw_gains_medium_kd,
+            'yaw_gains_high_kp': self._yaw_gains_high_kp,
+            'yaw_gains_high_ki': self._yaw_gains_high_ki,
+            'yaw_gains_high_kd': self._yaw_gains_high_kd,
+            # Depth gains
+            'depth_gains_low_kp': self._depth_gains_low_kp,
+            'depth_gains_low_ki': self._depth_gains_low_ki,
+            'depth_gains_low_kd': self._depth_gains_low_kd,
+            'depth_gains_medium_kp': self._depth_gains_medium_kp,
+            'depth_gains_medium_ki': self._depth_gains_medium_ki,
+            'depth_gains_medium_kd': self._depth_gains_medium_kd,
+            'depth_gains_high_kp': self._depth_gains_high_kp,
+            'depth_gains_high_ki': self._depth_gains_high_ki,
+            'depth_gains_high_kd': self._depth_gains_high_kd,
+            # Velocity gains
+            'velocity_gains_low_kp': self._velocity_gains_low_kp,
+            'velocity_gains_low_ki': self._velocity_gains_low_ki,
+            'velocity_gains_low_kd': self._velocity_gains_low_kd,
+            'velocity_gains_medium_kp': self._velocity_gains_medium_kp,
+            'velocity_gains_medium_ki': self._velocity_gains_medium_ki,
+            'velocity_gains_medium_kd': self._velocity_gains_medium_kd,
+            'velocity_gains_high_kp': self._velocity_gains_high_kp,
+            'velocity_gains_high_ki': self._velocity_gains_high_ki,
+            'velocity_gains_high_kd': self._velocity_gains_high_kd,
+        }
+        
+        self._gain_scheduler = GainScheduler(
+            logger=self.get_logger(),
+            config=gain_scheduler_config
+        )
+        
+        accel_limiter_config = {
+            'accel_limiting_enabled': self._accel_limiting_enabled,
+            'max_accel_pct_per_sec': self._max_accel_pct_per_sec
+        }
+        
+        self._accel_limiter = AccelerationLimiter(
+            logger=self.get_logger(),
+            config=accel_limiter_config
+        )
 
         # ── Movement state ───────────────────────────────────────────
         self._current_movement = None   # {channels, end_time, bypass_ramp, command}
@@ -171,6 +373,8 @@ class MavlinkInspectorNode(Node):
         self._yaw_bang_offset = None    # PWM offset (bang-bang mode)
         self._yaw_command = ''          # command name for feedback
         self._yaw_pid_last_time = 0.0
+        self._yaw_settle_start = None   # timestamp when yaw entered tolerance
+        self._yaw_settle_duration = 0.3 # seconds to stay in tolerance before "reached"
 
         # ── ALT_HOLD depth target ────────────────────────────────────
         self._alt_hold_target = None
@@ -202,18 +406,6 @@ class MavlinkInspectorNode(Node):
             self._handle_auv_command
         )
 
-        # ── Action server for long-running movements ──────────────────
-        self._movement_action_server = ActionServer(
-            self,
-            Movement,
-            '/auv/movement',
-            execute_callback=self._execute_movement,
-            goal_callback=self._movement_goal_callback,
-            cancel_callback=self._movement_cancel_callback
-        )
-        self._active_goal_handle = None
-        self._movement_cancelled = False
-
         # ── Subscribers ──────────────────────────────────────────────
         self.create_subscription(
             DriverCommand, '/driver/command',
@@ -230,6 +422,10 @@ class MavlinkInspectorNode(Node):
         self.create_timer(0.5, self._publish_diagnostics) # 2 Hz
         self.create_timer(0.5, self._resend_depth_target) # 2 Hz
         self.create_timer(0.5, self._check_ack_timeouts)  # 2 Hz
+        
+        # Phase 3: Position estimation update
+        position_update_period = 1.0 / self._position_update_rate
+        self.create_timer(position_update_period, self._update_position)  # Configurable Hz
 
         # Dynamic reconfigure callback
         from rcl_interfaces.msg import SetParametersResult
@@ -421,6 +617,31 @@ class MavlinkInspectorNode(Node):
             # POOL FIX 4: clear control state on disarm
             if ev_type == 'disarmed':
                 self._clear_all_control()
+        
+        # ── Update velocity estimator from IMU data ──────────────────
+        if msg_type == 'SCALED_IMU2':
+            # Create a simple object to pass IMU data to velocity estimator
+            class ImuData:
+                def __init__(self, x, y, z):
+                    self.linear_acceleration = type('obj', (object,), {
+                        'x': x, 'y': y, 'z': z
+                    })()
+            
+            imu_msg = ImuData(
+                self._telemetry.accel_x,
+                self._telemetry.accel_y,
+                self._telemetry.accel_z
+            )
+            self._velocity_estimator.update(imu_msg)
+    
+    def _update_position(self):
+        """Update position estimate from velocity (Phase 3)."""
+        try:
+            if not rclpy.ok():
+                return
+            self._position_estimator.update()
+        except Exception as e:
+            self.get_logger().error(f'Position update failed: {e}')
 
     # ── Control state management ─────────────────────────────────────
 
@@ -486,15 +707,38 @@ class MavlinkInspectorNode(Node):
 
         # ── Layer 3: depth PID (overrides CH_THROTTLE) ───────────────
         if depth_pid is not None and depth_target is not None:
-            dt = now - self._depth_pid_last_time if self._depth_pid_last_time > 0 else 0.05
+            dt = now - self._depth_pid_last_time if self._depth_pid_last_time > 0 else 0            # Auto station-keeping: activate depth/heading hold after movement
+            if self._telemetry is not None:
+                if self._auto_depth_hold and depth_pid is None:
+                    # Activate depth hold at current depth
+                    current_depth = self._telemetry.depth
+                    self.get_logger().info(
+                        f'Auto depth-hold at {current_depth:.2f}m')
+                    self._cmd_handler.activate_depth_pid(current_depth)
+                    # Update local refs for this cycle
+                    depth_pid = self._depth_pid
+                    depth_target = current_depth
+
+                if self._auto_heading_hold and yaw_target is None:
+                    # Activate heading hold at current heading
+                    current_heading = self._telemetry.heading
+                    self.get_logger().info(
+                        f'Auto heading-hold at {current_heading:.1f}°')
+                    self._cmd_handler.activate_yaw_pid(current_heading)
+                    # Update local refs for this cycle
+                    yaw_pid = self._yaw_pid
+                    yaw_target = current_heading
+
+.05
             self._depth_pid_last_time = now
             if dt <= 0:
                 dt = 0.05
 
             t = self._telemetry
             error = depth_target - t.depth
-            raw_rate = (t.depth - t.prev_depth) / dt
-            output = depth_pid.compute(error, dt,
+           end_time = mv.get('end_time') if mv else None
+        self._rc.apply_movement(channels, mv, bypass, end_time=end_time)
+        output = depth_pid.compute(error, dt,
                                        measurement_rate=raw_rate)
 
             if depth_pid.in_deadband:
@@ -516,34 +760,70 @@ class MavlinkInspectorNode(Node):
                     'movement', f'Heading reached: {yaw_target}°')
                 self._publish_feedback(
                     self._yaw_command or 'yaw_to_heading', 'reached',
-                    error=err, detail=f'heading={yaw_target}°')
+                    error=err, d                # Within tolerance - start or continue settling
+                if self._yaw_settle_start is None:
+                    self._yaw_settle_start = now
+                    # Keep PID/bang-bang active during settling
+                    if yaw_pid is not None:
+                        dt_y = now - self._yaw_pid_last_time if self._yaw_pid_last_time > 0 else 0.05
+                        self._yaw_pid_last_time = now
+                        if dt_y <= 0:
+                            dt_y = 0.05
+                        output = yaw_pid.compute(
+                            err, dt_y,
+                            measurement_rate=self._telemetry.heading_rate)
+                        channels[CH_YAW] = NEUTRAL_PWM + output
+                    elif yaw_bang is not None:
+                        channels[CH_YAW] = NEUTRAL_PWM + (
+                            yaw_bang if err > 0 else -yaw_bang)
 
-            elif yaw_pid is not None:
-                # PID mode
-                dt_y = now - self._yaw_pid_last_time if self._yaw_pid_last_time > 0 else 0.05
-                self._yaw_pid_last_time = now
-                if dt_y <= 0:
-                    dt_y = 0.05
-                output = yaw_pid.compute(
-                    err, dt_y,
-                    measurement_rate=self._telemetry.heading_rate)
-                channels[CH_YAW] = NEUTRAL_PWM + output
+                elif now - self._yaw_settle_start >= self._yaw_settle_duration:
+                    # Settled for required duration - declare "reached"
+                    with self._movement_lock:
+                        self._yaw_pid = None
+                        self._yaw_target = None
+                        self._yaw_bang_offset = None
+                        self._yaw_settle_start = None
+                    self._publish_event(
+                        'movement', f'Heading reached: {yaw_target}° (settled)')
+                    self._publish_feedback(
+                        self._yaw_command or 'yaw_to_heading', 'reached',
+                        error=err, detail=f'heading={yaw_target}° settled')
+                else:
+                    # Still settling, keep control active
+                    if yaw_pid is not None:
+                        dt_y = now - self._yaw_pid_last_time if self._yaw_pid_last_time > 0 else 0.05
+                        self._yaw_pid_last_time = now
+                        if dt_y <= 0:
+                            dt_y = 0.05
+                        output = yaw_pid.compute(
+                            err, dt_y,
+                            measurement_rate=self._telemetry.heading_rate)
+                        channels[CH_YAW] = NEUTRAL_PWM + output
+                    elif yaw_bang is not None:
+                        channels[CH_YAW] = NEUTRAL_PWM + (
+                            yaw_bang if err > 0 else -yaw_bang)
 
-            elif yaw_bang is not None:
-                # Bang-bang mode
-                channels[CH_YAW] = NEUTRAL_PWM + (
-                    yaw_bang if err > 0 else -yaw_bang)
+            else:
+                # Outside tolerance - reset settling timer
+                self._yaw_settle_start = None
 
-        # ── Send combined channels ───────────────────────────────────
-        if self._rc.send_rc(channels, self._conn.master,
-                            self.get_logger()):
-            self._last_rc_success = time.time()
-        else:
-            self._conn.connected = False
+                if yaw_pid is not None:
+                    # PID mode
+                    dt_y = now - self._yaw_pid_last_time if self._yaw_pid_last_time > 0 else 0.05
+                    self._yaw_pid_last_time = now
+                    if dt_y <= 0:
+                        dt_y = 0.05
+                    output = yaw_pid.compute(
+                        err, dt_y,
+                        measurement_rate=self._telemetry.heading_rate)
+                    channels[CH_YAW] = NEUTRAL_PWM + output
 
-        # ── RC watchdog (C1 safety fix) ──────────────────────────────
-        if self._last_rc_success > 0 and \
-           time.time() - self._last_rc_success > self._rc_watchdog_timeout:
+                elif yaw_bang is not None:
+                    # Bang-bang mode
+                    channels[CH_YAW] = NEUTRAL_PWM + (
+                        yaw_bang if err > 0 else -yaw_bang)
+watchdog_timeout:
             self.get_logger().fatal(
                 f'RC watchdog timeout! No successful RC send for '
                 f'{self._rc_watchdog_timeout}s - forcing emergency neutral')
@@ -830,123 +1110,6 @@ class MavlinkInspectorNode(Node):
             self.get_logger().error(f'Service command failed: {e}')
 
         return response
-
-    # ── Action server callbacks ───────────────────────────────────────
-
-    def _movement_goal_callback(self, goal_request):
-        """Accept or reject a movement goal."""
-        self.get_logger().info(f'Received movement goal: {goal_request.command}')
-        # Accept all goals for now; could add validation here
-        return GoalResponse.ACCEPT
-
-    def _movement_cancel_callback(self, goal_handle):
-        """Handle cancellation request."""
-        self.get_logger().info('Movement cancel requested')
-        return CancelResponse.ACCEPT
-
-    def _execute_movement(self, goal_handle):
-        """Execute a long-running movement command with feedback."""
-        self._active_goal_handle = goal_handle
-        self._movement_cancelled = False
-        
-        goal = goal_handle.request
-        start_time = time.time()
-        
-        self.get_logger().info(
-            f'Executing movement: {goal.command} '
-            f'speed={goal.speed_pct}% duration={goal.duration}s'
-        )
-
-        # Create DriverCommand from goal
-        cmd = DriverCommand()
-        cmd.command = goal.command
-        cmd.speed_pct = goal.speed_pct
-        cmd.duration = goal.duration
-        cmd.target_heading = goal.target_heading
-        cmd.target_depth = goal.target_depth
-        cmd.bearing = goal.bearing
-        cmd.direction = goal.direction
-        cmd.bypass_ramp = goal.bypass_ramp
-        cmd.use_pid = goal.use_pid
-
-        # Dispatch the command
-        try:
-            self._cmd_handler.handle(cmd)
-        except Exception as e:
-            self.get_logger().error(f'Movement command failed: {e}')
-            goal_handle.abort()
-            result = Movement.Result()
-            result.success = False
-            result.message = str(e)
-            result.elapsed_time = time.time() - start_time
-            self._active_goal_handle = None
-            return result
-
-        # Monitor progress and publish feedback
-        feedback_msg = Movement.Feedback()
-        duration = goal.duration if goal.duration > 0 else float('inf')
-        
-        while time.time() - start_time < duration:
-            # Check for cancellation
-            if goal_handle.is_cancel_requested:
-                self.get_logger().info('Movement cancelled')
-                self._stop_all()
-                goal_handle.canceled()
-                result = Movement.Result()
-                result.success = False
-                result.message = 'Cancelled'
-                result.elapsed_time = time.time() - start_time
-                result.final_heading = self._telem.heading
-                result.final_depth = self._telem.depth
-                self._active_goal_handle = None
-                return result
-
-            # Build feedback
-            elapsed = time.time() - start_time
-            feedback_msg.elapsed_time = elapsed
-            feedback_msg.progress_pct = min(100.0, (elapsed / duration) * 100) if duration > 0 else 0.0
-            feedback_msg.current_heading = self._telem.heading
-            feedback_msg.current_depth = self._telem.depth
-            
-            # Get phase from RC controller if available
-            if hasattr(self._rc, 'get_current_phase'):
-                feedback_msg.phase = self._rc.get_current_phase()
-            else:
-                feedback_msg.phase = 'cruising'
-            
-            # Calculate errors if PIDs are active
-            if hasattr(self._cmd_handler, '_depth_pid_enabled') and self._cmd_handler._depth_pid_enabled:
-                feedback_msg.depth_error = abs(self._cmd_handler._depth_pid_setpoint - self._telem.depth)
-            if hasattr(self._cmd_handler, '_yaw_pid_enabled') and self._cmd_handler._yaw_pid_enabled:
-                heading_error = self._cmd_handler._yaw_pid_setpoint - self._telem.heading
-                # Normalize to -180 to 180
-                while heading_error > 180:
-                    heading_error -= 360
-                while heading_error < -180:
-                    heading_error += 360
-                feedback_msg.heading_error = abs(heading_error)
-
-            goal_handle.publish_feedback(feedback_msg)
-            time.sleep(0.1)  # 10 Hz feedback
-
-        # Movement complete - stop and return success
-        self._stop_all()
-        
-        result = Movement.Result()
-        result.success = True
-        result.message = 'Movement completed'
-        result.elapsed_time = time.time() - start_time
-        result.final_heading = self._telem.heading
-        result.final_depth = self._telem.depth
-
-        goal_handle.succeed()
-        self._active_goal_handle = None
-        
-        self.get_logger().info(
-            f'Movement complete: {goal.command} in {result.elapsed_time:.2f}s'
-        )
-        
-        return result
 
 
 # ── Entry point ──────────────────────────────────────────────────────

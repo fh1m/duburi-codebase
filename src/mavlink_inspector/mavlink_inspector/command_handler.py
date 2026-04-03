@@ -260,6 +260,119 @@ class CommandHandler:
             }
         n._publish_event('movement', desc)
         n._publish_feedback(self._cmd_name, 'accepted', detail=desc)
+    
+    def wait_for_movement_end(self, timeout: float = 30.0) -> bool:
+        """
+        Block until current movement expires (for blocking commands with ! suffix).
+        
+        Returns:
+            True if movement completed normally, False if timeout
+        """
+        n = self._n
+        start = time.time()
+        
+        while time.time() - start < timeout:
+            with n._movement_lock:
+                if n._current_movement is None:
+                    return True  # Movement ended
+            time.sleep(0.05)  # 20 Hz check
+        
+        n.get_logger().warning(f"Movement timeout after {timeout}s")
+        return False
+    
+    def wait_for_convergence(self, dof: list = None, blocking: bool = True) -> bool:
+        """
+        Wait for vehicle to stop moving (convergence gate).
+        
+        Args:
+            dof: Degrees of freedom to check (default: ['surge', 'sway'])
+            blocking: If True, wait. If False, just check and return immediately
+        
+        Returns:
+            True if converged, False if timeout
+        """
+        return self._n._convergence_gate.wait_for_convergence(dof, blocking)
+    
+    def stop_with_convergence(self, dof: list = None):
+        """
+        Stop current movement and wait for vehicle to fully stabilize.
+        
+        This is for the enhanced braking logic - stops movement and ensures
+        velocity drops to zero before returning control.
+        """
+        n = self._n
+        
+        # Clear movement
+        with n._movement_lock:
+            n._current_movement = None
+        
+        # Wait for velocity to drop
+        n.get_logger().debug("Stopping with convergence check...")
+        converged = n._convergence_gate.wait_for_convergence(dof or ['surge', 'sway'])
+        
+        if converged:
+            n.get_logger().info("✓ Vehicle stopped and stable")
+        else:
+            n.get_logger().warning("⚠ Convergence timeout - proceeding anyway")
+        
+        return converged
+    
+    # ── Phase 2: Rotate-in-Place Support ─────────────────────────
+    
+    def stop_all_translation(self, keep_depth: bool = True):
+        """
+        Force all translation channels to neutral (for rotate-in-place).
+        
+        Args:
+            keep_depth: If True, preserve depth control (throttle). 
+                       If False, also neutral throttle.
+        
+        Used before yaw maneuvers to ensure vehicle rotates on axis
+        without drifting.
+        """
+        n = self._n
+        
+        # Clear any movement command
+        with n._movement_lock:
+            if n._current_movement is not None:
+                n._current_movement = None
+        
+        # Clear velocity ramp
+        n._rc.clear_ramp()
+        
+        # Wait for convergence to ensure translation has stopped
+        if n._convergence_enabled:
+            n.get_logger().debug("Stopping translation - waiting for convergence...")
+            n._convergence_gate.wait_for_convergence(['surge', 'sway'], blocking=True)
+        
+        n.get_logger().info("✓ Translation stopped" + (" (depth hold active)" if keep_depth else ""))
+    
+    def force_translation_neutral(self) -> dict:
+        """
+        Get channel dict with forced neutral translation.
+        
+        Returns dict with:
+        - CH_FORWARD = NEUTRAL
+        - CH_LATERAL = NEUTRAL  
+        - CH_THROTTLE = (preserved if depth PID active, else NEUTRAL)
+        
+        Use this in tight loops during rotation to prevent drift.
+        """
+        channels = {
+            CH_FORWARD: NEUTRAL_PWM,
+            CH_LATERAL: NEUTRAL_PWM,
+        }
+        
+        # Preserve depth control if active
+        n = self._n
+        with n._movement_lock:
+            if n._depth_pid is not None or n._alt_hold_target is not None:
+                # Depth control active - throttle handled by PID layer
+                pass
+            else:
+                channels[CH_THROTTLE] = NEUTRAL_PWM
+        
+        return channels
 
     def resolve_depth(self, depth_value: float) -> float:
         """Resolve user depth to actual target (with surface offset)."""
@@ -291,7 +404,295 @@ class CommandHandler:
             n._yaw_tolerance = tolerance
             n._yaw_bang_offset = None
             n._yaw_command = self._cmd_name
+            n._yaw_settle_start = None  # Reset settling timer on new target
         n._yaw_pid_last_time = time.time()
+    
+    def activate_yaw_pid_precise(self, heading_deg: float,
+                                  gain_offset: int | None = None,
+                                  precision_deadband: float | None = None,
+                                  final_deadband: float | None = None,
+                                  settling_time: float | None = None,
+                                  timeout: float = 30.0):
+        """
+        Activate two-zone precision yaw PID heading control (Phase 2).
+        
+        Two control zones:
+        1. Normal zone: |error| >= precision_deadband → full PID gains
+        2. Precision zone: |error| < precision_deadband → reduced gains
+        
+        Convergence requires staying in final_deadband for settling_time.
+        
+        Args:
+            heading_deg: Target heading (0-360°)
+            gain_offset: Max PWM offset (default: from speed or 200)
+            precision_deadband: Enter precision mode below this error (default: from config)
+            final_deadband: Must stay within this to converge (default: from config)
+            settling_time: Time to stay in final_deadband (default: from config)
+            timeout: Max time to try (default: 30s)
+        
+        Returns:
+            True if converged, False if timeout
+        """
+        n = self._n
+        
+        # Get configuration
+        if gain_offset is None:
+            gain_offset = abs(self._speed - NEUTRAL_PWM) or 200
+        if precision_deadband is None:
+            precision_deadband = n._yaw_precision_deadband
+        if final_deadband is None:
+            final_deadband = n._yaw_final_deadband  
+        if settling_time is None:
+            settling_time = n._yaw_settling_time
+        
+        # Create PID controller
+        pid = self._make_yaw_pid(gain_offset)
+        original_kp = pid.kp
+        original_kd = pid.kd
+        
+        start_time = time.time()
+        in_precision_zone_since = None
+        in_final_zone_since = None
+        
+        n.get_logger().info(
+            f"Precision yaw to {heading_deg:.1f}° "
+            f"(precision_db={precision_deadband:.1f}°, final_db={final_deadband:.1f}°, "
+            f"settling={settling_time:.1f}s)")
+        
+        while True:
+            now = time.time()
+            current_heading = n._telemetry.yaw
+            error = self._angle_error(current_heading, heading_deg)
+            abs_error = abs(error)
+            
+            # ── Zone detection ──────────────────────────────────────
+            if abs_error < final_deadband:
+                # FINAL ZONE: Very close, check settling
+                if in_final_zone_since is None:
+                    in_final_zone_since = now
+                    n.get_logger().debug(
+                        f"Entered final zone (error={error:.2f}°) - settling timer started")
+                
+                # Check if settled long enough
+                time_stable = now - in_final_zone_since
+                if time_stable >= settling_time:
+                    n.get_logger().info(
+                        f"✓ Heading converged to {current_heading:.1f}° "
+                        f"(target {heading_deg:.1f}°, error={error:.2f}°)")
+                    return True
+            
+            elif abs_error < precision_deadband:
+                # PRECISION ZONE: Reduce gains for fine control
+                if in_precision_zone_since is None:
+                    in_precision_zone_since = now
+                    n.get_logger().debug(
+                        f"Entered precision zone (error={error:.2f}°) - reducing gains")
+                    
+                    # Reduce gains
+                    pid.kp = original_kp * n._yaw_precision_kp_reduction
+                    pid.kd = original_kd * n._yaw_precision_kd_reduction
+                
+                # Reset final zone timer if we moved out
+                in_final_zone_since = None
+            
+            else:
+                # NORMAL ZONE: Far from target, use full gains
+                if in_precision_zone_since is not None:
+                    n.get_logger().debug(f"Exited precision zone (error={error:.2f}°) - full gains")
+                    # Restore full gains
+                    pid.kp = original_kp
+                    pid.kd = original_kd
+                
+                in_precision_zone_since = None
+                in_final_zone_since = None
+            
+            # ── Compute PID output ──────────────────────────────────
+            dt = 0.05  # Fixed for blocking loop
+            output = pid.compute(error, dt, measurement_rate=n._telemetry.heading_rate)
+            
+            # Add feedforward if enabled (optional enhancement)
+            if n._yaw_feedforward_enabled:
+                ff = self.compute_yaw_feedforward(heading_deg, current_heading, 
+                                                 (gain_offset / PWM_RANGE) * 100)
+                output += ff
+            
+            output = max(-gain_offset, min(gain_offset, output))  # Clamp
+            
+            # ── Apply to yaw channel ONLY ───────────────────────────
+            # Force translation neutral during rotation
+            channels = self.force_translation_neutral()
+            channels[CH_YAW] = NEUTRAL_PWM + output
+            
+            n._rc.send_rc(channels, n._conn.master, n.get_logger())
+            
+            # ── Timeout check ───────────────────────────────────────
+            elapsed = now - start_time
+            if elapsed > timeout:
+                n.get_logger().error(
+                    f"⚠ Yaw timeout after {elapsed:.1f}s! Still at {current_heading:.1f}° "
+                    f"(target {heading_deg:.1f}°, error={error:.2f}°)")
+                return False
+            
+            time.sleep(0.05)  # 20 Hz update
+    
+    @staticmethod
+    def _angle_error(current: float, target: float) -> float:
+        """
+        Calculate shortest-path angle error.
+        
+        Returns error in [-180, 180] degrees.
+        Positive error = turn right, negative = turn left.
+        """
+        err = (target - current) % 360
+        if err > 180:
+            err -= 360
+        return err
+    
+    def compute_yaw_feedforward(self, target_heading: float, 
+                               current_heading: float,
+                               speed_pct: float = 50.0) -> int:
+        """
+        Compute feedforward yaw torque for smoother turns (Phase 2 - Optional).
+        
+        Predicts required torque based on desired turn rate instead of
+        waiting for error to build up. Improves smoothness significantly.
+        
+        Args:
+            target_heading: Desired heading (degrees)
+            current_heading: Current heading (degrees)
+            speed_pct: Speed setting (0-100%)
+        
+        Returns:
+            PWM offset to add to PID output (-200 to +200)
+        """
+        n = self._n
+        
+        # Check if feedforward is enabled
+        if not n._yaw_feedforward_enabled:
+            return 0
+        
+        error = self._angle_error(current_heading, target_heading)
+        
+        # Estimate desired turn rate based on error and speed
+        # Faster turns for larger errors, scaled by speed
+        # Typical: want to complete 90° turn in 2-3 seconds at 50% speed
+        turn_time_estimate = 2.0 / (speed_pct / 50.0)  # Scale with speed
+        desired_rate = error / turn_time_estimate  # deg/s
+        
+        # Convert to PWM (empirical: 1 deg/s ≈ 20 PWM)
+        # This ratio should be calibrated in pool testing
+        ff_pwm = int(desired_rate * n._yaw_rate_to_pwm_ratio)
+        
+        # Limit feedforward contribution
+        ff_pwm = max(-200, min(200, ff_pwm))
+        
+        if abs(ff_pwm) > 10:  # Log significant feedforward
+            n.get_logger().debug(
+                f"Yaw FF: error={error:.1f}° → rate={desired_rate:.1f}°/s → PWM={ff_pwm}")
+        
+        return ff_pwm
+    
+    # ── Phase 3: Cascade Control Support ─────────────────────────────
+    
+    def move_distance_cascade(self, dof: str, distance: float, 
+                              max_speed_pct: float = 50.0,
+                              timeout: float = 30.0) -> bool:
+        """
+        Move specified distance using cascade controller (Phase 3).
+        
+        Args:
+            dof: Degree of freedom ('surge', 'sway', 'heave')
+            distance: Distance in meters (positive or negative)
+            max_speed_pct: Maximum speed percentage (0-100)
+            timeout: Maximum time to complete (seconds)
+        
+        Returns:
+            True if target reached, False if timeout
+        
+        Example:
+            # Move forward 2 meters
+            h.move_distance_cascade('surge', 2.0, max_speed_pct=30)
+        """
+        n = self._n
+        
+        # Check if cascade is enabled
+        if not n._cascade_enabled:
+            n.get_logger().warning(
+                "Cascade control disabled - cannot use distance-based movement")
+            return False
+        
+        # Reset position origin
+        n._position_estimator.reset_origin()
+        
+        # Set target
+        n._cascade_controller.set_target(**{dof: distance})
+        
+        n.get_logger().info(
+            f"Cascade movement: {dof} {distance:.2f}m @ {max_speed_pct:.0f}%")
+        
+        # Control loop
+        start_time = time.time()
+        
+        # Map DOF to channel
+        dof_to_channel = {
+            'surge': CH_FORWARD,
+            'sway': CH_LATERAL,
+            'heave': CH_THROTTLE
+        }
+        channel = dof_to_channel.get(dof)
+        if channel is None:
+            n.get_logger().error(f"Invalid DOF: {dof}")
+            return False
+        
+        while True:
+            elapsed = time.time() - start_time
+            
+            # Get current state
+            current_pos = n._position_estimator.get_position([dof])
+            current_vel = n._velocity_estimator.get_velocities([dof])
+            
+            # Update cascade controller
+            outputs = n._cascade_controller.update(current_pos, current_vel)
+            pwm_offset = outputs.get(dof, 0)
+            
+            # Clamp to max speed
+            max_pwm = int(PWM_RANGE * max_speed_pct / 100)
+            pwm_offset = max(-max_pwm, min(max_pwm, pwm_offset))
+            
+            # Apply thrust
+            channels = {channel: NEUTRAL_PWM + pwm_offset}
+            n._rc.send_rc(channels, n._conn.master, n.get_logger())
+            
+            # Check if reached target
+            if n._cascade_controller.reached_target(current_pos, current_vel):
+                n.get_logger().info(
+                    f"✓ Target reached: {dof} = {current_pos[dof]:.2f}m "
+                    f"(target {distance:.2f}m, error {abs(distance - current_pos[dof]):.3f}m)")
+                
+                # Brief stability hold
+                time.sleep(0.2)
+                
+                # Stop thrust
+                n._rc.send_rc({channel: NEUTRAL_PWM}, n._conn.master, n.get_logger())
+                return True
+            
+            # Timeout check
+            if elapsed > timeout:
+                n.get_logger().error(
+                    f"⚠ Cascade timeout after {elapsed:.1f}s! "
+                    f"Position: {current_pos[dof]:.2f}m (target {distance:.2f}m)")
+                
+                # Stop thrust
+                n._rc.send_rc({channel: NEUTRAL_PWM}, n._conn.master, n.get_logger())
+                return False
+            
+            # Log progress periodically
+            if int(elapsed * 2) % 2 == 0:  # Every 1 second
+                n.get_logger().debug(
+                    f"Cascade: pos={current_pos[dof]:.2f}m, "
+                    f"vel={current_vel[dof]:.2f}m/s, pwm={pwm_offset}")
+            
+            time.sleep(0.05)  # 20 Hz
 
     def activate_yaw_bang(self, heading_deg: float,
                           gain_offset: int | None = None,
@@ -306,6 +707,7 @@ class CommandHandler:
             n._yaw_tolerance = tolerance
             n._yaw_bang_offset = min(PWM_RANGE, gain_offset)
             n._yaw_command = self._cmd_name
+            n._yaw_settle_start = None  # Reset settling timer on new target
 
     # ── Private helpers ──────────────────────────────────────────────
 
@@ -364,7 +766,8 @@ class CommandHandler:
             kp=n._yaw_kp, ki=n._yaw_ki, kd=n._yaw_kd,
             output_limit=min(PWM_RANGE, gain_offset),
             max_integral=n._yaw_max_integral,
-            tolerance=0, ema_alpha=0.3,  # C3 fix: enable derivative filtering
+            tolerance=n._yaw_tolerance,  # Use yaw_tolerance for PID deadband
+            ema_alpha=0.3,  # C3 fix: enable derivative filtering
             max_rate=n._pid_max_rate, anti_windup=True,  # C3 fix: enable anti-windup
         )
 
@@ -511,3 +914,74 @@ class CommandHandler:
                 'bypass_ramp': True,
                 'command': 'teleop',
             }
+        
+        return True
+    
+    # ═════════════════════════════════════════════════════════════════════
+    # Phase 4: Gain Scheduling & Acceleration Limiting Integration
+    # ═════════════════════════════════════════════════════════════════════
+    
+    def apply_gain_scheduling(self, speed_pct: float, controller_type: str = 'yaw'):
+        """
+        Apply speed-adaptive PID gains to active controllers (Phase 4).
+        
+        Args:
+            speed_pct: Current/target speed percentage (0-100)
+            controller_type: 'yaw', 'depth', or 'velocity'
+        
+        Returns:
+            Dict with selected gains {'kp', 'ki', 'kd'}
+        """
+        gains = self._n._gain_scheduler.select_gains(speed_pct, controller_type)
+        
+        # Apply to appropriate controller
+        if controller_type == 'yaw' and self._n._yaw_pid is not None:
+            self._n._yaw_pid.kp = gains['kp']
+            self._n._yaw_pid.ki = gains['ki']
+            self._n._yaw_pid.kd = gains['kd']
+            # Reset integral to prevent windup
+            self._n._yaw_pid.integral = 0.0
+            self._n.get_logger().debug(
+                f"Applied yaw gains: Kp={gains['kp']}, Ki={gains['ki']}, Kd={gains['kd']}"
+            )
+        
+        elif controller_type == 'depth' and self._n._depth_pid is not None:
+            self._n._depth_pid.kp = gains['kp']
+            self._n._depth_pid.ki = gains['ki']
+            self._n._depth_pid.kd = gains['kd']
+            self._n._depth_pid.integral = 0.0
+            self._n.get_logger().debug(
+                f"Applied depth gains: Kp={gains['kp']}, Ki={gains['ki']}, Kd={gains['kd']}"
+            )
+        
+        elif controller_type == 'velocity' and self._n._cascade_enabled:
+            # Apply to cascade controller velocity loop
+            self._n._gain_scheduler.apply_to_cascade(
+                self._n._cascade_controller, 
+                speed_pct
+            )
+        
+        return gains
+    
+    def get_limited_speed(self, target_speed_pct: float) -> float:
+        """
+        Get acceleration-limited speed (Phase 4).
+        
+        Prevents 0% → 90% instant jumps by ramping at max 50%/sec.
+        
+        Args:
+            target_speed_pct: Desired speed (-100 to 100%)
+        
+        Returns:
+            Safe speed to command right now (may be less than target)
+        """
+        return self._n._accel_limiter.limit(target_speed_pct)
+    
+    def reset_accel_limiter(self, initial_speed: float = 0.0):
+        """
+        Reset acceleration limiter (call at start of new movement).
+        
+        Args:
+            initial_speed: Starting speed percentage (default 0.0%)
+        """
+        self._n._accel_limiter.reset(initial_speed)
