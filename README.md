@@ -8,17 +8,20 @@ ROS 2 Humble workspace for the BRACU Duburi AUV 4.2. Controls the vehicle throug
 flowchart LR
     subgraph Controls
         PIX[Pixhawk<br/>ArduSub] <-->|MAVLink| INS[Inspector<br/>Node]
-        INS --> |RC Override<br/>20Hz| PIX
+        INS -->|RC Override<br/>20Hz| PIX
     end
     
-    subgraph Command Sources
+    subgraph CmdSrc[Command Sources]
         CLI[Runner CLI]
         MISSION[Mission Files]
         PLANNER[YASMIN Planner]
         VISION[Visual Servo]
     end
     
-    Command Sources -->|DriverCommand| INS
+    CLI -->|DriverCommand| INS
+    MISSION -->|DriverCommand| INS
+    PLANNER -->|DriverCommand| INS
+    VISION -->|DriverCommand| INS
     
     subgraph Perception
         CAM[Cameras] --> DET[YOLO Detector]
@@ -61,22 +64,22 @@ The `Control-Redesign-V1` branch introduces a major architectural overhaul:
 
 ```mermaid
 flowchart LR
-    subgraph Before
+    subgraph before[Before]
         B1[5 files to add<br/>a new command]
         B2[492-line if/elif<br/>command parser]
         B3[No safety watchdog]
     end
     
-    subgraph After
+    subgraph after[After]
         A1[1 decorator<br/>@register]
         A2[139-line<br/>registry lookup]
         A3[RC watchdog +<br/>6 safety fixes]
     end
     
-    Before --> |Redesign| After
+    before -->|Redesign| after
     
-    style Before fill:#ff6b6b22
-    style After fill:#4ecdc422
+    style before fill:#ff6b6b22
+    style after fill:#4ecdc422
 ```
 
 **Key Changes:**
@@ -213,10 +216,10 @@ flowchart LR
         direction TB
         
         subgraph Topics["ROS 2 Topics"]
-            CMD["/driver/command<br/>DriverCommand"]
-            STATE["/mavlink/vehicle_state<br/>VehicleState"]
-            DET["/vision/detections<br/>DetectionArray"]
-            IMG["/camera/*/image_raw<br/>Image"]
+            CMD["driver/command<br/>DriverCommand"]
+            STATE["mavlink/vehicle_state<br/>VehicleState"]
+            DET["vision/detections<br/>DetectionArray"]
+            IMG["camera/image_raw<br/>Image"]
         end
         
         subgraph Nodes["Active Nodes"]
@@ -706,9 +709,9 @@ flowchart TB
         BAR[BAR30<br/>Pressure Sensor]
     end
     
-    subgraph Control["Control Stack (mavlink_inspector)"]
-        CONN[Connection Manager<br/>Serial I/O + Reconnect]
-        TEL[Telemetry Parser<br/>MAVLink → ROS]
+    subgraph Control["Control Stack - mavlink_inspector"]
+        CONN[Connection Manager<br/>Serial IO + Reconnect]
+        TEL_P[Telemetry Parser<br/>MAVLink to ROS]
         REG[("Command Registry<br/>@register decorator")]
         CMD[Command Handler<br/>Unified Dispatch]
         MOV[Movement Commands<br/>26 Handlers]
@@ -717,7 +720,7 @@ flowchart TB
         PID_Y[Yaw PID]
     end
     
-    subgraph Commands["Command Sources"]
+    subgraph CmdSources["Command Sources"]
         CLI[Runner CLI<br/>Interactive]
         MIS[Mission Executor<br/>Autonomous]
         TEL_D[Teleop Driver<br/>Joystick]
@@ -733,18 +736,22 @@ flowchart TB
     end
     
     subgraph Topics["ROS 2 Topics"]
-        T_CMD[/driver/command]
-        T_STATE[/mavlink/vehicle_state]
-        T_DET[/vision/detections]
-        T_IMG[/camera/*/image_raw]
+        T_CMD["driver/command"]
+        T_STATE["mavlink/vehicle_state"]
+        T_DET["vision/detections"]
+        T_IMG["camera/image_raw"]
     end
     
     PIX <-->|MAVLink| CONN
     BAR --> PIX
-    CONN --> TEL
-    TEL --> T_STATE
+    CONN --> TEL_P
+    TEL_P --> T_STATE
     
-    Commands -->|DriverCommand| T_CMD
+    CLI -->|DriverCommand| T_CMD
+    MIS -->|DriverCommand| T_CMD
+    TEL_D -->|DriverCommand| T_CMD
+    PLAN -->|DriverCommand| T_CMD
+    VIS_S -->|DriverCommand| T_CMD
     T_CMD --> CMD
     CMD --> REG
     REG --> MOV
@@ -962,30 +969,33 @@ The inspector builds a single PWM message from multiple layers. Higher layers ov
 
 ```mermaid
 flowchart TB
-    subgraph Layers["PWM Layer Stack (Priority Bottom→Top)"]
+    subgraph Layers["PWM Layer Stack - Priority Bottom to Top"]
         direction TB
-        L1[Layer 1: Neutral<br/>1500 on all channels]
-        L2[Layer 2: Movement<br/>Ramped thrust]
-        L3[Layer 3: Depth PID<br/>Throttle override]
-        L4[Layer 4: Yaw PID<br/>Yaw override]
+        L1["Layer 1: Neutral<br/>1500 on all channels"]
+        L2["Layer 2: Movement<br/>Ramped thrust"]
+        L3["Layer 3: Depth PID<br/>Throttle override"]
+        L4["Layer 4: Yaw PID<br/>Yaw override"]
     end
     
-    subgraph Merge["Channel Merge (20 Hz)"]
-        M1[CH_FORWARD ← L2]
-        M2[CH_LATERAL ← L2]
-        M3[CH_THROTTLE ← L3 or L2]
-        M4[CH_YAW ← L4 or L2]
+    subgraph MergeLayer["Channel Merge - 20 Hz"]
+        M1["CH_FORWARD from L2"]
+        M2["CH_LATERAL from L2"]
+        M3["CH_THROTTLE from L3 or L2"]
+        M4["CH_YAW from L4 or L2"]
     end
     
     subgraph Output["RC_CHANNELS_OVERRIDE"]
-        OUT[Combined PWM Message<br/>All 8 channels]
+        OUT["Combined PWM Message<br/>All 8 channels"]
     end
     
     L1 --> L2
     L2 --> L3
     L3 --> L4
-    L4 --> Merge
-    Merge --> OUT
+    L4 --> M1
+    L4 --> M2
+    L4 --> M3
+    L4 --> M4
+    MergeLayer --> OUT
 ```
 
 **Example Layer Combination:**
@@ -1068,8 +1078,8 @@ stateDiagram-v2
 ```mermaid
 flowchart TB
     subgraph Capture["Camera Capture"]
-        CAM1[/dev/video0<br/>Forward Camera]
-        CAM2[/dev/video1<br/>Down Camera]
+        CAM1["video0 Forward Camera"]
+        CAM2["video1 Down Camera"]
         V4L[V4L2 Driver]
     end
     
@@ -1080,26 +1090,26 @@ flowchart TB
     end
     
     subgraph Detection["detector_node"]
-        YOLO[YOLO11 Model<br/>CUDA GPU]
+        YOLO["YOLO11 Model<br/>CUDA GPU"]
         NMS[Non-Max Suppression]
-        TRACK[Kalman Filter<br/>Object Tracking]
+        TRACK["Kalman Filter<br/>Object Tracking"]
     end
     
     subgraph Servo["alignment_controller"]
-        LATERAL[Lateral PID<br/>Center X → Yaw]
-        VERTICAL[Vertical PID<br/>Center Y → Throttle]
-        FORWARD[Forward PID<br/>Size → Speed]
+        LATERAL["Lateral PID<br/>Center X to Yaw"]
+        VERTICAL["Vertical PID<br/>Center Y to Throttle"]
+        FORWARD["Forward PID<br/>Size to Speed"]
     end
     
     subgraph Control["mavlink_inspector"]
-        CMD[/driver/command]
+        CMD["driver/command Topic"]
     end
     
     CAM1 --> V4L
     CAM2 --> V4L
     V4L --> Manager
-    Manager -->|/camera/*/image_raw| Detection
-    Detection -->|/vision/detections| Servo
+    Manager -->|image_raw| Detection
+    Detection -->|detections| Servo
     Servo -->|DriverCommand| Control
 ```
 

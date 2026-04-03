@@ -244,14 +244,14 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    C3[C3: Yaw PID Config] --> |"ema_alpha: 1.0 → 0.3"| C3F[Filtered derivative]
-    C3 --> |"anti_windup: false → true"| C3W[Bounded integral]
+    C3[C3: Yaw PID Config] -->|"ema_alpha: 1.0 to 0.3"| C3F[Filtered derivative]
+    C3 -->|"anti_windup: false to true"| C3W[Bounded integral]
     
-    C4[C4: Real dt] --> |"0.05 → time.time() delta"| C4F[Accurate ramp timing]
+    C4[C4: Real dt] -->|"0.05 to time.time delta"| C4F[Accurate ramp timing]
     
-    C5[C5: Exception Logging] --> |"except: pass → except e: log(e)"| C5F[Visible errors]
+    C5[C5: Exception Logging] -->|"except pass to log error"| C5F[Visible errors]
     
-    C6[C6: Thread Safety] --> |"threading.Lock()"| C6F[Safe connection access]
+    C6[C6: Thread Safety] -->|"threading.Lock"| C6F[Safe connection access]
 ```
 
 ---
