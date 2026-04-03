@@ -69,18 +69,32 @@ docstrings, explicit `__init__` parameters, and class interfaces all add lines
 while reducing complexity. The key metric is not total LOC but **max single-file
 complexity** — reduced from 1 854 to 641 lines (65% reduction).
 
-### Architecture After Refactor
+### Architecture After Refactor (V2 Updated)
 
-```
-inspector_node.py (orchestrator, 641 lines)
-  │
-  ├── creates → ConnectionManager     (serial I/O, 246 lines)
-  │                └── pymavlink.mavutil
-  ├── creates → TelemetryParser        (MAVLink → state, 159 lines)
-  ├── creates → RcController           (PWM channels + ramp, 206 lines)
-  ├── creates → PidController × 2      (depth + yaw, 162 lines)
-  └── creates → CommandHandler         (route commands, 440 lines)
-                  └── uses → MOVEMENTS dict (movement_commands.py, 399 lines)
+```mermaid
+graph TB
+    subgraph Inspector["inspector_node.py (orchestrator)"]
+        direction TB
+    end
+    
+    Inspector --> CM[ConnectionManager<br/>Serial I/O, reconnect]
+    Inspector --> TP[TelemetryParser<br/>MAVLink → state]
+    Inspector --> RC[RcController<br/>PWM, ramp]
+    Inspector --> PID1[PidController × 2<br/>depth + yaw]
+    Inspector --> CH[CommandHandler<br/>route commands]
+    
+    CH --> MOV[movement_commands.py<br/>MOVEMENTS registry]
+    
+    subgraph V2["Control Redesign V2 Modules"]
+        VC[velocity_control.py<br/>VelocityEstimator<br/>ConvergenceGate<br/>CascadeController<br/>GainScheduler<br/>AccelerationLimiter]
+        SS[sensor_sources.py<br/>DVLSource<br/>ExternalYawSource<br/>SensorSourceManager]
+    end
+    
+    Inspector --> VC
+    Inspector --> SS
+    TP --> SS
+    SS --> |velocity| VC
+    VC --> |thrust| RC
 ```
 
 ### Remaining Concerns
@@ -652,31 +666,50 @@ only if PWM range becomes configurable.
 |---|---|---|---|---|
 | 1 | God Object (inspector) | **HIGH** | **RESOLVED** — 7-module split | Done  |
 | 2 | No unit tests | **HIGH** | **OPEN** — now testable | **Immediate** |
-| 3 | Hardcoded timing constants | Medium | **PARTIALLY IMPROVED** — organized by module | Next sprint |
+| 3 | Hardcoded timing constants | Medium | **RESOLVED** — 74+ params in defaults.yaml (V2) | Done  |
 | 4 | if/elif command dispatch | Medium | **RESOLVED** — dispatch tables | Done  |
 | 5 | if/elif message parsing | Medium | **RESOLVED** — dispatch dict | Done  |
 | 6 | RC neutral override | Low | **DEFERRED** — pending pool test | Post-pool |
 | 7 | DriverCommand teleop overloading | Medium | **RESOLVED** — `TeleopCommand` + `/driver/teleop` | Done  |
 | 8 | Duplicated command parsing (NEW) | Medium | **OPEN** — three parallel parsers | Off-season |
 | 9 | percent_to_pwm duplication (NEW) | Low | **OPEN** — accepted for now | Low priority |
+| 10 | Movement inertia/drift | **HIGH** | **ADDRESSED** — Convergence gates + cascade control (V2) | Testing |
+| 11 | Yaw drift during turns | **HIGH** | **ADDRESSED** — Rotate-in-place + precision zones (V2) | Testing |
+| 12 | High-speed unreliability | Medium | **ADDRESSED** — Gain scheduling + accel limiting (V2) | Testing |
 
-### Progress Since First Analysis
+### Progress Since Control Redesign V2
 
-Four of the original seven issues are now **fully resolved** (Issues 1, 4, 5, 7).
-One issue is **improved** (Issue 3 — constants now co-located with their
-modules). One issue remains **open** with a clear implementation path (Issue 2).
-One issue is **deferred** pending empirical data (Issue 6).
+Issues 10-12 were identified during mission testing and addressed in Control Redesign V2:
 
-Two new issues (8, 9) were identified during the deep audit — these are
-structural observations that became visible only after the modularization made
-the codebase structure explicit.
+- **Issue 10 (Movement Inertia)**: Addressed via `VelocityEstimator`, `ConvergenceGate`, and `CascadeController` classes in `velocity_control.py`. Commands now wait for vehicle to stabilize before proceeding.
 
-### Recommended Next Steps
+- **Issue 11 (Yaw Drift)**: Addressed via rotate-in-place commands that lock translation channels during turns. Two-zone PID (precision + final deadband) ensures sharp corners.
 
-1. **Unit tests** (Issue 2) — Start with Tier 1 pure functions: `percent_to_pwm`,
-   `build_diagonal_channels`, `resolve_relative_yaw`, PidController step
-   response. ~2 hours, highest value per effort.
-2. **Pool testing** → then address Issue 6 (RC neutral) with empirical data.
-3. **Parameterize connection tuning** (Issue 3 remaining) — heartbeat_timeout,
-   backoff rates. ~30 minutes, useful for pool testing.
-4. **Shared command vocabulary** (Issue 8) — extract when adding new commands.
+- **Issue 12 (High-Speed)**: Addressed via `GainScheduler` (3 speed ranges with tuned gains) and `AccelerationLimiter` (50%/sec max ramp). Prevents overshoot at high speeds.
+
+All V2 features are **disabled by default** — require pool testing to tune and enable.
+
+### Recommended Next Steps (Updated)
+
+1. **Pool test V2 features** — Enable Phase 1-4 one at a time, tune gains
+2. **DVL integration** — Phase 5 sensor sources are ready; need DVL connection
+3. **Unit tests** (Issue 2) — Include V2 classes: `VelocityEstimator`, `ConvergenceGate`, `GainScheduler`
+4. **External compass** — Test WitMotion/BNO085 with `SensorSourceManager`
+
+---
+
+## V2 Testable Classes
+
+Control Redesign V2 adds these testable classes:
+
+| Class | File | What to Test |
+|---|---|---|
+| `VelocityEstimator` | `velocity_control.py` | ZUPT detection, trapezoidal integration, drift reset |
+| `ConvergenceGate` | `velocity_control.py` | Settling time, timeout, threshold detection |
+| `PositionEstimator` | `velocity_control.py` | Dead reckoning accuracy, orientation transform |
+| `CascadeController` | `velocity_control.py` | Position→Velocity→Thrust cascade, PID response |
+| `GainScheduler` | `velocity_control.py` | Speed range selection, gain transitions |
+| `AccelerationLimiter` | `velocity_control.py` | Ramp rate limiting, step detection |
+| `SensorSourceManager` | `sensor_sources.py` | Priority fallback, staleness detection |
+| `DVLSource` | `sensor_sources.py` | Quality filtering, timeout handling |
+| `ExternalYawSource` | `sensor_sources.py` | Message parsing, offset calibration |

@@ -32,7 +32,7 @@ and the addition of the YASMIN FSM mission planner.
 
 | Package | Role | Modules | Lines | ROS Nodes |
 |---|---|---|---|---|
-| `mavlink_inspector` | MAVLink ↔ ROS bridge | 7 | ~2,301 | `mavlink_inspector` |
+| `mavlink_inspector` | MAVLink ↔ ROS bridge | 9 | ~4,000 | `mavlink_inspector` |
 | `mavlink_driver` | High-level command API + missions | 5 | ~1,044 | `mission_executor`, `teleop_driver` |
 | `mavlink_runner` | Human-facing CLI | 4 | ~917 | `duburi_runner` |
 | `mavlink_logger` | Topic logging to CSV/JSON | 1 | ~233 | `mavlink_logger` |
@@ -42,6 +42,8 @@ and the addition of the YASMIN FSM mission planner.
 | `duburi_common` | Shared constants and command vocabulary | 2 | ~207 | — |
 | `duburi_blueos` | BlueOS REST API companion client | 6 | ~450 | `blueos_monitor` |
 | `duburi_interfaces` | ROS 2 msg/srv definitions | — | — | — |
+
+> **V2 Note:** `mavlink_inspector` grew from 7 to 9 modules (+2 in V2: `velocity_control.py`, `sensor_sources.py`) and from ~2,300 to ~4,000 lines.
 
 ---
 
@@ -235,6 +237,86 @@ PWM/second towards targets. This produces smooth acceleration/deceleration.
 `node.get_logger().info()` and publishes `MavlinkEvent`.
 
 **Depends on:** nothing (standalone, testable with mock messages)
+
+---
+
+### 2.8 velocity_control.py (NEW in V2, ~940 lines)
+
+**Role:** Control Redesign V2 Phase 1-4 classes for velocity estimation,
+convergence gating, cascade control, and gain scheduling.
+
+| Item | Kind | Purpose |
+|---|---|---|
+| `VelocityEstimator` | class | Estimates body-frame velocity from IMU accelerometer via trapezoidal integration |
+| `ConvergenceGate` | class | Blocks next command until vehicle velocity drops below threshold |
+| `PositionEstimator` | class | Dead reckoning position from velocity integration |
+| `CascadeController` | class | Dual-loop position → velocity → thrust cascade |
+| `GainScheduler` | class | Speed-adaptive PID gains (3 ranges: 0-30%, 30-60%, 60-100%) |
+| `AccelerationLimiter` | class | Limits acceleration rate to prevent overshoot |
+
+**VelocityEstimator details:**
+- Trapezoidal integration (more accurate than Euler)
+- ZUPT (Zero-velocity Update): resets velocity when stationary
+- Bias compensation via configurable offsets
+
+**ConvergenceGate states:**
+- `WAITING`: Velocity above threshold
+- `SETTLING`: Velocity below threshold, counting down
+- `CONVERGED`: Stable for required duration
+- `TIMEOUT`: Safety timeout reached
+
+**GainScheduler ranges:**
+| Range | Speed | Yaw Kp | Depth Kp | Position Kp |
+|-------|-------|--------|----------|-------------|
+| LOW | 0-30% | 2.5 | 200 | 0.7 |
+| MEDIUM | 30-60% | 2.0 | 180 | 0.5 |
+| HIGH | 60-100% | 1.2 | 150 | 0.3 |
+
+**Depends on:** inspector node (for parameters and logging)
+
+---
+
+### 2.9 sensor_sources.py (NEW in V2, ~800 lines)
+
+**Role:** Control Redesign V2 Phase 5 multi-source sensor abstraction.
+Provides priority-based fallback for velocity and yaw sources.
+
+| Item | Kind | Purpose |
+|---|---|---|
+| `SensorSource` | ABC | Abstract base class for all sensor sources |
+| `DVLSource` | class | Subscribes to DVL velocity topic, filters by quality |
+| `DVLIMUSource` | class | Subscribes to DVL internal IMU orientation |
+| `ExternalYawSource` | class | Subscribes to external compass (configurable msg type) |
+| `PixhawkYawSource` | class | Uses telemetry parser yaw (always-available fallback) |
+| `SensorSourceManager` | class | Manages sources, provides priority-based get_velocity/get_heading |
+
+**SensorSource interface:**
+```python
+class SensorSource(ABC):
+    @abstractmethod
+    def get_value(self) -> Optional[float]: ...
+    
+    @abstractmethod
+    def is_valid(self) -> bool: ...
+    
+    def get_age(self) -> float: ...
+```
+
+**ExternalYawSource supported message types:**
+- `std_msgs/Float32` — raw heading in degrees
+- `sensor_msgs/Imu` — extracts yaw from quaternion
+- `geometry_msgs/Vector3Stamped` — uses x field as yaw
+
+**SensorSourceManager priority logic:**
+```python
+def get_velocity(self):
+    for source in self.velocity_priority:  # ['dvl', 'imu_estimate']
+        if self.sources[source].is_valid():
+            return self.sources[source].get_velocity()
+    return None
+```
+
+**Depends on:** ROS2 subscriptions, telemetry_parser (for Pixhawk fallback)
 
 ---
 

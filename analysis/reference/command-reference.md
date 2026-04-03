@@ -867,6 +867,28 @@ Tunable at launch or runtime via `ros2 param set`.
 | `ack_timeout` | `3.0` | Command ACK timeout (seconds) |
 | `yaw_source` | `attitude` | Yaw source: `attitude`, `ahrs2`, or `both` |
 
+### V2 Parameters (Control Redesign V2)
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `convergence_enabled` | `false` | Enable convergence gates between commands |
+| `convergence_velocity_threshold` | `0.05` | m/s threshold for "stopped" |
+| `convergence_settling_time` | `0.2` | Seconds to stay below threshold |
+| `convergence_timeout` | `5.0` | Max wait time (safety) |
+| `rotate_in_place_enabled` | `false` | Enable sharp turns with translation lock |
+| `yaw_precision_deadband` | `5.0` | Degrees for precision zone |
+| `yaw_final_deadband` | `1.0` | Degrees for final zone |
+| `yaw_settling_time` | `0.5` | Seconds in final zone |
+| `cascade_enabled` | `false` | Enable position control cascade |
+| `gain_scheduling_enabled` | `false` | Enable speed-adaptive gains |
+| `accel_limiting_enabled` | `false` | Enable acceleration ramp |
+| `dvl_enabled` | `false` | Enable DVL velocity source |
+| `dvl_topic` | `/dvl/velocity` | DVL topic name |
+| `external_yaw_enabled` | `false` | Enable external compass |
+| `external_yaw_topic` | `/external_imu/yaw` | External yaw topic |
+
+See `analysis/design-decisions/control-stack-v2.md` for complete parameter reference.
+
 ### Runtime Tuning Examples
 
 ```bash
@@ -881,4 +903,55 @@ ros2 param set /mavlink_inspector depth_kp 300
 
 # Tighter yaw tracking
 ros2 param set /mavlink_inspector yaw_kp 3.0
+
+# Enable V2 convergence gates
+ros2 param set /mavlink_inspector convergence_enabled true
+
+# Enable rotate-in-place for sharp turns
+ros2 param set /mavlink_inspector rotate_in_place_enabled true
 ```
+
+---
+
+## 20. V2 Commands (Control Redesign V2)
+
+### Sharp Turn Commands
+
+Sharp turns use rotate-in-place mode (translation locked during rotation):
+
+| CLI | Effect |
+|-----|--------|
+| `sharp turn left 90 50%` | Rotate-in-place left 90° at 50% speed |
+| `sharp turn right 45 30%` | Rotate-in-place right 45° at 30% speed |
+| `sharp ~turn left 90 50%` | Same with PID control |
+
+**Requires:** `rotate_in_place_enabled: true`
+
+### Convergence Commands
+
+Commands with convergence wait for vehicle to stabilize:
+
+```bash
+# Move forward, then wait for convergence before next command
+forward 50% 3s --converge
+
+# Mission file with convergence
+forward 50% 3s converge
+turn left 90 50% converge
+forward 50% 3s converge
+```
+
+**Requires:** `convergence_enabled: true`
+
+### Cascade Position Commands
+
+Position-based movement using cascade control:
+
+```bash
+# Move to relative position (body-frame, metres)
+position forward 2.0
+position left 1.5
+position up 0.5
+```
+
+**Requires:** `cascade_enabled: true`

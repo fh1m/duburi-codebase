@@ -99,3 +99,126 @@
 **Decision**: `import readline` before `input()` to enable Up/Down history and Left/Right cursor.
 
 **Why**: Default `input()` has no history or editing. readline is standard on Unix and improves usability.
+
+---
+
+# Control Redesign V2 Decisions
+
+## 13. All V2 Features Disabled by Default
+
+**Decision**: Every V2 control feature (convergence, rotate-in-place, cascade, gain scheduling, DVL) is disabled by default via `*_enabled: false` parameters.
+
+**Why**: Untested control algorithms can damage hardware. Safe defaults let us test incrementally. Enable features one at a time after pool validation.
+
+---
+
+## 14. Configuration-Driven Architecture
+
+**Decision**: 74+ ROS2 parameters control all V2 behavior. No magic numbers in code.
+
+**Why**: 
+- Tune without recompiling
+- Different robots may need different values
+- Parameters are documented in defaults.yaml
+
+---
+
+## 15. Modular Control Classes
+
+**Decision**: Each control concept is a separate class (VelocityEstimator, ConvergenceGate, GainScheduler, etc.) in dedicated modules.
+
+**Why**:
+- Single responsibility per class
+- Unit testable in isolation
+- Hot-swappable at runtime if needed
+
+---
+
+## 16. ZUPT for Drift Correction
+
+**Decision**: When IMU accelerometer reads near-zero for N seconds, reset velocity estimate to zero.
+
+**Why**: IMU integration drifts unboundedly. ZUPT (Zero-velocity Update) provides periodic correction when stationary. Simple, effective, no external sensors needed.
+
+---
+
+## 17. Convergence Gates Between Commands
+
+**Decision**: Movement commands can optionally wait for vehicle to stabilize (velocity < threshold for N ms) before completing.
+
+**Why**: Prevents inertia from one command affecting the next. Critical for mission accuracy.
+
+---
+
+## 18. Rotate-in-Place with Translation Lock
+
+**Decision**: During sharp yaw commands, lock translation channels (forward/lateral/throttle) to neutral.
+
+**Why**: Normal yaw commands allow translation to continue, causing drift during turns. Locking translation ensures vehicle rotates on its axis.
+
+---
+
+## 19. Two-Zone Yaw PID
+
+**Decision**: Yaw PID uses reduced gains near target (precision zone: 5-10°, final zone: <5°).
+
+**Why**: Full gains near target cause overshoot. Reduced gains allow precise final positioning without sacrificing responsiveness far from target.
+
+---
+
+## 20. Settling Time for Yaw
+
+**Decision**: Yaw is not "reached" until target is held for N ms (settling time).
+
+**Why**: A momentary pass through target due to oscillation doesn't count as reached. Settling time ensures stable convergence.
+
+---
+
+## 21. Cascade Position Control
+
+**Decision**: Position control uses cascade architecture: Position PID → Velocity Setpoint → Velocity PID → Thrust.
+
+**Why**: 
+- Position-only control is sluggish (needs high integrator, causes windup)
+- Velocity-only control can't hold position
+- Cascade gives fast response AND accurate positioning
+
+---
+
+## 22. Gain Scheduling by Speed
+
+**Decision**: Three sets of PID gains for low (0-30%), medium (30-60%), and high (60-100%) speed ranges.
+
+**Why**: Gains tuned for 30% are too aggressive at 90%. Different speeds need different gains for optimal performance.
+
+---
+
+## 23. Acceleration Limiting
+
+**Decision**: Maximum acceleration rate (50%/sec default). Commands ramp up gradually.
+
+**Why**: Instant full-throttle causes overshoot and instability. Ramping allows controller to track smoothly.
+
+---
+
+## 24. Sensor Source Priority Fallback
+
+**Decision**: Multiple sensor sources (DVL, external compass, Pixhawk) with priority-based fallback.
+
+**Why**: Sensors fail. DVL loses bottom lock, compass cables disconnect. System must degrade gracefully to less accurate but available sources.
+
+---
+
+## 25. Sensor Staleness Detection
+
+**Decision**: Each sensor source has a timeout. If no update within timeout, source is marked invalid and fallback activates.
+
+**Why**: Stale data is worse than no data. A 5-second-old velocity reading will cause incorrect control. Better to use IMU estimate than stale DVL.
+
+---
+
+## 26. Message-Type-Agnostic External Yaw
+
+**Decision**: External yaw source supports multiple message types (Float32, Imu, Vector3Stamped) via configuration.
+
+**Why**: Different compass sensors publish different message types. Supporting multiple types allows easy sensor swapping without code changes.

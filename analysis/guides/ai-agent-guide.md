@@ -79,6 +79,25 @@ For AI agents (Cursor, etc.) working on this codebase. Read this first, then div
 3. Use same syntax as CLI: `move forward 50% 5s`, `arm`, etc.
 4. **First line should be `mode MANUAL`** before `arm` for RC override to work.
 
+### Add a new movement command (V2 - decorator-based)
+
+With Control Redesign V1+, commands use decorators:
+
+```python
+# In movement_commands.py
+@register('my_command', CommandCategory.TRANSLATION, CommandTransport.TOPIC,
+          description='My new command',
+          channels=['CH_FORWARD'],
+          aliases=['my_cmd'])
+def cmd_my_command(h, cmd):
+    h.set_movement({CH_FORWARD: NEUTRAL_PWM + h.offset}, 'My command')
+```
+
+The `@register` decorator automatically:
+- Adds to dispatch table
+- Creates `just_*` variant
+- Validates channels
+
 ### Add a new YASMIN mission
 
 1. Create `duburi_planner/duburi_planner/missions/<name>.py` with a `create_<name>_fsm()` function.
@@ -117,6 +136,47 @@ For AI agents (Cursor, etc.) working on this codebase. Read this first, then div
 
 ---
 
+## V2 Control Modules
+
+Control Redesign V2 adds new modules in `mavlink_inspector`:
+
+| Module | Purpose | Key Classes |
+|--------|---------|-------------|
+| `velocity_control.py` | Phase 1-4 control | VelocityEstimator, ConvergenceGate, GainScheduler, AccelerationLimiter |
+| `sensor_sources.py` | Phase 5 sensors | DVLSource, ExternalYawSource, SensorSourceManager |
+
+### V2 Key Variables
+
+| Variable | Location | Meaning |
+|----------|----------|---------|
+| `VelocityEstimator.velocity` | velocity_control | Estimated body-frame velocity [x, y, z] |
+| `ConvergenceGate.state` | velocity_control | WAITING, SETTLING, CONVERGED, TIMEOUT |
+| `GainScheduler.current_range` | velocity_control | LOW, MEDIUM, HIGH |
+| `SensorSourceManager.active_velocity_source` | sensor_sources | dvl, imu_estimate, or none |
+| `SensorSourceManager.active_yaw_source` | sensor_sources | dvl_imu, external, pixhawk |
+
+### V2 Parameters to Know
+
+All V2 features are disabled by default. Enable via ROS2 params:
+
+```bash
+# Enable convergence gates
+ros2 param set /mavlink_inspector convergence_enabled true
+
+# Enable rotate-in-place
+ros2 param set /mavlink_inspector rotate_in_place_enabled true
+
+# Enable gain scheduling
+ros2 param set /mavlink_inspector gain_scheduling_enabled true
+
+# Enable DVL
+ros2 param set /mavlink_inspector dvl_enabled true
+```
+
+See `config/defaults.yaml` for all 74+ parameters.
+
+---
+
 ## Key Variables
 
 | Variable | Location | Meaning |
@@ -137,6 +197,7 @@ For AI agents (Cursor, etc.) working on this codebase. Read this first, then div
 
 ## Testing Checklist
 
+### V1 Tests
 - [ ] `arm` → vehicle arms, no block
 - [ ] `move forward 50% 10s` → moves 10 s, then stops, stays armed
 - [ ] `run gate` → executes full mission, thrusters move
@@ -146,3 +207,10 @@ For AI agents (Cursor, etc.) working on this codebase. Read this first, then div
 - [ ] YASMIN planner: `ros2 run duburi_planner mission_planner -p mission_name:=gate`
 - [ ] Visual alignment: target detection → alignment_controller → teleop commands
 - [ ] Kalman tracker: smooth bounding boxes during dropout
+
+### V2 Tests (after enabling features)
+- [ ] Convergence: `forward 50% 3s` waits for vehicle to stop before next command
+- [ ] Rotate-in-place: `sharp turn left 90 50%` rotates without lateral drift
+- [ ] Gain scheduling: Different gains at 30% vs 90% speed
+- [ ] DVL: Velocity reading from `/dvl/velocity` when enabled
+- [ ] Fallback: DVL timeout → IMU estimate fallback
