@@ -276,34 +276,59 @@ ros2 run mavlink_runner runner
 
 ## Architecture
 
+```mermaid
+flowchart TB
+    subgraph Hardware["Hardware Layer"]
+        PIX[Pixhawk 2.4.8<br/>ArduSub Firmware]
+        CAM[USB Camera]
+        THR[T200 Thrusters]
+    end
+    
+    subgraph Controls["Control Stack"]
+        INS[mavlink_inspector<br/>7 modules]
+        RUN[mavlink_runner<br/>Interactive CLI]
+        EXE[mission_executor<br/>Autonomous missions]
+        TEL[teleop_driver<br/>Joystick input]
+        LOG[mavlink_logger]
+    end
+    
+    subgraph Perception["Vision Stack"]
+        CM[camera_manager<br/>Multi-camera]
+        DET[detector_node<br/>YOLO11 + CUDA]
+        ALN[alignment_controller<br/>Visual servo]
+    end
+    
+    subgraph Shared["Shared"]
+        INT[duburi_interfaces<br/>ROS2 messages]
+        COM[duburi_common<br/>Constants + vocab]
+    end
+    
+    PIX <-->|MAVLink| INS
+    INS -->|RC Override| THR
+    CAM --> CM
+    CM -->|/camera/image| DET
+    DET -->|/detections| ALN
+    ALN -->|DriverCommand| INS
+    RUN -->|DriverCommand| INS
+    EXE -->|DriverCommand| INS
+    TEL -->|TeleopCommand| INS
+    INS -->|VehicleState| LOG
 ```
-┌──────────────────── CONTROLS ─────────────────────┐   ┌──────────── PERCEPTION ─────────────┐
-│                                                    │   │                                     │
-│                 Pixhawk (/dev/ttyACM0)             │   │  USB Camera(s) (/dev/videoN)        │
-│                         │                          │   │         │                           │
-│           mavlink_inspector (7 modules)            │   │   vision_inspector                  │
-│           ┌─ connection_manager (serial I/O)       │   │   (camera_manager — multi-cam)      │
-│           ├─ telemetry_parser (MAVLink → state)    │   │         │                           │
-│           ├─ command_handler (dispatch table)      │   │  /camera/<name>/image_raw           │
-│           ├─ movement_commands (MOVEMENTS registry)│   │         │                           │
-│           ├─ rc_controller (PWM ramp + channels)   │   │      vision                        │
-│           ├─ pid_controller ×2 (depth + yaw)       │   │   detector_node → /vision/detections│
-│           └─ inspector_node (orchestrator)          │   │         │                           │
-│                         │                          │   │   alignment_controller              │
-│       /mavlink/events   │   /mavlink/vehicle_state │   │   (PID visual servo → DriverCommand)│
-│                         │                          │   │         │                           │
-│                /driver/command                     │   └─────────┼───────────────────────────┘
-│                /driver/teleop (TeleopCommand)      │             │
-│                         │                          │       ┌─────┴────────────┐
-│     +-------------------+-------------------+      │       │ duburi_interfaces │
-│     │                   │                   │      │       │ duburi_common     │
-│  mavlink_runner   mission_executor    teleop_driver│       │ (shared msgs +   │
-│  (CLI, missions)  (autonomous)       (/cmd_vel)    │       │  vocab/constants) │
-│     │                   │                   │      │       └──────────────────┘
-│     +-------------------+-------------------+      │
-│                         │                          │
-│                 mavlink_logger → logs/              │
-└────────────────────────────────────────────────────┘
+
+### Inspector Internal Architecture
+
+```mermaid
+flowchart LR
+    subgraph inspector_node["inspector_node.py (orchestrator)"]
+        direction TB
+    end
+    
+    CM[connection_manager<br/>Serial I/O, reconnect] --> inspector_node
+    TP[telemetry_parser<br/>MAVLink → state] --> inspector_node
+    CH[command_handler<br/>Dispatch table] --> inspector_node
+    MC[movement_commands<br/>30+ handlers] --> CH
+    RC[rc_controller<br/>PWM ramp] --> inspector_node
+    PID[pid_controller ×2<br/>depth + yaw] --> inspector_node
 ```
 
 ### Data Flow Summary
@@ -315,6 +340,14 @@ ros2 run mavlink_runner runner
 5. **RcController** applies trapezoidal velocity ramp at 20 Hz
 6. **PidController** (depth + yaw) overrides channels when active
 7. **Inspector** sends merged RC override to Pixhawk every 50ms
+
+### Branch Structure
+
+| Branch | Status | Description |
+|--------|--------|-------------|
+| `main` | Stable | Production-ready V1 codebase |
+| `Control-Redesign-V1` | Stable | Decorator-based commands, modular architecture |
+| `Control-Redesign-V2` | Testing | Advanced control (convergence, cascade, DVL) |
 
 ---
 
@@ -1291,6 +1324,33 @@ pip install opencv-python ultralytics supervision simple-pid
 # Verify CUDA
 python3 -c "import torch; print(f'CUDA: {torch.cuda.is_available()}, Device: {torch.cuda.get_device_name(0)}')"
 ```
+
+---
+
+## Control Redesign V2 (Preview)
+
+> **Branch:** `Control-Redesign-V2` (testing)
+
+V2 adds advanced control features for mission reliability:
+
+```mermaid
+graph LR
+    subgraph "V2 Features"
+        A[Convergence Gates] --> B[Wait for vehicle<br/>to stabilize]
+        C[Rotate-in-Place] --> D[Sharp turns<br/>no drift]
+        E[Cascade Control] --> F[Position→Velocity<br/>→Thrust]
+        G[Gain Scheduling] --> H[Speed-adaptive<br/>PID gains]
+        I[Multi-Source Sensors] --> J[DVL, External<br/>compass fallback]
+    end
+```
+
+**New Modules:**
+- `velocity_control.py` — VelocityEstimator, ConvergenceGate, CascadeController, GainScheduler
+- `sensor_sources.py` — DVLSource, ExternalYawSource, SensorSourceManager
+
+**74+ configurable parameters** — all features disabled by default for safety.
+
+See `analysis/design-decisions/control-stack-v2.md` for full documentation.
 
 ---
 
