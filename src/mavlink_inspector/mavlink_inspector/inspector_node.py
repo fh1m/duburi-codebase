@@ -49,6 +49,7 @@ from .velocity_control import (
     PositionEstimator, CascadeController,  # Phase 3
     GainScheduler, AccelerationLimiter     # Phase 4
 )
+from .sensor_sources import SensorSourceManager  # Phase 5
 
 
 class MavlinkInspectorNode(Node):
@@ -218,6 +219,36 @@ class MavlinkInspectorNode(Node):
         
         # Acceleration limiting
         self._max_accel_pct_per_sec = self.declare_parameter('max_accel_pct_per_sec', 50.0).value
+        
+        # ─── Phase 5: Multi-Source Sensor Architecture ───
+        # DVL (Nortek Nucleus 1000)
+        self._dvl_enabled = self.declare_parameter('dvl_enabled', False).value
+        self._dvl_topic = self.declare_parameter('dvl_topic', '/dvl/velocity').value
+        self._dvl_timeout = self.declare_parameter('dvl_timeout', 1.0).value
+        self._dvl_min_quality = self.declare_parameter('dvl_min_quality', 0.5).value
+        self._dvl_min_altitude = self.declare_parameter('dvl_min_altitude', 0.3).value
+        self._dvl_max_altitude = self.declare_parameter('dvl_max_altitude', 50.0).value
+        
+        # DVL Internal IMU
+        self._dvl_imu_enabled = self.declare_parameter('dvl_imu_enabled', False).value
+        self._dvl_imu_topic = self.declare_parameter('dvl_imu_topic', '/dvl/orientation').value
+        self._dvl_imu_msg_type = self.declare_parameter('dvl_imu_msg_type', 'geometry_msgs/QuaternionStamped').value
+        self._dvl_imu_timeout = self.declare_parameter('dvl_imu_timeout', 0.5).value
+        
+        # External Yaw (Witmotion, BNO085, etc.)
+        self._external_yaw_enabled = self.declare_parameter('external_yaw_enabled', False).value
+        self._external_yaw_topic = self.declare_parameter('external_yaw_topic', '/external_imu/yaw').value
+        self._external_yaw_msg_type = self.declare_parameter('external_yaw_msg_type', 'std_msgs/Float32').value
+        self._external_yaw_timeout = self.declare_parameter('external_yaw_timeout', 0.5).value
+        self._external_yaw_offset = self.declare_parameter('external_yaw_offset', 0.0).value
+        
+        # Source priorities
+        self._velocity_source_priority = self.declare_parameter(
+            'velocity_source_priority', ['dvl', 'imu_estimate']
+        ).value
+        self._yaw_source_priority = self.declare_parameter(
+            'yaw_source_priority', ['dvl_imu', 'external', 'pixhawk']
+        ).value
 
         # Connection health (Design Issue 3: parameterized timing)
         heartbeat_timeout = self.declare_parameter(
@@ -356,6 +387,41 @@ class MavlinkInspectorNode(Node):
             logger=self.get_logger(),
             config=accel_limiter_config
         )
+        
+        # ─── Phase 5: Sensor Source Manager ───
+        sensor_source_config = {
+            # DVL
+            'dvl_enabled': self._dvl_enabled,
+            'dvl_topic': self._dvl_topic,
+            'dvl_timeout': self._dvl_timeout,
+            'dvl_min_quality': self._dvl_min_quality,
+            'dvl_min_altitude': self._dvl_min_altitude,
+            'dvl_max_altitude': self._dvl_max_altitude,
+            # DVL IMU
+            'dvl_imu_enabled': self._dvl_imu_enabled,
+            'dvl_imu_topic': self._dvl_imu_topic,
+            'dvl_imu_msg_type': self._dvl_imu_msg_type,
+            'dvl_imu_timeout': self._dvl_imu_timeout,
+            # External yaw
+            'external_yaw_enabled': self._external_yaw_enabled,
+            'external_yaw_topic': self._external_yaw_topic,
+            'external_yaw_msg_type': self._external_yaw_msg_type,
+            'external_yaw_timeout': self._external_yaw_timeout,
+            'external_yaw_offset': self._external_yaw_offset,
+            # Priorities
+            'velocity_source_priority': self._velocity_source_priority,
+            'yaw_source_priority': self._yaw_source_priority,
+        }
+        
+        self._sensor_source_manager = SensorSourceManager(
+            node=self,
+            telemetry_parser=self._telemetry,
+            logger=self.get_logger(),
+            config=sensor_source_config
+        )
+        
+        # Link velocity estimator to sensor source manager
+        self._sensor_source_manager.set_velocity_estimator(self._velocity_estimator)
 
         # ── Movement state ───────────────────────────────────────────
         self._current_movement = None   # {channels, end_time, bypass_ramp, command}

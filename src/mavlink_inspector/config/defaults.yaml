@@ -172,6 +172,37 @@ mavlink_inspector:
     
     # Acceleration limiting
     max_accel_pct_per_sec: 50.0           # Max speed ramp rate (%/sec)
+    
+    # ────────────────────────────────────────────────────────────
+    # Phase 5: Multi-Source Sensor Architecture (DVL + External)
+    # ────────────────────────────────────────────────────────────
+    
+    # Source priority (first valid wins)
+    # Velocity: 'dvl' (ground truth), 'imu_estimate' (Phase 1 VelocityEstimator)
+    # Yaw: 'dvl_imu' (DVL internal), 'external' (Witmotion/BNO085), 'pixhawk' (default)
+    velocity_source_priority: ['dvl', 'imu_estimate']
+    yaw_source_priority: ['dvl_imu', 'external', 'pixhawk']
+    
+    # DVL (Nortek Nucleus 1000)
+    dvl_enabled: false                    # Master enable for DVL velocity source
+    dvl_topic: '/dvl/velocity'            # TwistWithCovarianceStamped
+    dvl_timeout: 1.0                      # Seconds before marking stale
+    dvl_min_quality: 0.5                  # Minimum quality (0.0-1.0) to use
+    dvl_min_altitude: 0.3                 # Minimum altitude for valid data (m)
+    dvl_max_altitude: 50.0                # Maximum altitude for valid data (m)
+    
+    # DVL Internal IMU (Nucleus 1000 has built-in AHRS)
+    dvl_imu_enabled: false                # Master enable for DVL IMU yaw
+    dvl_imu_topic: '/dvl/orientation'     # QuaternionStamped or Imu
+    dvl_imu_msg_type: 'geometry_msgs/QuaternionStamped'
+    dvl_imu_timeout: 0.5                  # Seconds
+    
+    # External Yaw (Witmotion WT901C, BNO085 via ESP32, etc.)
+    external_yaw_enabled: false           # Master enable for external compass
+    external_yaw_topic: '/external_imu/yaw'
+    external_yaw_msg_type: 'std_msgs/Float32'  # Or 'sensor_msgs/Imu', 'geometry_msgs/Vector3Stamped'
+    external_yaw_timeout: 0.5             # Seconds
+    external_yaw_offset: 0.0              # Calibration offset in degrees
 
 mavlink_logger:
   ros__parameters:
