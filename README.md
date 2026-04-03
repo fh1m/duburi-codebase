@@ -58,9 +58,60 @@ flowchart LR
 
 ---
 
-## ✨ What's New (Control Stack Redesign V1)
+## ✨ What's New
 
-The `Control-Redesign-V1` branch introduces a major architectural overhaul:
+### Control Redesign V2 (Current Development Branch)
+
+Advanced control features for reliable autonomous missions:
+
+```mermaid
+flowchart TB
+    subgraph Phase5[Phase 5: Multi-Source Sensors]
+        DVL[DVL Velocity]
+        ExtYaw[External Compass]
+        Manager[Source Manager<br/>Priority Fallback]
+    end
+    
+    subgraph Phase4[Phase 4: Gain Scheduling]
+        GS[3 Speed Ranges<br/>Low/Med/High]
+        AL[Accel Limiter<br/>50%/sec]
+    end
+    
+    subgraph Phase3[Phase 3: Cascade Control]
+        PE[Position<br/>Estimator]
+        CC[Cascade<br/>Pos→Vel→Thrust]
+    end
+    
+    subgraph Phase2[Phase 2: Precision Yaw]
+        RIP[Rotate-in-Place]
+        PY[3-Zone PID]
+    end
+    
+    subgraph Phase1[Phase 1: Convergence]
+        VE[Velocity<br/>Estimator]
+        CG[Convergence<br/>Gate]
+    end
+    
+    Phase5 --> Phase1
+    Phase1 --> Phase2
+    Phase1 --> Phase3
+    Phase3 --> Phase4
+    Phase2 --> Output[RC Override]
+    Phase4 --> Output
+```
+
+**Features:**
+| Phase | Feature | Problem Solved |
+|-------|---------|----------------|
+| 1 | Convergence Gates | Vehicle coasts past targets |
+| 2 | Rotate-in-Place | U-turn corners → sharp 90° |
+| 3 | Cascade Control | ±1m variance → ±0.2m |
+| 4 | Gain Scheduling | High-speed overshoots |
+| 5 | DVL + External IMU | IMU drift |
+
+**Status**: Implemented, awaiting pool testing. See `analysis/guides/pool-testing/next_things_to_check.md`.
+
+### Control Redesign V1 (Stable Branch)
 
 ```mermaid
 flowchart LR

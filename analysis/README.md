@@ -13,7 +13,7 @@ mindmap
       Design Issues
     Design Decisions
       Core Decisions
-      Control Redesign
+      Control Redesign V1/V2
       ArduSub Constraints
     Guides
       Getting Started
@@ -38,6 +38,99 @@ mindmap
     Code Review
       Inspector Analysis
       Driver Analysis
+```
+
+---
+
+## Control Architecture Overview
+
+```mermaid
+flowchart TB
+    subgraph "Control Stack (Phase 1-5)"
+        direction TB
+        
+        subgraph "Phase 5: Sensor Sources"
+            DVL[DVL<br/>Nortek Nucleus 1000]
+            ExtIMU[External IMU<br/>Witmotion/BNO085]
+            PixIMU[Pixhawk IMU<br/>Default Fallback]
+            SSM[SensorSourceManager]
+            
+            DVL --> SSM
+            ExtIMU --> SSM
+            PixIMU --> SSM
+        end
+        
+        subgraph "Phase 1: Velocity Estimation"
+            VE[VelocityEstimator]
+            ZUPT[ZUPT Correction]
+            CG[ConvergenceGate]
+            
+            SSM --> VE
+            VE --> ZUPT
+            ZUPT --> CG
+        end
+        
+        subgraph "Phase 2: Yaw Control"
+            RIP[Rotate-in-Place]
+            PYaw[Precision PID<br/>3 Zones]
+            TL[Translation Lockout]
+            
+            CG --> RIP
+            RIP --> PYaw
+            PYaw --> TL
+        end
+        
+        subgraph "Phase 3: Cascade Control"
+            PE[PositionEstimator]
+            CC[CascadeController<br/>Position→Velocity→Thrust]
+            
+            VE --> PE
+            PE --> CC
+        end
+        
+        subgraph "Phase 4: Gain Scheduling"
+            GS[GainScheduler<br/>3 Speed Ranges]
+            AL[AccelerationLimiter<br/>50%/sec]
+            
+            CC --> GS
+            GS --> AL
+        end
+        
+        RC[RC Controller<br/>PWM Output]
+        AL --> RC
+        TL --> RC
+    end
+    
+    RC --> Pixhawk[Pixhawk/ArduSub]
+```
+
+## Message Flow
+
+```mermaid
+sequenceDiagram
+    participant Mission as Mission File
+    participant Driver as mavlink_driver
+    participant Inspector as mavlink_inspector
+    participant Pixhawk as Pixhawk/ArduSub
+    participant Sensors as Sensors
+    
+    Mission->>Driver: Load mission.txt
+    Driver->>Inspector: DriverCommand
+    
+    Inspector->>Inspector: Parse command
+    Inspector->>Inspector: Apply gain scheduling
+    Inspector->>Inspector: Check convergence
+    
+    loop Control Loop (20 Hz)
+        Sensors->>Inspector: IMU/DVL data
+        Inspector->>Inspector: Update velocity estimate
+        Inspector->>Inspector: Position estimation
+        Inspector->>Inspector: Cascade control
+        Inspector->>Pixhawk: RC Override
+    end
+    
+    Inspector->>Driver: Command complete
+    Driver->>Mission: Next command
 ```
 
 ---
@@ -150,7 +243,14 @@ Line-by-line code analysis.
 
 ## 🔄 Recent Updates
 
-- **Control Stack Redesign V1** - Complete architectural overhaul
+- **Control Stack Redesign V2** (Current Branch)
+  - Phase 1: Velocity estimation with ZUPT, convergence gates
+  - Phase 2: Rotate-in-place, precision yaw PID
+  - Phase 3: Cascade control, position estimation
+  - Phase 4: Gain scheduling (3 speed ranges), acceleration limiting
+  - Phase 5: Multi-source sensors (DVL, External IMU)
+  
+- **Control Stack Redesign V1** (Stable Branch)
   - Decorator-based command registry
   - 72% parser code reduction
   - 6 critical safety fixes
