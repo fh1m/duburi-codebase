@@ -1,51 +1,159 @@
-# Duburi 4.2 Codebase Analysis
+# Duburi 4.2 Documentation & Analysis
 
-This folder contains comprehensive documentation for the BRACU Duburi AUV 4.2 ROS 2 control stack. It is intended for **AI agents** and developers who need to understand, modify, or extend the codebase.
+Welcome to the Duburi AUV documentation. This folder contains comprehensive analysis, guides, and reference documentation for developers and users.
 
-## Reading Order for New Agents
+## Quick Navigation
 
-1. **00_OVERVIEW.md** – Start here. High-level purpose, philosophy, and constraints.
-2. **08_AGENT_GUIDE.md** – Quick reference: where things live, common tasks, pitfalls.
-3. **02_DESIGN_DECISIONS.md** – Why the code is structured this way.
-4. **07_ARDUSUB_CONSTRAINTS.md** – Hardware/firmware requirements that drive many design choices.
-5. **01_ARCHITECTURE.md** – Package layout, topics, data flow.
-6. **06_INTERFACES.md** – Message definitions and usage.
-7. **03–05** – Line-by-line explanations of each package (use when modifying specific files).
+```mermaid
+mindmap
+  root((Duburi<br/>Documentation))
+    Architecture
+      System Overview
+      ROS Interfaces
+      Design Issues
+    Design Decisions
+      Core Decisions
+      Control Redesign
+      ArduSub Constraints
+    Guides
+      Getting Started
+      Simulation
+      BlueOS Network
+      Planner
+    Reference
+      Command Reference
+      Code Reference
+      MAVLink Deep Dive
+    Contributing
+      Known Issues
+      Recommendations
+      Refactoring Plan
+    Code Review
+      Inspector Analysis
+      Driver Analysis
+      Vision Analysis
+```
 
-## File Index
+---
 
-| File | Purpose |
-|------|---------|
-| `00_OVERVIEW.md` | Project context, philosophy, key constraints |
-| `01_ARCHITECTURE.md` | System architecture, packages, topics, data flow |
-| `02_DESIGN_DECISIONS.md` | Design choices and rationale |
-| `03_INSPECTOR_LINE_BY_LINE.md` | mavlink_inspector – every choice explained (pre-refactor note) |
-| `04_RUNNER_LINE_BY_LINE.md` | mavlink_runner – CLI and mission execution |
-| `05_DRIVER_LINE_BY_LINE.md` | mavlink_driver – driver_client, mission_executor, teleop |
-| `06_INTERFACES.md` | duburi_interfaces – messages and fields (incl. TeleopCommand) |
-| `07_ARDUSUB_CONSTRAINTS.md` | ArduSub requirements that shape the design |
-| `08_AGENT_GUIDE.md` | Quick reference for agents |
-| `09_KNOWN_ISSUES_AND_GOTCHAS.md` | Known issues, edge cases, and applied fixes |
-| `10_DESIGN_ISSUES.md` | Post-refactor architectural concerns with severity/effort ratings |
-| `11_DESK_TESTING_GUIDE.md` | Step-by-step desk testing procedures |
-| `11_REFACTORING_PLAN.md` | 3-phase refactoring plan (Phase 1 partially complete) |
-| `12_CODE_REFERENCE.md` | Post-refactor module map with line counts |
-| `12_COMMAND_REFERENCE.md` | Complete command reference with field encoding details |
-| `13_COMPETITIVE_ANALYSIS.md` | **Deep comparison vs Bumblebee (NUS) and Desert WAVE TDRs** |
-| `14_ISSUES_AND_RECOMMENDATIONS.md` | **Gap analysis, design critique, and phased roadmap** |
-| `15_MISSION_PLANNER_ANALYSIS.md` | **YASMIN (FSM) vs Behaviour Trees — deep comparison & verdict** |
-| `16_PLANNER_DOCUMENTATION.md` | **duburi_planner: Complete theory, implementation & usage guide** |
-| `17_SIMULATION_GAZEBO_ARUDSUB_SITL.md` | **SITL stack:** Gazebo Harmonic + ArduSub + Duburi, ports/UDP, tuning roadmap, GPU tiers |
-| `18_BLUEOS_JETSON_NETWORK_BRINGUP.md` | **Pi BlueOS + Jetson production setup:** first principles, endpoint mapping, static IP plan, bring-up checklist, failure recovery |
-| `19_DESIGN_DECISIONS_ANALYSIS.md` | Deep-dive analysis of all 12 design decisions — trade-offs, alternatives, risks |
-| `20_ARDUSUB_MAVLINK_DEEP_DIVE.md` | ArduSub MAVLink protocol internals — message types, RC override mechanics, EKF configuration |
-| `21_DUBURI_BLUEOS_PACKAGE_ANALYSIS.md` | `duburi_blueos` package analysis — BlueOS REST API integration, system monitoring |
-| `VISION_PERFORMANCE_ANALYSIS.md` | Vision pipeline FPS optimisation (5→25 FPS on Orin Nano) |
-| `ROADMAP.md` | **RoboSub 2026 development roadmap** — 5-phase plan with competition task analysis |
+## 📁 Folder Structure
 
-## Key Invariants (Do Not Violate)
+### 🏗️ [architecture/](architecture/)
 
-- **Single MAVLink connection**: Only `mavlink_inspector` connects to Pixhawk. All control flows through `/driver/command`.
-- **RC override must be continuous**: ArduSub failsafes (~3s) if RC_CHANNELS_OVERRIDE stops. The inspector sends at 20 Hz.
-- **Idle = neutral RC**: When no movement is active, the inspector still sends neutral (1500) on all channels to prevent disarm.
-- **Arm/disarm in thread**: Blocking `motors_armed_wait()` runs in a daemon thread to avoid blocking the ROS executor.
+System design and high-level architecture documentation.
+
+| Document | Description |
+|----------|-------------|
+| [overview.md](architecture/overview.md) | High-level system overview |
+| [system-architecture.md](architecture/system-architecture.md) | Detailed architecture diagrams |
+| [ros-interfaces.md](architecture/ros-interfaces.md) | ROS2 messages, services, topics |
+| [design-issues.md](architecture/design-issues.md) | Known architectural issues |
+
+### 🎯 [design-decisions/](design-decisions/)
+
+Why we made the decisions we made.
+
+| Document | Description |
+|----------|-------------|
+| [control-stack-redesign.md](design-decisions/control-stack-redesign.md) | **NEW** V1 control stack redesign |
+| [core-decisions.md](design-decisions/core-decisions.md) | Core design decisions |
+| [decisions-deep-dive.md](design-decisions/decisions-deep-dive.md) | Deep dive into design choices |
+| [ardusub-constraints.md](design-decisions/ardusub-constraints.md) | ArduSub firmware constraints |
+| [movement-vocabulary.md](design-decisions/movement-vocabulary.md) | Movement command vocabulary |
+
+### 📖 [guides/](guides/)
+
+How-to guides for users and developers.
+
+| Document | Description |
+|----------|-------------|
+| [ai-agent-guide.md](guides/ai-agent-guide.md) | Guide for AI coding agents |
+| [desk-testing.md](guides/desk-testing.md) | Testing without vehicle |
+| [simulation-setup.md](guides/simulation-setup.md) | Gazebo + ArduSub SITL |
+| [blueos-network-setup.md](guides/blueos-network-setup.md) | BlueOS/Jetson network |
+| [planner-guide.md](guides/planner-guide.md) | YASMIN state machine guide |
+| [mission-planning.md](guides/mission-planning.md) | Mission planning analysis |
+
+### 📚 [reference/](reference/)
+
+Technical reference documentation.
+
+| Document | Description |
+|----------|-------------|
+| [command-reference.md](reference/command-reference.md) | All CLI commands |
+| [code-reference.md](reference/code-reference.md) | Code module map |
+| [mavlink-deep-dive.md](reference/mavlink-deep-dive.md) | MAVLink protocol details |
+| [blueos-package.md](reference/blueos-package.md) | BlueOS package analysis |
+
+### 🤝 [contributing/](contributing/)
+
+Guidelines for contributors.
+
+| Document | Description |
+|----------|-------------|
+| [known-issues.md](contributing/known-issues.md) | Known issues & gotchas |
+| [recommendations.md](contributing/recommendations.md) | Improvement recommendations |
+| [refactoring-plan.md](contributing/refactoring-plan.md) | Refactoring roadmap |
+
+### 🔍 [code-review/](code-review/)
+
+Line-by-line code analysis.
+
+| Document | Description |
+|----------|-------------|
+| [inspector-analysis.md](code-review/inspector-analysis.md) | mavlink_inspector deep dive |
+| [runner-analysis.md](code-review/runner-analysis.md) | mavlink_runner analysis |
+| [driver-analysis.md](code-review/driver-analysis.md) | mavlink_driver analysis |
+| [vision-analysis.md](code-review/vision-analysis.md) | Vision system performance |
+
+---
+
+## 🚀 Quick Start Paths
+
+### "I want to understand the codebase"
+1. Start with [architecture/overview.md](architecture/overview.md)
+2. Read [architecture/system-architecture.md](architecture/system-architecture.md)
+3. Check [design-decisions/core-decisions.md](design-decisions/core-decisions.md)
+
+### "I want to add a new command"
+1. Read [design-decisions/control-stack-redesign.md](design-decisions/control-stack-redesign.md)
+2. See the `@register` pattern in `movement_commands.py`
+3. Check [reference/command-reference.md](reference/command-reference.md)
+
+### "I want to run simulations"
+1. [guides/simulation-setup.md](guides/simulation-setup.md)
+2. [guides/desk-testing.md](guides/desk-testing.md)
+
+### "I want to fix a bug"
+1. [contributing/known-issues.md](contributing/known-issues.md)
+2. [code-review/](code-review/) for relevant module
+3. [contributing/recommendations.md](contributing/recommendations.md)
+
+---
+
+## 📊 Documentation Stats
+
+| Metric | Value |
+|--------|-------|
+| Total documents | 27 |
+| Total lines | ~12,000 |
+| Categories | 6 |
+| Diagrams | 50+ |
+
+---
+
+## 🔄 Recent Updates
+
+- **Control Stack Redesign V1** - Complete architectural overhaul
+  - Decorator-based command registry
+  - 72% parser code reduction
+  - 6 critical safety fixes
+  - Clean Python API for perception
+
+---
+
+## See Also
+
+- [Main README](../README.md) - Project overview
+- [ROADMAP.md](ROADMAP.md) - Development roadmap
+- [COMPETITIVE_ANALYSIS.md](COMPETITIVE_ANALYSIS.md) - Competitive landscape

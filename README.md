@@ -4,6 +4,30 @@ ROS 2 Humble workspace for the BRACU Duburi AUV 4.2. Controls the vehicle throug
 
 **~40 Python source files · 8 packages · ~6 500 lines**
 
+```mermaid
+flowchart LR
+    subgraph Controls
+        PIX[Pixhawk<br/>ArduSub] <-->|MAVLink| INS[Inspector<br/>Node]
+        INS --> |RC Override<br/>20Hz| PIX
+    end
+    
+    subgraph Command Sources
+        CLI[Runner CLI]
+        MISSION[Mission Files]
+        PLANNER[YASMIN Planner]
+        VISION[Visual Servo]
+    end
+    
+    Command Sources -->|DriverCommand| INS
+    
+    subgraph Perception
+        CAM[Cameras] --> DET[YOLO Detector]
+        DET --> TRACK[Kalman Tracker]
+        TRACK --> ALIGN[Alignment PID]
+        ALIGN --> VISION
+    end
+```
+
 ---
 
 ## Table of Contents
@@ -24,6 +48,41 @@ ROS 2 Humble workspace for the BRACU Duburi AUV 4.2. Controls the vehicle throug
 14. [Analysis & Documentation](#analysis--documentation)
 15. [Dependencies](#dependencies)
 16. [License](#license)
+
+---
+
+## ✨ What's New (Control Stack Redesign V1)
+
+The `Control-Redesign-V1` branch introduces a major architectural overhaul:
+
+```mermaid
+flowchart LR
+    subgraph Before
+        B1[5 files to add<br/>a new command]
+        B2[492-line if/elif<br/>command parser]
+        B3[No safety watchdog]
+    end
+    
+    subgraph After
+        A1[1 decorator<br/>@register]
+        A2[139-line<br/>registry lookup]
+        A3[RC watchdog +<br/>6 safety fixes]
+    end
+    
+    Before --> |Redesign| After
+    
+    style Before fill:#ff6b6b22
+    style After fill:#4ecdc422
+```
+
+**Key Changes:**
+- ✅ **Single source of truth** — Commands defined via `@register` decorator
+- ✅ **72% parser reduction** — 492 → 139 lines in command_parser.py
+- ✅ **Clean Python API** — `DuburiClient` class for perception integration
+- ✅ **6 safety fixes** — RC watchdog, PID anti-windup, thread safety
+- ✅ **Live-tunable parameters** — All PID gains and brake settings via ROS2 param
+
+See [`analysis/design-decisions/control-stack-redesign.md`](analysis/design-decisions/control-stack-redesign.md) for full details.
 
 ---
 
@@ -72,22 +131,28 @@ mavlink_inspector/
 └── telemetry_parser.py     (159 lines)  MAVLink message dispatch → vehicle state
 ```
 
+> **Note:** With the Control Stack Redesign V1, additional files were added:
+> - `command_registry.py` - Decorator-based command registry
+> - `duburi_client.py` (in mavlink_driver) - Clean Python API
+
 ### Driver Module Breakdown
 
 ```
 mavlink_driver/
-├── driver_client.py        (262 lines)  make_command() factory + all movement functions
-├── mission_parser.py       (245 lines)  parse_file_command() for mission files
+├── driver_client.py        (262 lines)  make_command() factory (deprecated - use DuburiClient)
+├── duburi_client.py        (350 lines)  **NEW** Clean Python API for control + perception
+├── mission_parser.py       (100 lines)  parse_file_command() (rewritten - 54% reduction)
 ├── mission_executor.py     (318 lines)  Autonomous mission runner node
-├── just_commands.py        (115 lines)  just_* instant (no-ramp) movement variants
 └── teleop_driver.py        (~70 lines)  Twist → TeleopCommand on /driver/teleop
+
+> `just_commands.py` has been **deleted** — `just_*` prefix is now handled by the command grammar.
 ```
 
 ### Runner Module Breakdown
 
 ```
 mavlink_runner/
-├── command_parser.py       (~280 lines) parse_command() — uses duburi_common.command_vocabulary
+├── command_parser.py       (139 lines)  parse_command() — **rewritten**, 72% reduction
 ├── runner.py               (268 lines)  Interactive REPL node with readline
 ├── constants.py            (~50 lines)  HELP_TEXT, re-exports from duburi_common.constants
 └── status_display.py        (75 lines)  ANSI dashboard (battery, heading, servos)
@@ -276,34 +341,72 @@ ros2 run mavlink_runner runner
 
 ## Architecture
 
-```
-┌──────────────────── CONTROLS ─────────────────────┐   ┌──────────── PERCEPTION ─────────────┐
-│                                                    │   │                                     │
-│                 Pixhawk (/dev/ttyACM0)             │   │  USB Camera(s) (/dev/videoN)        │
-│                         │                          │   │         │                           │
-│           mavlink_inspector (7 modules)            │   │   vision_inspector                  │
-│           ┌─ connection_manager (serial I/O)       │   │   (camera_manager — multi-cam)      │
-│           ├─ telemetry_parser (MAVLink → state)    │   │         │                           │
-│           ├─ command_handler (dispatch table)      │   │  /camera/<name>/image_raw           │
-│           ├─ movement_commands (MOVEMENTS registry)│   │         │                           │
-│           ├─ rc_controller (PWM ramp + channels)   │   │      vision                        │
-│           ├─ pid_controller ×2 (depth + yaw)       │   │   detector_node → /vision/detections│
-│           └─ inspector_node (orchestrator)          │   │         │                           │
-│                         │                          │   │   alignment_controller              │
-│       /mavlink/events   │   /mavlink/vehicle_state │   │   (PID visual servo → DriverCommand)│
-│                         │                          │   │         │                           │
-│                /driver/command                     │   └─────────┼───────────────────────────┘
-│                /driver/teleop (TeleopCommand)      │             │
-│                         │                          │       ┌─────┴────────────┐
-│     +-------------------+-------------------+      │       │ duburi_interfaces │
-│     │                   │                   │      │       │ duburi_common     │
-│  mavlink_runner   mission_executor    teleop_driver│       │ (shared msgs +   │
-│  (CLI, missions)  (autonomous)       (/cmd_vel)    │       │  vocab/constants) │
-│     │                   │                   │      │       └──────────────────┘
-│     +-------------------+-------------------+      │
-│                         │                          │
-│                 mavlink_logger → logs/              │
-└────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph Hardware["Hardware Layer"]
+        PIX[Pixhawk 2.4.8<br/>ArduSub Firmware]
+        CAM[USB Cameras<br/>V4L2]
+        BAR[BAR30<br/>Pressure Sensor]
+    end
+    
+    subgraph Control["Control Stack (mavlink_inspector)"]
+        CONN[Connection Manager<br/>Serial I/O + Reconnect]
+        TEL[Telemetry Parser<br/>MAVLink → ROS]
+        REG[("Command Registry<br/>@register decorator")]
+        CMD[Command Handler<br/>Unified Dispatch]
+        MOV[Movement Commands<br/>26 Handlers]
+        RC[RC Controller<br/>Phase-Aware Ramp]
+        PID_D[Depth PID]
+        PID_Y[Yaw PID]
+    end
+    
+    subgraph Commands["Command Sources"]
+        CLI[Runner CLI<br/>Interactive]
+        MIS[Mission Executor<br/>Autonomous]
+        TEL_D[Teleop Driver<br/>Joystick]
+        PLAN[YASMIN Planner<br/>State Machine]
+        VIS_S[Visual Servo<br/>Alignment PID]
+    end
+    
+    subgraph Perception["Perception Stack"]
+        CAM_MGR[Camera Manager<br/>Multi-Camera]
+        DET[YOLO11 Detector<br/>CUDA GPU]
+        TRACK[Kalman Tracker]
+        ALIGN[Alignment Controller<br/>Visual Servoing]
+    end
+    
+    subgraph Topics["ROS 2 Topics"]
+        T_CMD[/driver/command]
+        T_STATE[/mavlink/vehicle_state]
+        T_DET[/vision/detections]
+        T_IMG[/camera/*/image_raw]
+    end
+    
+    PIX <-->|MAVLink| CONN
+    BAR --> PIX
+    CONN --> TEL
+    TEL --> T_STATE
+    
+    Commands -->|DriverCommand| T_CMD
+    T_CMD --> CMD
+    CMD --> REG
+    REG --> MOV
+    MOV --> RC
+    PID_D --> RC
+    PID_Y --> RC
+    RC -->|RC_CHANNELS_OVERRIDE<br/>20 Hz| PIX
+    
+    CAM --> CAM_MGR
+    CAM_MGR --> T_IMG
+    T_IMG --> DET
+    DET --> T_DET
+    T_DET --> TRACK
+    TRACK --> ALIGN
+    ALIGN --> VIS_S
+    
+    T_STATE --> PLAN
+    T_STATE --> MIS
+    T_DET --> PLAN
 ```
 
 ### Data Flow Summary
@@ -315,6 +418,24 @@ ros2 run mavlink_runner runner
 5. **RcController** applies trapezoidal velocity ramp at 20 Hz
 6. **PidController** (depth + yaw) overrides channels when active
 7. **Inspector** sends merged RC override to Pixhawk every 50ms
+
+```mermaid
+sequenceDiagram
+    participant Cmd as Command Source
+    participant Reg as Registry
+    participant Handler as Command Handler
+    participant RC as RC Controller
+    participant PIX as Pixhawk
+    
+    Cmd->>Handler: DriverCommand
+    Handler->>Reg: get_command(name)
+    Reg-->>Handler: CommandSpec
+    Handler->>Handler: Execute handler
+    Handler->>RC: set_movement(channels)
+    loop 20 Hz
+        RC->>PIX: RC_CHANNELS_OVERRIDE
+    end
+```
 
 ---
 
@@ -1235,29 +1356,18 @@ dmesg | tail -20   # check USB connect/disconnect
 
 ## Analysis & Documentation
 
-The `analysis/` folder contains detailed technical documents:
+The `analysis/` folder contains organized technical documentation:
 
-| Document | Description |
-|----------|-------------|
-| `00_OVERVIEW.md` | High-level system overview |
-| `01_ARCHITECTURE.md` | Detailed architecture and data flow |
-| `02_DESIGN_DECISIONS.md` | Rationale for key design choices (12 decisions) |
-| `03_INSPECTOR_LINE_BY_LINE.md` | Inspector node code walkthrough (pre-refactor note) |
-| `04_RUNNER_LINE_BY_LINE.md` | Runner CLI code walkthrough |
-| `05_DRIVER_LINE_BY_LINE.md` | Driver client library walkthrough |
-| `06_INTERFACES.md` | Message definitions and field semantics |
-| `07_ARDUSUB_CONSTRAINTS.md` | ArduSub firmware constraints and gotchas |
-| `08_AGENT_GUIDE.md` | Guide for AI agents working on this codebase |
-| `09_KNOWN_ISSUES_AND_GOTCHAS.md` | Known issues, edge cases, and fixes (21 entries) |
-| `10_DESIGN_ISSUES.md` | Post-refactor architectural analysis — 9 issues with severity/effort ratings |
-| `11_DESK_TESTING_GUIDE.md` | Step-by-step desk testing procedures |
-| `11_REFACTORING_PLAN.md` | 3-phase all-package refactoring plan (Phase 1 partially done) |
-| `12_CODE_REFERENCE.md` | Post-refactor module map — all packages, with line counts and descriptions |
-| `12_COMMAND_REFERENCE.md` | Complete command reference with examples and field encoding |
-| `13_COMPETITIVE_ANALYSIS.md` | **Deep-dive comparison** against Bumblebee (NUS) and Desert WAVE TDRs |
-| `14_ISSUES_AND_RECOMMENDATIONS.md` | **Gap analysis**, design critique, and next-step roadmap |
-| `VISION_PERFORMANCE_ANALYSIS.md` | Vision pipeline FPS optimization (5→25 FPS) |
-| `17_SIMULATION_GAZEBO_ARUDSUB_SITL.md` | **Gazebo Harmonic + ArduSub SITL + Duburi** — stack, ports, tuning roadmap, GPU tiers, optional simulators |
+| Folder | Contents |
+|--------|----------|
+| [`architecture/`](analysis/architecture/) | System design, ROS interfaces, design issues |
+| [`design-decisions/`](analysis/design-decisions/) | Core decisions, **Control Stack Redesign V1**, ArduSub constraints |
+| [`guides/`](analysis/guides/) | Desk testing, simulation, BlueOS network, planner guide |
+| [`reference/`](analysis/reference/) | Command reference, code reference, MAVLink deep dive |
+| [`contributing/`](analysis/contributing/) | Known issues, recommendations, refactoring plan |
+| [`code-review/`](analysis/code-review/) | Line-by-line analysis of each package |
+
+> **Key Document:** See [`analysis/design-decisions/control-stack-redesign.md`](analysis/design-decisions/control-stack-redesign.md) for the complete Control Stack Redesign V1 documentation with architecture diagrams.
 
 ---
 
