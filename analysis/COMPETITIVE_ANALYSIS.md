@@ -37,16 +37,16 @@ This analysis is read-only — no code changes. Its purpose is to identify archi
 | **Control** | PID (software depth + yaw) + ArduSub firmware modes | Feedforward + feedback controllers + trajectory planner + QP thrust allocator | ArduSub firmware PID |
 | **Perception** | YOLO11 + Kalman tracking + PID visual servo | YOLO11 + XFeat + PnP + HDBSCAN + Depth Anything + MUSIC acoustics | HSV colour detection |
 | **Localization** | Pixhawk EKF (IMU + BAR30 + optional DVL) | Custom UKF (IMU + DVL + FOG + vision-based recalibration) | Dead reckoning (DVL + FOG) |
-| **Communication** | pymavlink (serial) → RC_CHANNELS_OVERRIDE | Custom CAN protocol + ROS 2 | Custom telemetry between hulls |
+| **Communication** | pymavlink (serial)  to  RC_CHANNELS_OVERRIDE | Custom CAN protocol + ROS 2 | Custom telemetry between hulls |
 
 ### 2.2 Mission Planning — Narrowing the Gap
 
 | Feature | Duburi | Bumblebee | Desert WAVE |
 |---------|--------|-----------|-------------|
 | Task sequencing | YASMIN HFSM (hierarchical state machine) — each task is a sub-SM with explicit transitions | Behaviour tree (composable, fallbacks) | Linear waypoints |
-| Runtime re-planning | Partial — timeout → fallback state transitions within each sub-SM | Yes — fallback nodes, condition guards | None |
+| Runtime re-planning | Partial — timeout  to  fallback state transitions within each sub-SM | Yes — fallback nodes, condition guards | None |
 | Task independence | Yes — each task is an independent YASMIN sub-state-machine | Yes — each task is an independent subtree | No |
-| Error recovery | Timeout → fallback states + watchdog thread for critical conditions | Automatic fallback to alternative strategy | None |
+| Error recovery | Timeout  to  fallback states + watchdog thread for critical conditions | Automatic fallback to alternative strategy | None |
 | Simulation validation | None (Gazebo SITL stack documented, not yet connected) | Heavy Gazebo simulation of full missions | Limited |
 
 **Bumblebee's Py Trees** allow them to:
@@ -55,7 +55,7 @@ This analysis is read-only — no code changes. Its purpose is to identify archi
 3. Add fallback behaviours when perception fails
 4. Introspect and debug mission state at runtime
 
-**Status update (2026):** The `duburi_planner` package now implements YASMIN hierarchical state machines, addressing the core gap. Each competition task is a sub-SM with explicit fallback transitions (e.g., vision timeout → dead reckoning). The YASMIN Viewer web UI provides runtime state introspection comparable to Py Trees' debugging tools. Two missions are implemented: `gate.py` and `demo_square.py`, with reusable states (`arm`, `submerge`, `drive`, `surface`, `search`, `align`, `wait_feedback`, `send_command`). The remaining gap vs Bumblebee is **breadth** (only 2 of 6 tasks implemented) and **reactivity** (no tick-based preemption — fallbacks are timeout-driven).
+**Status update (2026):** The `duburi_planner` package now implements YASMIN hierarchical state machines, addressing the core gap. Each competition task is a sub-SM with explicit fallback transitions (e.g., vision timeout  to  dead reckoning). The YASMIN Viewer web UI provides runtime state introspection comparable to Py Trees' debugging tools. Two missions are implemented: `gate.py` and `demo_square.py`, with reusable states (`arm`, `submerge`, `drive`, `surface`, `search`, `align`, `wait_feedback`, `send_command`). The remaining gap vs Bumblebee is **breadth** (only 2 of 6 tasks implemented) and **reactivity** (no tick-based preemption — fallbacks are timeout-driven).
 
 ### 2.3 Control System
 
@@ -79,10 +79,10 @@ This analysis is read-only — no code changes. Its purpose is to identify archi
 | Tracking | Single-object Kalman filter | Multi-object (implied by behaviour tree structure) | None |
 | Depth estimation | None (2D detections only) | DepthAnything V2 (monocular) | None |
 | Acoustics | None | MUSIC algorithm for pinger DOA | Subsonus (not yet competition-tested) |
-| Visual servo | PID (lateral + vertical + forward) | Implied but not detailed in TDR | HSV centroid → 80% approach |
-| Fallback strategy | Proportional-only when PID disabled | Multiple: XFeat fails → PnP → clustering → recalibrate | None |
+| Visual servo | PID (lateral + vertical + forward) | Implied but not detailed in TDR | HSV centroid  to  80% approach |
+| Fallback strategy | Proportional-only when PID disabled | Multiple: XFeat fails  to  PnP  to  clustering  to  recalibrate | None |
 
-**Assessment:** Our perception stack is in an excellent position for a team our size. YOLO11 + Kalman + PID visual servo gives us detection → tracking → alignment in a single pipeline. What we're missing:
+**Assessment:** Our perception stack is in an excellent position for a team our size. YOLO11 + Kalman + PID visual servo gives us detection  to  tracking  to  alignment in a single pipeline. What we're missing:
 1. **Pose estimation** — knowing not just *where* the target is in the frame but *how far* and *at what angle*
 2. **Multi-object tracking** — our Kalman tracker handles one object per class; competition scenarios often need simultaneous tracking
 3. **Monocular depth** — DepthAnything V2 could estimate approach distance without DVL bottom-lock
@@ -93,7 +93,7 @@ This analysis is read-only — no code changes. Its purpose is to identify archi
 
 | Capability | Priority | Duburi Status | Bumblebee | Desert WAVE | Effort |
 |------------|----------|---------------|-----------|-------------|--------|
-| **Behaviour tree / mission planner** | CRITICAL | ✅ Partial — YASMIN HFSM (`duburi_planner`, 2 missions, 8 reusable states) | Py Trees | Linear SM | Large → Medium (foundation done, need more task SMs) |
+| **Behaviour tree / mission planner** | CRITICAL | [DONE] Partial — YASMIN HFSM (`duburi_planner`, 2 missions, 8 reusable states) | Py Trees | Linear SM | Large  to  Medium (foundation done, need more task SMs) |
 | **Simulation environment** | HIGH | Missing | Gazebo | Unreal Engine 5 (Duburi TDR) | Large |
 | **Trajectory planning** | HIGH | Missing | Polynomial interpolation | Waypoint-to-waypoint | Medium |
 | **Pose estimation (PnP/depth)** | HIGH | Missing | XFeat + PnP + DepthAnything | None | Medium |
@@ -102,7 +102,7 @@ This analysis is read-only — no code changes. Its purpose is to identify archi
 | **Actuator integration (torpedo, dropper, grabber)** | HIGH | Grabber only (servo) | Full suite | Pneumatics (limited) | Medium |
 | **DVL integration** | HIGH | Planned (Nortek Nucleus 1000) | Teledyne Pathfinder | Nortek DVL 1000 | Medium |
 | **Telemetry dashboard** | LOW | ANSI CLI status display | Telegram alerts + OCS | Operator camera feed | Small |
-| **Error recovery / fallback** | CRITICAL | Partial — YASMIN timeout → fallback transitions per sub-SM | Behaviour tree fallbacks | None | Medium (need more fallback states) |
+| **Error recovery / fallback** | CRITICAL | Partial — YASMIN timeout  to  fallback transitions per sub-SM | Behaviour tree fallbacks | None | Medium (need more fallback states) |
 | **Sensor fusion (UKF)** | MEDIUM | Pixhawk EKF only | Custom UKF with vision recalibration | Dead reckoning | Large |
 | **Network/comms resilience** | LOW | USB serial + tether | CAN bus + Ethernet + Telegram | Radio (surfaced) | Medium |
 
@@ -133,7 +133,7 @@ Based on the competitive analysis, here are the recommended development prioriti
 
 ### Tier 1: Must-Have for Competition Readiness
 
-1. **State Machine Mission Planner (YASMIN)** — ✅ **IMPLEMENTED.** The `duburi_planner` package provides YASMIN HFSM with 8 reusable states and 2 missions (`gate.py`, `demo_square.py`). **Remaining work:** implement state machines for slalom, torpedoes, bins, and octagon tasks. See `16_PLANNER_DOCUMENTATION.md` for the full implementation guide.
+1. **State Machine Mission Planner (YASMIN)** — [DONE] **IMPLEMENTED.** The `duburi_planner` package provides YASMIN HFSM with 8 reusable states and 2 missions (`gate.py`, `demo_square.py`). **Remaining work:** implement state machines for slalom, torpedoes, bins, and octagon tasks. See `16_PLANNER_DOCUMENTATION.md` for the full implementation guide.
 
 2. **Simulation Environment** — We cannot rely solely on pool time for testing mission logic. A basic Gazebo simulation with gate and bin props would let us iterate 10x faster on behaviour tree development. Our own TDR mentions Unreal Engine 5 simulation capability — this needs to be connected to the ROS 2 stack.
 
@@ -167,7 +167,7 @@ Based on the competitive analysis, here are the recommended development prioriti
 
 2. **Multi-vehicle strategy** — While we won't have two vehicles, the principle of **graceful degradation** applies. Each capability should function independently. If vision fails, we should still be able to navigate by dead reckoning.
 
-3. **Perception pipeline layering** — YOLO → XFeat → PnP → fallback to clustering. Multiple methods for the same problem, with automatic fallback. Our single-method pipelines are fragile.
+3. **Perception pipeline layering** — YOLO  to  XFeat  to  PnP  to  fallback to clustering. Multiple methods for the same problem, with automatic fallback. Our single-method pipelines are fragile.
 
 4. **Testing rigor** — 300 hours in-water, 100 hours simulation, Docker-based ROS1↔ROS2 bridge for regression testing. Their testing infrastructure *is* their competitive advantage.
 
@@ -194,14 +194,14 @@ Bumblebee uses behaviour trees (Py Trees) for composable task execution with aut
 ```
 Top-Level Mission SM (YASMIN)
 ├── GateTask (sub-SM)
-│   ├── SearchGate ──detected──→ AlignGate
-│   ├── SearchGate ──timeout───→ DeadReckonGate (fallback)
-│   ├── AlignGate ──aligned───→ PassThrough
-│   ├── AlignGate ──lost──────→ SearchGate (retry)
-│   └── PassThrough ──passed──→ [gate_done]
+│   ├── SearchGate ──detected── to  AlignGate
+│   ├── SearchGate ──timeout─── to  DeadReckonGate (fallback)
+│   ├── AlignGate ──aligned─── to  PassThrough
+│   ├── AlignGate ──lost────── to  SearchGate (retry)
+│   └── PassThrough ──passed── to  [gate_done]
 ├── SlalomTask (sub-SM)
-│   ├── SearchSlalom → AlignSlalom → PassSlalom
-│   └── SearchSlalom ──timeout──→ WaypointSlalom (fallback)
+│   ├── SearchSlalom  to  AlignSlalom  to  PassSlalom
+│   └── SearchSlalom ──timeout── to  WaypointSlalom (fallback)
 └── ...
 ```
 
@@ -251,7 +251,7 @@ Fallback: Revert to Stage 1 + proportional approach
 - Strong foundation for extension (message types, command dispatch)
 
 **Weaknesses (address these):**
-- ~~No mission planner beyond linear scripts~~ → ✅ YASMIN HFSM implemented (`duburi_planner`), but only 2 of 6 competition tasks have state machines
+- ~~No mission planner beyond linear scripts~~  to  [DONE] YASMIN HFSM implemented (`duburi_planner`), but only 2 of 6 competition tasks have state machines
 - No simulation environment connected to ROS 2 (Gazebo SITL stack documented but not integrated)
 - No trajectory planning (bang-bang only)
 - No pose estimation or depth estimation

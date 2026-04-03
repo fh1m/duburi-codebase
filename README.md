@@ -83,11 +83,11 @@ flowchart LR
 ```
 
 **Key Changes:**
-- ✅ **Single source of truth** — Commands defined via `@register` decorator
-- ✅ **72% parser reduction** — 492 → 139 lines in command_parser.py
-- ✅ **Clean Python API** — `DuburiClient` class for perception integration
-- ✅ **6 safety fixes** — RC watchdog, PID anti-windup, thread safety
-- ✅ **Live-tunable parameters** — All PID gains and brake settings via ROS2 param
+- **Single source of truth** - Commands defined via `@register` decorator
+- **72% parser reduction** - 492 to 139 lines in command_parser.py
+- **Clean Python API** - `DuburiClient` class for perception integration
+- **6 safety fixes** - RC watchdog, PID anti-windup, thread safety
+- **Live-tunable parameters** - All PID gains and brake settings via ROS2 param
 
 See [`analysis/design-decisions/control-stack-redesign.md`](analysis/design-decisions/control-stack-redesign.md) for full details.
 
@@ -576,7 +576,7 @@ flowchart TD
     Q4 -->|Yes| Q5{YOLO detecting?}
     
     Q5 -->|No| A5[Check CUDA<br/>pip install ultralytics]
-    Q5 -->|Yes| SUCCESS[✓ System Ready]
+    Q5 -->|Yes| SUCCESS[System Ready]
     
     A1 --> Q2
     A2 --> Q2
@@ -884,17 +884,22 @@ stateDiagram-v2
 
 **PWM Timeline Example:**
 
+```mermaid
+%%{init: {'theme': 'neutral'}}%%
+xychart-beta
+    title "PWM Trapezoidal Profile (5s command)"
+    x-axis "Time (seconds)" [0, 0.5, 1, 2, 3, 4, 4.5, 5, 5.5]
+    y-axis "PWM Value" 1400 --> 1950
+    line "PWM" [1500, 1500, 1700, 1900, 1900, 1900, 1700, 1500, 1400]
 ```
-PWM
-1900 ┤                  ╭────────────╮
-     │                 ╱              ╲
-1700 ┤                ╱                ╲
-     │               ╱                  ╲
-1500 ┼──────────────╱                    ╲────────────
-     │ Idle       Ramp    Cruise      Ramp   Brake
-     └──────────────────────────────────────────────── Time
-     0s          0.5s                4.5s  5.0s  5.5s
-```
+
+| Phase | Time | PWM | Description |
+|-------|------|-----|-------------|
+| Idle | 0s | 1500 | Neutral, no thrust |
+| Ramp Up | 0-0.5s | 1500-1900 | Accelerate at ramp_rate |
+| Cruise | 0.5-4.5s | 1900 | Maintain target thrust |
+| Ramp Down | 4.5-5.0s | 1900-1500 | Decelerate smoothly |
+| Brake | 5.0-5.5s | 1400 | Reverse thrust pulse |
 
 ### PID Controllers
 
@@ -954,12 +959,12 @@ flowchart TD
     end
     
     subgraph Gains["Gain Effects"]
-        KP[kp ↑] --> |More| Faster[Faster response]
-        KP --> |Too much| Overshoot[Overshoot]
-        KI[ki ↑] --> |Eliminates| Error[Steady-state error]
-        KI --> |Too much| Wind[Integral windup]
-        KD[kd ↑] --> |Reduces| Osc[Oscillation]
-        KD --> |Too much| Slow[Sluggish response]
+        KP[kp higher] -->|More| Faster[Faster response]
+        KP -->|Too much| Overshoot[Overshoot]
+        KI[ki higher] -->|Eliminates| Error[Steady-state error]
+        KI -->|Too much| Wind[Integral windup]
+        KD[kd higher] -->|Reduces| Osc[Oscillation]
+        KD -->|Too much| Slow[Sluggish response]
     end
 ```
 
@@ -1276,18 +1281,18 @@ ros2 param dump /mavlink_inspector
 
 | Parameter | Default | Range | Effect |
 |-----------|---------|-------|--------|
-| `depth_kp` | 500.0 | 100-2000 | ↑ = faster response, risk overshoot |
-| `depth_ki` | 25.0 | 0-200 | ↑ = eliminates steady-state error |
-| `depth_kd` | 200.0 | 0-500 | ↑ = dampens oscillation |
+| `depth_kp` | 500.0 | 100-2000 | Higher = faster response, risk overshoot |
+| `depth_ki` | 25.0 | 0-200 | Higher = eliminates steady-state error |
+| `depth_kd` | 200.0 | 0-500 | Higher = dampens oscillation |
 | `depth_max_integral` | 0.5 | 0.1-2.0 | Anti-windup cap for integral |
 | `depth_tolerance` | 0.05 | 0.01-0.2 | Deadband in metres |
-| `yaw_kp` | 2.0 | 0.5-10 | ↑ = faster rotation |
-| `yaw_ki` | 0.05 | 0-1 | ↑ = eliminates heading drift |
-| `yaw_kd` | 0.5 | 0-5 | ↑ = dampens oscillation |
+| `yaw_kp` | 2.0 | 0.5-10 | Higher = faster rotation |
+| `yaw_ki` | 0.05 | 0-1 | Higher = eliminates heading drift |
+| `yaw_kd` | 0.5 | 0-5 | Higher = dampens oscillation |
 | `yaw_max_integral` | 50.0 | 10-200 | Anti-windup cap for integral |
-| `ramp_rate` | 800 | 200-2000 | PWM/s — ↑ = faster acceleration |
-| `brake_strength` | 0.3 | 0-1 | ↑ = harder stop (reverse thrust %) |
-| `brake_duration` | 0.5 | 0.1-2.0 | ↑ = longer brake pulse |
+| `ramp_rate` | 800 | 200-2000 | PWM/s - Higher = faster acceleration |
+| `brake_strength` | 0.3 | 0-1 | Higher = harder stop (reverse thrust %) |
+| `brake_duration` | 0.5 | 0.1-2.0 | Higher = longer brake pulse |
 
 ### Tuning Workflow
 
@@ -1308,7 +1313,7 @@ flowchart TD
     INC_KP --> TEST1
     
     Q3 -->|Yes| INC_KI[Increase depth_ki<br/>by 50%]
-    Q3 -->|No| DEPTH_DONE[Depth PID tuned ✓]
+    Q3 -->|No| DEPTH_DONE[Depth PID tuned]
     
     INC_KI --> TEST1
     
@@ -1321,7 +1326,7 @@ flowchart TD
     DEC_YKP --> TEST2
     
     Q5 -->|Yes| INC_YKI[Increase yaw_ki]
-    Q5 -->|No| YAW_DONE[Yaw PID tuned ✓]
+    Q5 -->|No| YAW_DONE[Yaw PID tuned]
     
     INC_YKI --> TEST2
     
@@ -1909,7 +1914,7 @@ ros2 run mavlink_logger logger --ros-args -p state_log_interval:=2.0
 The runner automatically monitors the inspector connection. If no `VehicleState` messages arrive for 5+ seconds, a yellow warning appears:
 
 ```
-⚠ No telemetry for 8s — is mavlink_inspector running?
+WARNING: No telemetry for 8s - is mavlink_inspector running?
 ```
 
 The warning auto-clears when messages resume. Also visible in the `status` dashboard as "Telemetry stale."

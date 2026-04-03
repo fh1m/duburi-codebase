@@ -10,11 +10,11 @@
 
 | Task | Name | Points | Difficulty | Duburi Status |
 |------|------|--------|------------|---------------|
-| 1 | Begin Assessment (Gate) | ~100 | Easy | ✅ SM implemented |
-| 2 | Avoid Debris (Slalom) | ~200 | Medium | ❌ Needs SM |
-| 3 | Recon (Bins) | ~300 | Hard | ❌ Needs camera + SM |
-| 4 | Deploy (Torpedoes) | ~250 | Hard | ❌ Needs actuator + SM |
-| 5 | Resupply (Octagon) | ~200 | Hard | ❌ Needs pinger + SM |
+| 1 | Begin Assessment (Gate) | ~100 | Easy | [DONE] SM implemented |
+| 2 | Avoid Debris (Slalom) | ~200 | Medium | [TODO] Needs SM |
+| 3 | Recon (Bins) | ~300 | Hard | [TODO] Needs camera + SM |
+| 4 | Deploy (Torpedoes) | ~250 | Hard | [TODO] Needs actuator + SM |
+| 5 | Resupply (Octagon) | ~200 | Hard | [TODO] Needs pinger + SM |
 | 6 | Return Home (Gate) | ~100 | Easy | 🟡 Reuse Task 1 |
 
 ---
@@ -31,18 +31,18 @@ Pass through a gate (two vertical poles with a horizontal bar). A "coin flip" me
 ### Perception Requirements
 | Requirement | Status | Notes |
 |-------------|--------|-------|
-| Forward camera | ✅ | USB camera integrated |
+| Forward camera | [DONE] | USB camera integrated |
 | Gate pole detection | 🟡 | YOLO works, needs custom model |
 | Crossbar detection | 🟡 | Needs custom model |
-| Coin flip indicator | ❌ | Low priority — complex, low points |
+| Coin flip indicator | [TODO] | Low priority — complex, low points |
 
 ### Control Requirements
 | Requirement | Status | Notes |
 |-------------|--------|-------|
-| Heading hold | ✅ | Yaw PID implemented |
-| Depth hold | ✅ | Depth PID implemented |
-| Lateral correction | ✅ | Visual servo alignment |
-| Forward drive | ✅ | `go_forward` command |
+| Heading hold | [DONE] | Yaw PID implemented |
+| Depth hold | [DONE] | Depth PID implemented |
+| Lateral correction | [DONE] | Visual servo alignment |
+| Forward drive | [DONE] | `go_forward` command |
 
 ### State Machine Design
 
@@ -87,16 +87,16 @@ Navigate through 3 sets of RED and WHITE vertical pipes arranged in a slalom pat
 ### Perception Requirements
 | Requirement | Status | Notes |
 |-------------|--------|-------|
-| RED pipe detection | ❌ | Needs YOLO class |
-| WHITE pipe detection | ❌ | Needs YOLO class |
-| Multi-object tracking | ❌ | Current tracker is single-object |
-| Spatial reasoning | ❌ | Which color is left/right |
+| RED pipe detection | [TODO] | Needs YOLO class |
+| WHITE pipe detection | [TODO] | Needs YOLO class |
+| Multi-object tracking | [TODO] | Current tracker is single-object |
+| Spatial reasoning | [TODO] | Which color is left/right |
 
 ### Control Requirements
 | Requirement | Status | Notes |
 |-------------|--------|-------|
-| Lateral correction | ✅ | Visual servo |
-| Heading hold | ✅ | Yaw PID |
+| Lateral correction | [DONE] | Visual servo |
+| Heading hold | [DONE] | Yaw PID |
 | Sequential waypoints | 🟡 | Needs SM iteration |
 
 ### State Machine Design
@@ -143,17 +143,17 @@ Locate bins on a 3D pipeline structure. Drop markers into the correct bins. Bins
 ### Perception Requirements
 | Requirement | Status | Notes |
 |-------------|--------|-------|
-| Downward camera | ❌ | **Critical** — forward cam can't see bins |
-| Bin outline detection | ❌ | Needs YOLO model |
-| Symbol recognition | ❌ | Competition-specific props |
-| Height estimation | ❌ | For drop altitude |
+| Downward camera | [TODO] | **Critical** — forward cam can't see bins |
+| Bin outline detection | [TODO] | Needs YOLO model |
+| Symbol recognition | [TODO] | Competition-specific props |
+| Height estimation | [TODO] | For drop altitude |
 
 ### Control Requirements
 | Requirement | Status | Notes |
 |-------------|--------|-------|
 | Hover precision | 🟡 | Need < 5cm drift |
-| Depth hold at altitude | ✅ | Depth PID |
-| Downward visual servo | ❌ | Different axis mapping |
+| Depth hold at altitude | [DONE] | Depth PID |
+| Downward visual servo | [TODO] | Different axis mapping |
 
 ### State Machine Design
 
@@ -201,16 +201,16 @@ Fire torpedoes at designated targets. An acoustic pinger indicates the task loca
 ### Perception Requirements
 | Requirement | Status | Notes |
 |-------------|--------|-------|
-| Acoustic pinger DOA | ❌ | No hardware |
-| Target detection | ❌ | Needs YOLO model |
+| Acoustic pinger DOA | [TODO] | No hardware |
+| Target detection | [TODO] | Needs YOLO model |
 | Precise alignment | 🟡 | Tighter than gate |
 
 ### Control Requirements
 | Requirement | Status | Notes |
 |-------------|--------|-------|
-| Stable hover | ✅ | Depth + heading hold |
+| Stable hover | [DONE] | Depth + heading hold |
 | Zero drift at fire | 🟡 | Needs testing |
-| Torpedo actuator | ❌ | Mechanical not integrated |
+| Torpedo actuator | [TODO] | Mechanical not integrated |
 
 ### State Machine Design
 
@@ -261,17 +261,17 @@ Surface inside an octagonal structure. Pick up objects from the octagon. An acou
 ### Perception Requirements
 | Requirement | Status | Notes |
 |-------------|--------|-------|
-| Acoustic pinger DOA | ❌ | No hardware |
-| Upward octagon detection | ❌ | Needs camera + model |
-| Surface object detection | ❌ | Needs model |
+| Acoustic pinger DOA | [TODO] | No hardware |
+| Upward octagon detection | [TODO] | Needs camera + model |
+| Surface object detection | [TODO] | Needs model |
 
 ### Control Requirements
 | Requirement | Status | Notes |
 |-------------|--------|-------|
 | Precise positioning | 🟡 | Under octagon center |
-| Controlled ascent | ✅ | `surface` command |
+| Controlled ascent | [DONE] | `surface` command |
 | Surface stability | 🟡 | Needs testing |
-| Grabber control | ✅ | Open/close implemented |
+| Grabber control | [DONE] | Open/close implemented |
 
 ### State Machine Design
 
@@ -324,15 +324,15 @@ Return through the starting gate from the opposite direction.
 ### Perception Requirements
 | Requirement | Status | Notes |
 |-------------|--------|-------|
-| Gate detection | ✅ | Same as Task 1 |
+| Gate detection | [DONE] | Same as Task 1 |
 | Reverse approach | 🟡 | May look different |
 
 ### Control Requirements
 | Requirement | Status | Notes |
 |-------------|--------|-------|
-| 180° turn | ✅ | Yaw PID |
+| 180° turn | [DONE] | Yaw PID |
 | Long-range navigation | 🟡 | DVL/dead reckoning |
-| Gate alignment | ✅ | Reuse Task 1 |
+| Gate alignment | [DONE] | Reuse Task 1 |
 
 ### State Machine Design
 

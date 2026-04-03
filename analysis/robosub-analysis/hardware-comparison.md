@@ -90,9 +90,9 @@ Side view:
 - Upward (octagon)
 
 **Duburi (1-2 cameras):**
-- Forward ✅ Integrated
-- Downward ❌ Needs integration
-- Upward ❌ Not planned
+- Forward [DONE] Integrated
+- Downward [TODO] Needs integration
+- Upward [TODO] Not planned
 
 ### Implications for Duburi
 - **Downward camera critical** — Required for bins task
@@ -107,7 +107,7 @@ Side view:
 |------|-----|-----|-------|----------|-------|
 | Bumblebee | Teledyne Pathfinder | FOG + MEMS | BAR30 | Custom DAQ | Vision recal |
 | Desert WAVE | Nortek DVL 1000 | FOG + MEMS | BAR30 | Subsonus | GPS survey |
-| **Duburi** | Nortek Nucleus 1000 | VN-200 | BAR30 | ❌ None | — |
+| **Duburi** | Nortek Nucleus 1000 | VN-200 | BAR30 | [TODO] None | — |
 | Harbin | Premium | Premium | Custom | Custom | Multi-sensor |
 
 ### DVL Comparison
@@ -131,19 +131,19 @@ Side view:
 |------|-----------|---------|---------|-------|
 | Bumblebee | Pneumatic | Pneumatic | Manipulator | Full suite |
 | Desert WAVE | Pneumatic | Solenoid | None | Limited |
-| **Duburi** | ❌ Not integrated | ❌ Not integrated | ✅ Servo | Grabber only |
+| **Duburi** | [TODO] Not integrated | [TODO] Not integrated | [DONE] Servo | Grabber only |
 | Harbin | Custom | Custom | Custom | Advanced |
 
 ### Actuator Requirements by Task
 
 | Task | Actuator Needed | Duburi Status |
 |------|-----------------|---------------|
-| Gate | None | ✅ N/A |
-| Slalom | None | ✅ N/A |
-| Bins | Dropper | ❌ Needs integration |
-| Torpedoes | Launcher | ❌ Needs integration |
-| Octagon | Grabber | ✅ Implemented |
-| Return Home | None | ✅ N/A |
+| Gate | None | [DONE] N/A |
+| Slalom | None | [DONE] N/A |
+| Bins | Dropper | [TODO] Needs integration |
+| Torpedoes | Launcher | [TODO] Needs integration |
+| Octagon | Grabber | [DONE] Implemented |
+| Return Home | None | [DONE] N/A |
 
 ### Implications for Duburi
 - **Grabber works** — Octagon task actuator ready

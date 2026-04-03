@@ -225,13 +225,13 @@ responsible modules** rather than scattered across one 1 854-line file:
 | Teleop dead-zone | `teleop_driver.py` | `0.1` | No | Tuning |
 | Mission startup delay | `mission_executor.py` | `3.0` s | No | Tuning |
 | State log interval | `logger_node.py` | `1.0` s | No | Tuning |
-| PWM ramp rate | `inspector_node.py` | 800 PWM/s | **Yes** ✓ | Tuning |
-| PID max rate | `inspector_node.py` | 50 PWM/tick | **Yes** ✓ | Tuning |
-| Nominal voltage | `inspector_node.py` | 0.0 | **Yes** ✓ | Tuning |
-| Depth tolerance | `inspector_node.py` | 0.05 m | **Yes** ✓ | Tuning |
-| Depth PID gains | `inspector_node.py` | Kp/Ki/Kd | **Yes** ✓ | Tuning |
-| Yaw PID gains | `inspector_node.py` | Kp/Ki/Kd | **Yes** ✓ | Tuning |
-| Connection port | `inspector_node.py` | `/dev/ttyACM0` | **Yes** ✓ | Tuning |
+| PWM ramp rate | `inspector_node.py` | 800 PWM/s | **Yes**  | Tuning |
+| PID max rate | `inspector_node.py` | 50 PWM/tick | **Yes**  | Tuning |
+| Nominal voltage | `inspector_node.py` | 0.0 | **Yes**  | Tuning |
+| Depth tolerance | `inspector_node.py` | 0.05 m | **Yes**  | Tuning |
+| Depth PID gains | `inspector_node.py` | Kp/Ki/Kd | **Yes**  | Tuning |
+| Yaw PID gains | `inspector_node.py` | Kp/Ki/Kd | **Yes**  | Tuning |
+| Connection port | `inspector_node.py` | `/dev/ttyACM0` | **Yes**  | Tuning |
 
 ### Improvement
 
@@ -650,13 +650,13 @@ only if PWM range becomes configurable.
 
 | # | Issue | Original | Current Status | Priority |
 |---|---|---|---|---|
-| 1 | God Object (inspector) | **HIGH** | **RESOLVED** — 7-module split | Done ✓ |
+| 1 | God Object (inspector) | **HIGH** | **RESOLVED** — 7-module split | Done  |
 | 2 | No unit tests | **HIGH** | **OPEN** — now testable | **Immediate** |
 | 3 | Hardcoded timing constants | Medium | **PARTIALLY IMPROVED** — organized by module | Next sprint |
-| 4 | if/elif command dispatch | Medium | **RESOLVED** — dispatch tables | Done ✓ |
-| 5 | if/elif message parsing | Medium | **RESOLVED** — dispatch dict | Done ✓ |
+| 4 | if/elif command dispatch | Medium | **RESOLVED** — dispatch tables | Done  |
+| 5 | if/elif message parsing | Medium | **RESOLVED** — dispatch dict | Done  |
 | 6 | RC neutral override | Low | **DEFERRED** — pending pool test | Post-pool |
-| 7 | DriverCommand teleop overloading | Medium | **RESOLVED** — `TeleopCommand` + `/driver/teleop` | Done ✓ |
+| 7 | DriverCommand teleop overloading | Medium | **RESOLVED** — `TeleopCommand` + `/driver/teleop` | Done  |
 | 8 | Duplicated command parsing (NEW) | Medium | **OPEN** — three parallel parsers | Off-season |
 | 9 | percent_to_pwm duplication (NEW) | Low | **OPEN** — accepted for now | Low priority |
 

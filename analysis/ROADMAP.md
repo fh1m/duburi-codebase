@@ -1,6 +1,6 @@
-# ROADMAP — Duburi 4.2 → RoboSub 2026
+# ROADMAP — Duburi 4.2  to  RoboSub 2026
 
-> ⚠️ **This document has been reorganized!** See the new structure in [`roadmap/`](roadmap/):
+> NOTE: **This document has been reorganized!** See the new structure in [`roadmap/`](roadmap/):
 >
 > | Document | Description |
 > |----------|-------------|
@@ -44,17 +44,17 @@ The Duburi 4.2 stack is a **10-package, 80-file** ROS 2 Humble codebase with:
 
 | Layer | Status | Details |
 |-------|--------|---------|
-| **MAVLink Bridge** | ✅ Production-ready | 7-module inspector: serial I/O, command dispatch, PID controllers, telemetry, RC override at 20 Hz |
-| **Control System** | ✅ Functional | Software depth PID + yaw PID, trapezoidal PWM ramp, 4-layer RC override, `just_*` instant variants |
-| **Command System** | ✅ Rich | 30+ commands: `move`, `go`, `cruise`, `at`, `just_*`, diagonals, PID depth/yaw, `~` prefix convention |
-| **Interactive CLI** | ✅ Complete | `duburi_runner` REPL with history, file-based missions, chained commands, status dashboard |
+| **MAVLink Bridge** | [DONE] Production-ready | 7-module inspector: serial I/O, command dispatch, PID controllers, telemetry, RC override at 20 Hz |
+| **Control System** | [DONE] Functional | Software depth PID + yaw PID, trapezoidal PWM ramp, 4-layer RC override, `just_*` instant variants |
+| **Command System** | [DONE] Rich | 30+ commands: `move`, `go`, `cruise`, `at`, `just_*`, diagonals, PID depth/yaw, `~` prefix convention |
+| **Interactive CLI** | [DONE] Complete | `duburi_runner` REPL with history, file-based missions, chained commands, status dashboard |
 | **Mission Planner** | 🟡 Partial | YASMIN HFSM in `duburi_planner` — 8 reusable states, 2 missions (gate, demo_square). Needs 4 more task SMs |
-| **Vision Pipeline** | ✅ Functional | YOLO11n on CUDA (20-25 FPS on Orin Nano), Kalman tracking, PID visual servoing, multi-camera manager |
-| **Feedback System** | ✅ Implemented | `/driver/feedback` with `accepted`/`reached`/`completed`/`rejected` status + error magnitude |
-| **Teleop** | ✅ Implemented | `TeleopCommand` on `/driver/teleop` with multi-axis support + idle detection |
-| **BlueOS Integration** | ✅ Functional | REST API client for system monitoring, parameter management, endpoint health checks |
-| **Logging** | ✅ Functional | Session-based CSV/JSON logging with rotation |
-| **Documentation** | ✅ Extensive | 26 analysis documents + comprehensive README |
+| **Vision Pipeline** | [DONE] Functional | YOLO11n on CUDA (20-25 FPS on Orin Nano), Kalman tracking, PID visual servoing, multi-camera manager |
+| **Feedback System** | [DONE] Implemented | `/driver/feedback` with `accepted`/`reached`/`completed`/`rejected` status + error magnitude |
+| **Teleop** | [DONE] Implemented | `TeleopCommand` on `/driver/teleop` with multi-axis support + idle detection |
+| **BlueOS Integration** | [DONE] Functional | REST API client for system monitoring, parameter management, endpoint health checks |
+| **Logging** | [DONE] Functional | Session-based CSV/JSON logging with rotation |
+| **Documentation** | [DONE] Extensive | 26 analysis documents + comprehensive README |
 | **Simulation** | 🔴 Not connected | Gazebo SITL stack documented (`17_SIMULATION`) but not integrated with ROS 2 pipeline |
 | **DVL** | 🔴 Hardware only | Nortek Nucleus 1000 available, no ROS 2 driver integrated |
 | **Actuators** | 🟡 Grabber only | Open/close servo. Torpedo launcher and dropper not integrated |
@@ -88,10 +88,10 @@ The Duburi 4.2 stack is a **10-package, 80-file** ROS 2 Humble codebase with:
                      │  │ mavlink_runner   │            │     ┌──────────────────┐
                      │  │ mission_executor │            │     │ duburi_planner   │
                      │  │ teleop_driver    │            │     │ (YASMIN HFSM)    │
-                     │  └──────────────────┘            │     │ → /driver/command│
+                     │  └──────────────────┘            │     │  to  /driver/command│
                      │                                  │     └──────────────────┘
-                     │  mavlink_logger → logs/           │
-                     │  duburi_blueos → /blueos/*        │
+                     │  mavlink_logger  to  logs/           │
+                     │  duburi_blueos  to  /blueos/*        │
                      └──────────────────────────────────┘
 ```
 
@@ -111,17 +111,17 @@ The Duburi 4.2 stack is a **10-package, 80-file** ROS 2 Humble codebase with:
 
 **First Principles Analysis:**
 - **Core challenge:** Detect two vertical poles + crossbar, determine center, drive through.
-- **Perception need:** Forward camera, YOLO model trained on gate poles (orange/white), bounding box center → alignment target.
+- **Perception need:** Forward camera, YOLO model trained on gate poles (orange/white), bounding box center  to  alignment target.
 - **Control need:** `go_forward` with heading hold + visual servo lateral correction. Depth hold at gate height.
-- **Failure mode:** Gate not detected (sun glare, turbidity) → fallback to dead reckoning on known heading.
+- **Failure mode:** Gate not detected (sun glare, turbidity)  to  fallback to dead reckoning on known heading.
 
 **What Duburi Has:**
-- ✅ YOLO detection pipeline with Kalman tracking
-- ✅ PID visual servoing (lateral + vertical + forward)
-- ✅ `go_forward` with heading PID
-- ✅ YASMIN gate mission (`gate.py`) with search → align → drive-through
-- ❌ No coin-flip detection (requires reading a visual indicator)
-- ❌ No custom YOLO model for RoboSub props (using generic COCO model)
+- [DONE] YOLO detection pipeline with Kalman tracking
+- [DONE] PID visual servoing (lateral + vertical + forward)
+- [DONE] `go_forward` with heading PID
+- [DONE] YASMIN gate mission (`gate.py`) with search  to  align  to  drive-through
+- [TODO] No coin-flip detection (requires reading a visual indicator)
+- [TODO] No custom YOLO model for RoboSub props (using generic COCO model)
 
 **What Other Teams Do:**
 - **Bumblebee:** YOLO + XFeat feature matching for precise pole localization, PnP for distance estimate, Selector fallback to dead reckoning.
@@ -129,11 +129,11 @@ The Duburi 4.2 stack is a **10-package, 80-file** ROS 2 Humble codebase with:
 
 **Our Approach:**
 ```
-SearchGate ──detected──→ AlignGate ──aligned──→ DriveThrough ──→ [done]
+SearchGate ──detected── to  AlignGate ──aligned── to  DriveThrough ── to  [done]
      │                        │
-     └──timeout──→ DeadReckonGate ──→ DriveThrough
+     └──timeout── to  DeadReckonGate ── to  DriveThrough
                         │
-                  AlignGate ──lost──→ SearchGate (retry ×3)
+                  AlignGate ──lost── to  SearchGate (retry ×3)
 ```
 
 **Gap Checklist:**
@@ -157,12 +157,12 @@ SearchGate ──detected──→ AlignGate ──aligned──→ DriveThrough
 - **Failure mode:** Confusing pipe pairs (which is current target?), losing track mid-slalom, overcorrecting laterally.
 
 **What Duburi Has:**
-- ✅ YOLO detection (can distinguish colors if model is trained)
-- ✅ Kalman tracking (currently single-object — needs extension)
-- ✅ Lateral + forward visual servo
-- ❌ No slalom state machine
-- ❌ Single-object tracker won't handle multiple pipes simultaneously
-- ❌ No spatial reasoning (which pipe pair am I at?)
+- [DONE] YOLO detection (can distinguish colors if model is trained)
+- [DONE] Kalman tracking (currently single-object — needs extension)
+- [DONE] Lateral + forward visual servo
+- [TODO] No slalom state machine
+- [TODO] Single-object tracker won't handle multiple pipes simultaneously
+- [TODO] No spatial reasoning (which pipe pair am I at?)
 
 **What Other Teams Do:**
 - **Bumblebee:** Multi-object tracking + spatial reasoning in behaviour tree. Each pipe pair is a subtask with independent detection.
@@ -171,9 +171,9 @@ SearchGate ──detected──→ AlignGate ──aligned──→ DriveThrough
 **Our Approach (Proposed):**
 ```
 For each pipe pair (i = 1, 2, 3):
-  SearchPipes_i ──detected──→ IdentifySide_i ──→ AlignPass_i ──→ DriveThrough_i
+  SearchPipes_i ──detected── to  IdentifySide_i ── to  AlignPass_i ── to  DriveThrough_i
        │                                               │
-       └──timeout──→ DeadReckonToNext_i                └──lost──→ SearchPipes_i
+       └──timeout── to  DeadReckonToNext_i                └──lost── to  SearchPipes_i
 ```
 
 **Gap Checklist:**
@@ -198,12 +198,12 @@ For each pipe pair (i = 1, 2, 3):
 - **Failure mode:** Bin symbol misidentification (wrong bin), lateral drift during drop, dropper actuator failure.
 
 **What Duburi Has:**
-- ✅ `camera_manager` supports multi-camera (can add downward camera)
-- ✅ Depth PID for stable hover
-- ❌ No downward camera integrated
-- ❌ No dropper actuator
-- ❌ No bin detection model
-- ❌ No hover-and-drop state machine
+- [DONE] `camera_manager` supports multi-camera (can add downward camera)
+- [DONE] Depth PID for stable hover
+- [TODO] No downward camera integrated
+- [TODO] No dropper actuator
+- [TODO] No bin detection model
+- [TODO] No hover-and-drop state machine
 
 **What Other Teams Do:**
 - **Bumblebee:** Downward camera + DepthAnything for height estimation + YOLO for bin detection + PnP for precise positioning. Pneumatic dropper.
@@ -211,11 +211,11 @@ For each pipe pair (i = 1, 2, 3):
 
 **Our Approach (Proposed):**
 ```
-NavigateToBins ──arrived──→ SearchBins (downward cam) ──detected──→ IdentifyTarget
+NavigateToBins ──arrived── to  SearchBins (downward cam) ──detected── to  IdentifyTarget
      │                            │                                      │
-     └──timeout──→ [skip]         └──timeout──→ [skip]           AlignOverBin
+     └──timeout── to  [skip]         └──timeout── to  [skip]           AlignOverBin
                                                                         │
-                                                                  DropMarker ──→ [done]
+                                                                  DropMarker ── to  [done]
 ```
 
 **Gap Checklist:**
@@ -241,12 +241,12 @@ NavigateToBins ──arrived──→ SearchBins (downward cam) ──detected�
 - **Failure mode:** Miss due to alignment error at fire moment, pinger localization error, torpedo mechanism jam.
 
 **What Duburi Has:**
-- ✅ PID visual servo (lateral + vertical + forward)
-- ✅ Stable depth hold
-- ❌ No acoustic pinger hardware or software
-- ❌ No torpedo launcher actuator
-- ❌ No torpedo target detection model
-- ❌ No fire-and-verify state machine
+- [DONE] PID visual servo (lateral + vertical + forward)
+- [DONE] Stable depth hold
+- [TODO] No acoustic pinger hardware or software
+- [TODO] No torpedo launcher actuator
+- [TODO] No torpedo target detection model
+- [TODO] No fire-and-verify state machine
 
 **What Other Teams Do:**
 - **Bumblebee:** MUSIC algorithm for pinger DOA (direction of arrival) with custom DAQ hardware. XFeat + PnP for target alignment at <1m distance.
@@ -255,13 +255,13 @@ NavigateToBins ──arrived──→ SearchBins (downward cam) ──detected�
 **Our Approach (Proposed):**
 ```
 If pinger available:
-  ListenForPinger ──bearing──→ NavigateToPinger ──arrived──→ SearchTargets
+  ListenForPinger ──bearing── to  NavigateToPinger ──arrived── to  SearchTargets
 Else:
-  DeadReckonToArea ──→ SearchTargets
+  DeadReckonToArea ── to  SearchTargets
 
-SearchTargets ──detected──→ AlignToTarget ──aligned──→ FireTorpedo ──→ [done]
+SearchTargets ──detected── to  AlignToTarget ──aligned── to  FireTorpedo ── to  [done]
      │                            │
-     └──timeout──→ [skip]         └──lost──→ SearchTargets (retry ×3)
+     └──timeout── to  [skip]         └──lost── to  SearchTargets (retry ×3)
 ```
 
 **Gap Checklist:**
@@ -287,29 +287,29 @@ SearchTargets ──detected──→ AlignToTarget ──aligned──→ FireT
 - **Failure mode:** Surfacing outside octagon (no points), grabber fails to secure object, pinger localization error.
 
 **What Duburi Has:**
-- ✅ `surface` command with controlled ascent
-- ✅ Grabber actuator (open/close servo)
-- ❌ No acoustic pinger
-- ❌ No upward/downward octagon detection
-- ❌ No octagon task state machine
-- ❌ No object pickup sequence
+- [DONE] `surface` command with controlled ascent
+- [DONE] Grabber actuator (open/close servo)
+- [TODO] No acoustic pinger
+- [TODO] No upward/downward octagon detection
+- [TODO] No octagon task state machine
+- [TODO] No object pickup sequence
 
 **What Other Teams Do:**
-- **Bumblebee:** Pinger DOA → navigate → upward camera detects octagon → center → surface → pick objects with manipulator.
+- **Bumblebee:** Pinger DOA  to  navigate  to  upward camera detects octagon  to  center  to  surface  to  pick objects with manipulator.
 - **Desert WAVE:** Surveyed octagon location, drive to waypoint, surface.
 
 **Our Approach (Proposed):**
 ```
 If pinger available:
-  ListenForPinger ──bearing──→ NavigateToPinger ──arrived──→ SearchOctagon
+  ListenForPinger ──bearing── to  NavigateToPinger ──arrived── to  SearchOctagon
 Else:
-  DeadReckonToArea ──→ SearchOctagon
+  DeadReckonToArea ── to  SearchOctagon
 
-SearchOctagon (upward cam) ──detected──→ CenterUnder ──centered──→ Surface
+SearchOctagon (upward cam) ──detected── to  CenterUnder ──centered── to  Surface
      │                                        │
-     └──timeout──→ SurfaceBlind               └──lost──→ SearchOctagon
+     └──timeout── to  SurfaceBlind               └──lost── to  SearchOctagon
 
-Surface ──surfaced──→ SearchObjects ──found──→ GrabObject ──→ [done]
+Surface ──surfaced── to  SearchObjects ──found── to  GrabObject ── to  [done]
 ```
 
 **Gap Checklist:**
@@ -335,16 +335,16 @@ Surface ──surfaced──→ SearchObjects ──found──→ GrabObject �
 - **Failure mode:** Can't find way back (no absolute position reference), gate looks different from reverse side.
 
 **What Duburi Has:**
-- ✅ Gate detection + alignment (reuse Task 1 SM)
-- ✅ Heading PID for return navigation
-- ❌ No absolute position tracking (no DVL-based odometry)
-- ❌ No path memory (no breadcrumb trail)
+- [DONE] Gate detection + alignment (reuse Task 1 SM)
+- [DONE] Heading PID for return navigation
+- [TODO] No absolute position tracking (no DVL-based odometry)
+- [TODO] No path memory (no breadcrumb trail)
 
 **Our Approach:**
 ```
-TurnAround (180° from start heading) ──→ NavigateHome (reverse heading, timed)
+TurnAround (180° from start heading) ── to  NavigateHome (reverse heading, timed)
      │
-     └──→ SearchGate (reuse Task 1) ──→ AlignGate ──→ DriveThrough ──→ [done]
+     └── to  SearchGate (reuse Task 1) ── to  AlignGate ── to  DriveThrough ── to  [done]
 ```
 
 **Gap Checklist:**
@@ -358,9 +358,9 @@ TurnAround (180° from start heading) ──→ NavigateHome (reverse heading, t
 
 **Path Markers (ORANGE, ~4ft × 6in):**
 - Placed on pool floor between tasks to guide the AUV.
-- Downward camera can detect them → heading correction.
+- Downward camera can detect them  to  heading correction.
 - [ ] Train YOLO model on orange path markers
-- [ ] Implement path-marker-follow state (detect → align heading → advance)
+- [ ] Implement path-marker-follow state (detect  to  align heading  to  advance)
 
 **Acoustic Pingers (at Torpedoes + Octagon):**
 - 25-40 kHz pulsed signals.
@@ -370,7 +370,7 @@ TurnAround (180° from start heading) ──→ NavigateHome (reverse heading, t
 
 **20-Minute Time Limit:**
 - Must prioritize tasks by points-per-time ratio.
-- Gate (easy, fast) → Slalom (medium) → Bins (if downward cam ready) → Return Home.
+- Gate (easy, fast)  to  Slalom (medium)  to  Bins (if downward cam ready)  to  Return Home.
 - Torpedoes and Octagon require pinger — skip if hardware not ready.
 - [ ] Implement mission timeout in top-level YASMIN SM (skip remaining tasks, go to Return Home)
 - [ ] Profile per-task time in simulation
@@ -406,7 +406,7 @@ TurnAround (180° from start heading) ──→ NavigateHome (reverse heading, t
 ### 3.4 Visual Servo Tuning
 
 - [ ] Tune alignment controller PIDs for gate-sized target at 1-3m range
-- [ ] Measure alignment settling time and precision (±pixels → ±cm at target distance)
+- [ ] Measure alignment settling time and precision (±pixels  to  ±cm at target distance)
 - [ ] Test alignment stability: can it hold center for 5s without oscillation?
 - [ ] Tune `lost_timeout` for competition turbidity (2s may be too short in murky water)
 - [ ] Test `just_*` commands in alignment controller (per Issue 3 recommendation)
@@ -436,10 +436,10 @@ TurnAround (180° from start heading) ──→ NavigateHome (reverse heading, t
 **Currently implemented:** `gate.py`, `demo_square.py`
 
 - [ ] **Slalom SM:** 3 pipe-pair iterations with alternating pass direction
-- [ ] **Bins SM:** Navigate → search (downward cam) → identify → align → drop
-- [ ] **Torpedoes SM:** Navigate (pinger or dead reckon) → search → align → fire
-- [ ] **Octagon SM:** Navigate (pinger or dead reckon) → search → center → surface → grab
-- [ ] **Return Home SM:** Turn around → navigate → search gate → align → drive through
+- [ ] **Bins SM:** Navigate  to  search (downward cam)  to  identify  to  align  to  drop
+- [ ] **Torpedoes SM:** Navigate (pinger or dead reckon)  to  search  to  align  to  fire
+- [ ] **Octagon SM:** Navigate (pinger or dead reckon)  to  search  to  center  to  surface  to  grab
+- [ ] **Return Home SM:** Turn around  to  navigate  to  search gate  to  align  to  drive through
 - [ ] **Top-level Mission SM:** Chain all task SMs with timeout transitions + task skipping
 
 ### 4.3 YASMIN Infrastructure
@@ -514,7 +514,7 @@ TurnAround (180° from start heading) ──→ NavigateHome (reverse heading, t
 - [ ] Implement detection confidence filtering per task (gate needs high confidence, fallback to dead reckon)
 - [ ] Add temporal consistency check: N detections in M frames before triggering transition
 - [ ] Test under competition-like conditions: moving water, other robots, spectators above pool
-- [ ] Measure and log detection latency: camera frame → YOLO → published detection (target: <100ms)
+- [ ] Measure and log detection latency: camera frame  to  YOLO  to  published detection (target: <100ms)
 
 ---
 
@@ -537,7 +537,7 @@ TurnAround (180° from start heading) ──→ NavigateHome (reverse heading, t
 ```
 Without DVL:                          With DVL:
   "go forward 50% 5s" (open-loop)     "navigate to (3.0, 1.5, 0.5)" (closed-loop)
-  → distance depends on current,       → actual position feedback,
+   to  distance depends on current,        to  actual position feedback,
     battery, thrust nonlinearity         corrects for drift in real-time
 ```
 
@@ -584,7 +584,7 @@ Without DVL:                          With DVL:
 - [ ] Create test world with gate, slalom pipes, and bins
 - [ ] Run YASMIN missions in simulation before pool testing
 - [ ] Implement `rosbag2` recording in launch files (record all topics during pool sessions)
-- [ ] Build replay-and-evaluate workflow: replay bag → run detection → compare results
+- [ ] Build replay-and-evaluate workflow: replay bag  to  run detection  to  compare results
 - [ ] Unit tests for state machine transitions (mock `/driver/feedback` and `/vision/detections`)
 - [ ] Integration tests: full mission in simulation with assertions on task completion
 
@@ -628,10 +628,10 @@ Phase 5 (Utils)             ░░░░░░░░░░░░░░███�
 ### Critical Dependencies
 
 ```
-Phase 1 (Controls) ──→ Phase 2 (Missions)    # Can't automate bad controls
-Phase 3 (Perception) ──→ Phase 2 (Missions)   # Vision states need detection
-Phase 4 (DVL) ──→ Phase 2 (Navigation states) # Waypoint nav needs position
-Phase 5 (Simulation) ──→ Phase 2 (Testing)    # Mission testing needs sim
+Phase 1 (Controls) ── to  Phase 2 (Missions)    # Can't automate bad controls
+Phase 3 (Perception) ── to  Phase 2 (Missions)   # Vision states need detection
+Phase 4 (DVL) ── to  Phase 2 (Navigation states) # Waypoint nav needs position
+Phase 5 (Simulation) ── to  Phase 2 (Testing)    # Mission testing needs sim
 ```
 
 ### Parallel Tracks

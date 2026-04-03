@@ -161,8 +161,8 @@ These can proceed independently:
 
 ### High Confidence (90%+ likely)
 
-- Gate task working ✅
-- Basic pool operation ✅
+- Gate task working [DONE]
+- Basic pool operation [DONE]
 - Simulation connected
 
 ### Medium Confidence (60-80%)
@@ -224,9 +224,9 @@ Gate → Slalom → Torpedoes → Octagon → Bins → Return Home
 
 ### Immediate (Today/Tomorrow)
 
-1. ✅ Finalize action server implementation
-2. ✅ Schedule pool session for Apr 8-10
-3. ✅ Start YOLO training data collection
+1. [DONE] Finalize action server implementation
+2. [DONE] Schedule pool session for Apr 8-10
+3. [DONE] Start YOLO training data collection
 
 ### Before Pool Session
 

@@ -8,10 +8,10 @@ This guide explains how to add new movement commands to the Duburi AUV control s
 flowchart TD
     A[Write Handler Function] --> B[Add @register Decorator]
     B --> C[Done! Auto-propagates]
-    C --> D[command_parser.py ✓]
-    C --> E[mission_parser.py ✓]
-    C --> F[DuburiClient ✓]
-    C --> G[Help text ✓]
+    C --> D[command_parser.py ]
+    C --> E[mission_parser.py ]
+    C --> F[DuburiClient ]
+    C --> G[Help text ]
 ```
 
 Adding a command now requires **one step** instead of the previous 4-5 file changes.

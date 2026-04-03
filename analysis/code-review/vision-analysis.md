@@ -41,16 +41,16 @@
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| **Kalman overlay** | ✅ Fixed | Reused annotators; no per-frame alloc |
-| **Terminal logging** | ✅ Fixed | Throttled to log_rate (2 Hz default) |
-| **Annotated Image publish** | ✅ Fixed | Rate-limited (10 Hz default) |
-| **Display (cv2.imshow)** | ✅ Fixed | Moved to async thread; doesn’t block callback |
-| **Annotation for display** | ✅ Fixed | Only at display_rate (20 Hz) when enable_display |
-| **ROS Image serialization** | ⚠️ Remaining | `tobytes()`/`frombuffer()` ~2–5 ms each; only when publishing (10 Hz) |
-| **ros_image_to_cv2** | ⚠️ Remaining | Copy on every frame; ~2–5 ms |
-| **frame.copy()** | ⚠️ Remaining | In `_annotate_frame()` when we annotate |
-| **Alignment overlay** | ⚠️ Minor | ~15 cv2 calls when annotating |
-| **sv.Detections.from_ultralytics** | ⚠️ Minor | Per-frame when annotating |
+| **Kalman overlay** | [DONE] Fixed | Reused annotators; no per-frame alloc |
+| **Terminal logging** | [DONE] Fixed | Throttled to log_rate (2 Hz default) |
+| **Annotated Image publish** | [DONE] Fixed | Rate-limited (10 Hz default) |
+| **Display (cv2.imshow)** | [DONE] Fixed | Moved to async thread; doesn’t block callback |
+| **Annotation for display** | [DONE] Fixed | Only at display_rate (20 Hz) when enable_display |
+| **ROS Image serialization** | [NOTE] Remaining | `tobytes()`/`frombuffer()` ~2–5 ms each; only when publishing (10 Hz) |
+| **ros_image_to_cv2** | [NOTE] Remaining | Copy on every frame; ~2–5 ms |
+| **frame.copy()** | [NOTE] Remaining | In `_annotate_frame()` when we annotate |
+| **Alignment overlay** | [NOTE] Minor | ~15 cv2 calls when annotating |
+| **sv.Detections.from_ultralytics** | [NOTE] Minor | Per-frame when annotating |
 
 ### 2.2 Architectural Bottlenecks
 
@@ -119,23 +119,23 @@
 5. **Jetson-friendly launch defaults**  
    - Default `enable_display:=false` for production; add `enable_display:=true` for debugging.
 
-### Phase 2: Decouple Display (Target: 20–25 FPS) ✅ DONE
+### Phase 2: Decouple Display (Target: 20–25 FPS) [DONE] DONE
 
-6. **Async display** ✅  
+6. **Async display** [DONE]  
    - Run `imshow`/`waitKey` in a dedicated thread with a shared latest frame (lock-protected).  
    - Main callback: infer, annotate (rate-limited for display), publish DetectionArray, push frame to display buffer.  
    - Display thread: runs at `display_rate` (default 20 Hz), `imshow`, `waitKey(1)`.
 
-7. **Rate-limit annotated publish** ✅ (Phase 1)  
+7. **Rate-limit annotated publish** [DONE] (Phase 1)  
    - `annotated_publish_rate` param (default 10 Hz); only publish annotated Image at that rate.  
    - DetectionArray remains at full rate.
 
-### Phase 3: Reduce Copy/Serialisation (Target: 25–30 FPS) ✅ DONE
+### Phase 3: Reduce Copy/Serialisation (Target: 25–30 FPS) [DONE] DONE
 
-8. **Lazy annotated publish** ✅  
+8. **Lazy annotated publish** [DONE]  
    - Only build and publish annotated Image when `annotated_pub.get_subscription_count() > 0`.
 
-9. **Skip overlays when alignment inactive** ✅  
+9. **Skip overlays when alignment inactive** [DONE]  
    - Alignment overlay: only draw when `_last_alignment` is not None.  
    - Kalman overlay: already skips when no status/target (in `_draw_kalman_overlay`).
 
@@ -191,12 +191,12 @@ After changes:
 | **FPS** | ~5 | **20–25** |
 | **Improvement** | — | ~4–5× |
 
-### Phase 3 ✅ DONE
+### Phase 3 [DONE] DONE
 
 | # | Change | Status |
 |---|--------|--------|
-| 1 | **Lazy annotated publish** | ✅ Only build/publish when `get_subscription_count() > 0` |
-| 2 | **Skip overlays when alignment inactive** | ✅ Alignment overlay only when `_last_alignment` not None |
+| 1 | **Lazy annotated publish** | [DONE] Only build/publish when `get_subscription_count() > 0` |
+| 2 | **Skip overlays when alignment inactive** | [DONE] Alignment overlay only when `_last_alignment` not None |
 | 3 | **Optimise ros_image_to_cv2** | Deferred (profile first; needs validation) |
 
 ### Phase 4 (advanced, if needed)

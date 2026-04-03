@@ -18,10 +18,10 @@ The control stack underwent a major redesign to support autonomous mission execu
 
 | Component | Status | Description |
 |-----------|--------|-------------|
-| **MAVLink Bridge** | ✅ Production | 7-module inspector: serial I/O, command dispatch, PID controllers, telemetry, RC override at 20 Hz |
-| **Control System** | ✅ Functional | Software depth PID + yaw PID, trapezoidal PWM ramp, 4-layer RC override, `just_*` instant variants |
-| **Command System** | ✅ Rich | 30+ commands: `move`, `go`, `cruise`, `at`, `just_*`, diagonals, PID depth/yaw, `~` prefix convention |
-| **Feedback System** | ✅ Implemented | `/driver/feedback` with `accepted`/`reached`/`completed`/`rejected` status + error magnitude |
+| **MAVLink Bridge** | [DONE] Production | 7-module inspector: serial I/O, command dispatch, PID controllers, telemetry, RC override at 20 Hz |
+| **Control System** | [DONE] Functional | Software depth PID + yaw PID, trapezoidal PWM ramp, 4-layer RC override, `just_*` instant variants |
+| **Command System** | [DONE] Rich | 30+ commands: `move`, `go`, `cruise`, `at`, `just_*`, diagonals, PID depth/yaw, `~` prefix convention |
+| **Feedback System** | [DONE] Implemented | `/driver/feedback` with `accepted`/`reached`/`completed`/`rejected` status + error magnitude |
 
 ### Key Decisions Made
 
@@ -45,10 +45,10 @@ The control stack underwent a major redesign to support autonomous mission execu
 
 | Component | Status | Description |
 |-----------|--------|-------------|
-| **YOLO11 Detection** | ✅ Functional | YOLO11n on CUDA (20-25 FPS on Orin Nano) |
-| **Kalman Tracking** | ✅ Implemented | Single-object tracking with prediction |
-| **Visual Servoing** | ✅ Functional | PID-based lateral + vertical + forward alignment |
-| **Camera Manager** | ✅ Complete | Multi-camera support with V4L2 backend |
+| **YOLO11 Detection** | [DONE] Functional | YOLO11n on CUDA (20-25 FPS on Orin Nano) |
+| **Kalman Tracking** | [DONE] Implemented | Single-object tracking with prediction |
+| **Visual Servoing** | [DONE] Functional | PID-based lateral + vertical + forward alignment |
+| **Camera Manager** | [DONE] Complete | Multi-camera support with V4L2 backend |
 
 ### Key Decisions Made
 
@@ -65,9 +65,9 @@ The control stack underwent a major redesign to support autonomous mission execu
 
 | Component | Status | Description |
 |-----------|--------|-------------|
-| **Interactive CLI** | ✅ Complete | `duburi_runner` REPL with history, file-based missions, chained commands, status dashboard |
+| **Interactive CLI** | [DONE] Complete | `duburi_runner` REPL with history, file-based missions, chained commands, status dashboard |
 | **Mission Planner** | 🟡 Partial | YASMIN HFSM in `duburi_planner` — 8 reusable states, 2 missions (gate, demo_square) |
-| **Teleop** | ✅ Implemented | `TeleopCommand` on `/driver/teleop` with multi-axis support + idle detection |
+| **Teleop** | [DONE] Implemented | `TeleopCommand` on `/driver/teleop` with multi-axis support + idle detection |
 
 ### Key Decisions Made
 
@@ -83,9 +83,9 @@ The control stack underwent a major redesign to support autonomous mission execu
 
 | Component | Status | Description |
 |-----------|--------|-------------|
-| **BlueOS Integration** | ✅ Functional | REST API client for system monitoring, parameter management |
-| **Logging** | ✅ Functional | Session-based CSV/JSON logging with rotation |
-| **Documentation** | ✅ Extensive | 26 analysis documents + comprehensive README |
+| **BlueOS Integration** | [DONE] Functional | REST API client for system monitoring, parameter management |
+| **Logging** | [DONE] Functional | Session-based CSV/JSON logging with rotation |
+| **Documentation** | [DONE] Extensive | 26 analysis documents + comprehensive README |
 
 ---
 

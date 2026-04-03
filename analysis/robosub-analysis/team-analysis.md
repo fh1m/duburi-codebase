@@ -115,40 +115,40 @@ Fallback: Revert to Stage 1 + proportional approach
 
 | Approach | Teams Using | Duburi Status |
 |----------|-------------|---------------|
-| YOLO variants | Most teams | ✅ YOLO11n |
+| YOLO variants | Most teams | [DONE] YOLO11n |
 | Traditional CV (HSV) | Desert WAVE, backup | 🟡 Not used |
-| Feature matching (XFeat, ORB) | Bumblebee | ❌ Missing |
-| PnP pose estimation | Bumblebee | ❌ Missing |
-| Depth estimation | Bumblebee (DepthAnything) | ❌ Missing |
+| Feature matching (XFeat, ORB) | Bumblebee | [TODO] Missing |
+| PnP pose estimation | Bumblebee | [TODO] Missing |
+| Depth estimation | Bumblebee (DepthAnything) | [TODO] Missing |
 
 ### Control Approaches
 
 | Approach | Teams Using | Duburi Status |
 |----------|-------------|---------------|
-| PID control | Universal | ✅ Implemented |
-| Model predictive control | Advanced teams | ❌ Not planned |
-| LQR | Some teams | ❌ Not planned |
-| Trajectory interpolation | Bumblebee | ❌ Missing |
-| QP thrust allocation | Bumblebee | ❌ Missing |
+| PID control | Universal | [DONE] Implemented |
+| Model predictive control | Advanced teams | [TODO] Not planned |
+| LQR | Some teams | [TODO] Not planned |
+| Trajectory interpolation | Bumblebee | [TODO] Missing |
+| QP thrust allocation | Bumblebee | [TODO] Missing |
 
 ### State Machine Patterns
 
 | Pattern | Teams Using | Duburi Status |
 |---------|-------------|---------------|
-| Behavior trees | Bumblebee (Py Trees) | ❌ Using YASMIN |
-| Hierarchical FSM | Duburi | ✅ YASMIN HFSM |
-| SMACH | Older teams | ❌ Deprecated |
-| Linear sequences | Desert WAVE | ❌ Too simple |
+| Behavior trees | Bumblebee (Py Trees) | [TODO] Using YASMIN |
+| Hierarchical FSM | Duburi | [DONE] YASMIN HFSM |
+| SMACH | Older teams | [TODO] Deprecated |
+| Linear sequences | Desert WAVE | [TODO] Too simple |
 
 ### Localization Approaches
 
 | Approach | Teams Using | Duburi Status |
 |----------|-------------|---------------|
 | DVL integration | Most teams | 🟡 Hardware only |
-| Fiber optic gyro | Advanced teams | ❌ Not planned |
-| Custom UKF | Bumblebee | ❌ Using Pixhawk EKF |
+| Fiber optic gyro | Advanced teams | [TODO] Not planned |
+| Custom UKF | Bumblebee | [TODO] Using Pixhawk EKF |
 | GPS survey (surface) | Desert WAVE | 🟡 Could adopt |
-| Visual odometry | Bumblebee | ❌ Missing |
+| Visual odometry | Bumblebee | [TODO] Missing |
 
 ---
 

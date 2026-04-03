@@ -90,7 +90,7 @@ Post-refactor analysis of the Duburi 4.2 codebase. Identifies current architectu
 
 ## Part B: Architectural Design Critique
 
-### Critique 1: ~~Absence of~~ State Machine Layer — ✅ NOW IMPLEMENTED
+### Critique 1: ~~Absence of~~ State Machine Layer — [DONE] NOW IMPLEMENTED
 
 > **Status (2026):** The `duburi_planner` package now implements YASMIN HFSM with 8 reusable states (`arm`, `submerge`, `drive`, `surface`, `search`, `align`, `wait_feedback`, `send_command`) and 2 missions (`gate.py`, `demo_square.py`). The critique below is preserved for historical context — the core issue is addressed, though not all competition tasks have state machines yet.
 
@@ -108,7 +108,7 @@ SEARCHING → DETECTED → APPROACHING → ALIGNED → EXECUTING → COMPLETED
 
 Our current architecture has no way to express this. The alignment controller implements a micro-state machine internally (SEARCHING, ALIGNING, HOLDING), but this isn't exposed to a higher-level planner.
 
-**Recommendation:** ✅ This has been addressed by the `duburi_planner` package. YASMIN hierarchical state machines are implemented with per-task sub-SMs. The alignment controller's internal states (SEARCHING, ALIGNING, HOLDING) map to YASMIN `MonitorState` outcomes, and `/vision/alignment_status` provides the feedback signal that YASMIN states consume. **Next step:** wire the `align` state to consume `/vision/alignment_status` directly for the remaining competition tasks. See `16_PLANNER_DOCUMENTATION.md` for the current implementation.
+**Recommendation:** [DONE] This has been addressed by the `duburi_planner` package. YASMIN hierarchical state machines are implemented with per-task sub-SMs. The alignment controller's internal states (SEARCHING, ALIGNING, HOLDING) map to YASMIN `MonitorState` outcomes, and `/vision/alignment_status` provides the feedback signal that YASMIN states consume. **Next step:** wire the `align` state to consume `/vision/alignment_status` directly for the remaining competition tasks. See `16_PLANNER_DOCUMENTATION.md` for the current implementation.
 
 ---
 
@@ -177,11 +177,11 @@ Our current architecture has no way to express this. The alignment controller im
 
 ## Part C: Concrete Next Steps (Phased Roadmap)
 
-### Phase 1: YASMIN State Machine Foundation — ✅ COMPLETE
+### Phase 1: YASMIN State Machine Foundation — [DONE] COMPLETE
 
 **Goal:** Replace text-based missions with YASMIN hierarchical state machines.
 
-**Status:** ✅ All items delivered. The `duburi_planner` package is implemented with:
+**Status:** [DONE] All items delivered. The `duburi_planner` package is implemented with:
 - 8 reusable states: `arm.py`, `submerge.py`, `drive.py`, `surface.py`, `search.py`, `align.py`, `wait_feedback.py`, `send_command.py`
 - 2 missions: `gate.py` (gate task with search → align → drive-through), `demo_square.py` (test pattern)
 - States inherit directly from `yasmin.State` and use `driver_client` functions

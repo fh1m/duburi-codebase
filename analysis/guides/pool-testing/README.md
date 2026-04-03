@@ -23,8 +23,8 @@ flowchart LR
 
 ## Emergency Procedures
 
-⚠️ **Kill Switch:** Always have physical kill switch accessible
+WARNING: **Kill Switch:** Always have physical kill switch accessible
 
-⚠️ **Software Stop:** `stop` command in runner OR Ctrl+C on inspector
+WARNING: **Software Stop:** `stop` command in runner OR Ctrl+C on inspector
 
-⚠️ **Manual Recovery:** Disarm, surface manually if needed
+WARNING: **Manual Recovery:** Disarm, surface manually if needed

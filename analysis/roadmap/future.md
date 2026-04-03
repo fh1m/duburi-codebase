@@ -12,12 +12,12 @@
 
 | Task | Name | What We Have | What We Need |
 |------|------|--------------|--------------|
-| 1 | Begin Assessment (Gate) | ✅ YOLO, visual servo, gate SM | Custom YOLO model for props |
+| 1 | Begin Assessment (Gate) | [DONE] YOLO, visual servo, gate SM | Custom YOLO model for props |
 | 2 | Avoid Debris (Slalom) | 🟡 Detection pipeline | Multi-object tracking, slalom SM |
 | 3 | Recon (Bins) | 🟡 Camera manager | Downward cam, dropper, bin SM |
 | 4 | Deploy (Torpedoes) | 🔴 Visual servo only | Pinger, launcher, torpedo SM |
 | 5 | Resupply (Octagon) | 🟡 Surface cmd, grabber | Pinger, octagon SM, pickup sequence |
-| 6 | Return Home (Gate) | ✅ Reuse Task 1 | DVL for position tracking |
+| 6 | Return Home (Gate) | [DONE] Reuse Task 1 | DVL for position tracking |
 
 ### Cross-Cutting Elements
 
