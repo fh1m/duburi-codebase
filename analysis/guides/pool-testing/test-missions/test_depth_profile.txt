@@ -7,24 +7,24 @@ arm
 mode MANUAL
 
 # Dive to 0.5m and hold
-dive 0.5m 50%
-hold depth 10s
+depth 0.5
+sleep 10
 
 # Dive to 1.0m and hold
-dive 1.0m 50%
-hold depth 10s
+depth 1.0
+sleep 10
 
 # Dive to 1.5m and hold
-dive 1.5m 50%
-hold depth 10s
+depth 1.5
+sleep 10
 
 # Return to 1.0m and hold
-dive 1.0m 50%
-hold depth 10s
+depth 1.0
+sleep 10
 
 # Surface
 surface
-delay 2
+sleep 2
 
 # Stop and disarm
 stop

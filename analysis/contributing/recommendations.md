@@ -1,4 +1,4 @@
-# 14 — Issues, Design Critique, and Recommendations
+# 14 Issues, Design Critique, and Recommendations
 
 Post-refactor analysis of the Duburi 4.2 codebase. Identifies current architectural issues, design debt, and recommends concrete next steps with implementation guidance. Cross-references `13_COMPETITIVE_ANALYSIS.md` for strategic context.
 
@@ -29,13 +29,13 @@ Post-refactor analysis of the Duburi 4.2 codebase. Identifies current architectu
 - Subscribe to `/driver/feedback` in the executor.
 - After critical commands (`arm`, `set_mode`, `pid_depth`), wait for `status == 'accepted'` or `'reached'` with a timeout.
 - On `'rejected'`, log error and retry or abort based on a configurable retry policy.
-- This is a prerequisite for behaviour tree integration — BT leaf nodes need success/failure signals.
+- This is a prerequisite for behaviour tree integration BT leaf nodes need success/failure signals.
 
 ---
 
 ### Issue 3: Alignment Controller Publishes Raw DriverCommand (Severity: MEDIUM)
 
-**Problem:** `alignment_controller.py` publishes `DriverCommand` to `/driver/command` (confirmed — uses `DriverCommand`, not `TeleopCommand`). Each publish triggers a full command dispatch cycle in the inspector. At 10 Hz control rate, this generates 10 DriverCommand messages per second, each going through `CommandHandler.handle()` → movement lookup → ramp reset.
+**Problem:** `alignment_controller.py` publishes `DriverCommand` to `/driver/command` (confirmed uses `DriverCommand`, not `TeleopCommand`). Each publish triggers a full command dispatch cycle in the inspector. At 10 Hz control rate, this generates 10 DriverCommand messages per second, each going through `CommandHandler.handle()` → movement lookup → ramp reset.
 
 **Impact:** The trapezoidal ramp in `rc_controller` is constantly being reset by new commands. The visual servo effectively bypasses the ramp and creates jittery motion. Additionally, each alignment command overwrites any concurrent movement from the runner or executor.
 
@@ -90,9 +90,9 @@ Post-refactor analysis of the Duburi 4.2 codebase. Identifies current architectu
 
 ## Part B: Architectural Design Critique
 
-### Critique 1: ~~Absence of~~ State Machine Layer — [DONE] NOW IMPLEMENTED
+### Critique 1: ~~Absence of~~ State Machine Layer [DONE] NOW IMPLEMENTED
 
-> **Status (2026):** The `duburi_planner` package now implements YASMIN HFSM with 8 reusable states (`arm`, `submerge`, `drive`, `surface`, `search`, `align`, `wait_feedback`, `send_command`) and 2 missions (`gate.py`, `demo_square.py`). The critique below is preserved for historical context — the core issue is addressed, though not all competition tasks have state machines yet.
+> **Status (2026):** The `duburi_planner` package now implements YASMIN HFSM with 8 reusable states (`arm`, `submerge`, `drive`, `surface`, `search`, `align`, `wait_feedback`, `send_command`) and 2 missions (`gate.py`, `demo_square.py`). The critique below is preserved for historical context the core issue is addressed, though not all competition tasks have state machines yet.
 
 **Original critique:** Mission logic was expressed as linear command sequences (text files or semicolons in the runner). There was no concept of "states" (IDLE, NAVIGATING, ALIGNING, TASK_EXECUTING, ERROR_RECOVERY) with defined transitions and guards.
 
@@ -100,10 +100,10 @@ Post-refactor analysis of the Duburi 4.2 codebase. Identifies current architectu
 
 ```
 SEARCHING → DETECTED → APPROACHING → ALIGNED → EXECUTING → COMPLETED
-     ↓           ↓            ↓           ↓          ↓
-   TIMEOUT    LOST_TARGET   TOO_CLOSE   MISALIGNED  FAILED
-     ↓           ↓            ↓           ↓          ↓
-   ROTATE    RE-SEARCH     RETREAT      RE-ALIGN   RETRY/ABORT
+ ↓ ↓ ↓ ↓ ↓
+ TIMEOUT LOST_TARGET TOO_CLOSE MISALIGNED FAILED
+ ↓ ↓ ↓ ↓ ↓
+ ROTATE RE-SEARCH RETREAT RE-ALIGN RETRY/ABORT
 ```
 
 Our current architecture has no way to express this. The alignment controller implements a micro-state machine internally (SEARCHING, ALIGNING, HOLDING), but this isn't exposed to a higher-level planner.
@@ -116,7 +116,7 @@ Our current architecture has no way to express this. The alignment controller im
 
 **Current state:** `command_parser.py` in the runner and `mission_parser.py` in the driver both convert user text into `DriverCommand` messages. The `duburi_common.command_vocabulary` refactor helped, but the parsing logic is still interleaved with ROS publishing and `time.sleep()`.
 
-**Why this matters:** A behaviour tree needs to issue commands programmatically, not by parsing text strings. The command generation API (`driver_client.py`) exists but is underutilised — the mission executor reimplements much of the same logic.
+**Why this matters:** A behaviour tree needs to issue commands programmatically, not by parsing text strings. The command generation API (`driver_client.py`) exists but is underutilised the mission executor reimplements much of the same logic.
 
 **Recommendation:**
 - Establish `driver_client.py` as the canonical programmatic API. All command generation (runner, executor, YASMIN states, alignment controller) should call `driver_client` functions.
@@ -129,7 +129,7 @@ Our current architecture has no way to express this. The alignment controller im
 
 **Current state:** The vision alignment controller and the runner/executor operate on the same conceptual level. There's no distinction between "navigate to the task area" and "execute the task."
 
-**Why this matters (from Desert WAVE):** Navigation between tasks should use dead reckoning (DVL + IMU) — fast, reliable, and vision-independent. Vision should only activate for close-range task execution. This separation means:
+**Why this matters (from Desert WAVE):** Navigation between tasks should use dead reckoning (DVL + IMU) fast, reliable, and vision-independent. Vision should only activate for close-range task execution. This separation means:
 - Vision failures during transit don't abort the mission
 - The vehicle moves faster between tasks (no visual servo latency)
 - Each phase has different control requirements (navigation: position control; task: visual servo)
@@ -153,7 +153,7 @@ Our current architecture has no way to express this. The alignment controller im
 - Current/surge (environmental disturbances)
 
 **Recommendation:**
-- Short-term: gain scheduling — different PID profiles for different depth ranges (shallow pool vs 4m)
+- Short-term: gain scheduling different PID profiles for different depth ranges (shallow pool vs 4m)
 - Medium-term: adaptive gain based on battery voltage (we already have `nominal_voltage` compensation for thrust; extend to PID gains)
 - Long-term: online PID auto-tuning (Ziegler-Nichols relay feedback or model reference adaptive control)
 
@@ -177,7 +177,7 @@ Our current architecture has no way to express this. The alignment controller im
 
 ## Part C: Concrete Next Steps (Phased Roadmap)
 
-### Phase 1: YASMIN State Machine Foundation — [DONE] COMPLETE
+### Phase 1: YASMIN State Machine Foundation [DONE] COMPLETE
 
 **Goal:** Replace text-based missions with YASMIN hierarchical state machines.
 
@@ -188,63 +188,63 @@ Our current architecture has no way to express this. The alignment controller im
 - YASMIN Viewer available for real-time debugging
 
 **Remaining from original plan:**
-- ❌ `watchdog.py` — not yet implemented (safety watchdog for battery/leak monitoring)
-- ❌ Additional task sub-SMs (slalom, torpedoes, bins, octagon) — not yet implemented
+- `watchdog.py` not yet implemented (safety watchdog for battery/leak monitoring)
+- Additional task sub-SMs (slalom, torpedoes, bins, octagon) not yet implemented
 
 See `16_PLANNER_DOCUMENTATION.md` for the complete implementation guide.
 
 ---
 
-### Phase 2: Simulation and DVL (est. 2–3 weeks)
+### Phase 2: Simulation and DVL (est. 23 weeks)
 
 **Goal:** Enable offline mission testing and position-based navigation.
 
 1. **Gazebo simulation:**
-   - Use `ros_gz` (Gazebo Harmonic) with underwater vehicle plugin
-   - Model the competition pool with gate and bin props
-   - Bridge simulated camera and IMU to ROS 2 topics
-   - Run YASMIN state machine missions in simulation
+ - Use `ros_gz` (Gazebo Harmonic) with underwater vehicle plugin
+ - Model the competition pool with gate and bin props
+ - Bridge simulated camera and IMU to ROS 2 topics
+ - Run YASMIN state machine missions in simulation
 
 2. **DVL integration:**
-   - ROS 2 driver for Nortek Nucleus 1000 (community packages exist)
-   - Feed DVL velocity into Pixhawk EKF (VISION_POSITION_DELTA or GPS_INPUT)
-   - Add waypoint navigation state: `NavigateToWaypoint(x, y, depth)` using DVL position + heading PID
+ - ROS 2 driver for Nortek Nucleus 1000 (community packages exist)
+ - Feed DVL velocity into Pixhawk EKF (VISION_POSITION_DELTA or GPS_INPUT)
+ - Add waypoint navigation state: `NavigateToWaypoint(x, y, depth)` using DVL position + heading PID
 
 **Deliverables:** Simulated gate mission running autonomously. DVL providing position estimates.
 
 ---
 
-### Phase 3: Advanced Perception (est. 2–3 weeks)
+### Phase 3: Advanced Perception (est. 23 weeks)
 
 **Goal:** Multi-stage perception for robust task execution.
 
 1. **Monocular depth estimation:**
-   - Integrate DepthAnything V2 (small variant for Orin Nano)
-   - Publish depth map alongside YOLO detections
-   - Alignment controller uses depth estimate for approach distance
+ - Integrate DepthAnything V2 (small variant for Orin Nano)
+ - Publish depth map alongside YOLO detections
+ - Alignment controller uses depth estimate for approach distance
 
 2. **Feature matching:**
-   - XFeat for precise target localization after YOLO provides ROI
-   - PnP pose estimation when target geometry is known (gate dimensions, bin markers)
+ - XFeat for precise target localization after YOLO provides ROI
+ - PnP pose estimation when target geometry is known (gate dimensions, bin markers)
 
 3. **Multi-object tracking:**
-   - Extend `KalmanObjectTracker` to maintain N simultaneous tracks
-   - Track management: birth, death, occlusion handling
-   - Publish `TrackedObjectArray.msg` with track IDs and predicted positions
+ - Extend `KalmanObjectTracker` to maintain N simultaneous tracks
+ - Track management: birth, death, occlusion handling
+ - Publish `TrackedObjectArray.msg` with track IDs and predicted positions
 
 **Deliverables:** 3-stage perception pipeline: YOLO → XFeat → PnP with fallback.
 
 ---
 
-### Phase 4: Competition Polish (est. 1–2 weeks)
+### Phase 4: Competition Polish (est. 12 weeks)
 
 **Goal:** Reliability, testing, and operational readiness.
 
 1. **rosbag2 integration** for recording and replay
 2. **Health monitoring node** with Telegram alerts
 3. **Regression test suite** using recorded data
-4. **Mission library** — YASMIN sub-state-machines for each competition task
-5. **Operations runbook** — pre-test checklist, day-of procedures
+4. **Mission library** YASMIN sub-state-machines for each competition task
+5. **Operations runbook** pre-test checklist, day-of procedures
 6. **Gain scheduling** for different depth ranges
 
 ---

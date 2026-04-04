@@ -42,7 +42,7 @@ ros2 param set /mavlink_inspector external_yaw_enabled true
 **Problem Solved**: AUV coasts past target, next command starts while still moving
 
 ### Test 1.1: Basic Stop Convergence
-**Command**: 
+**Command**:
 ```
 forward 30% 5s
 ```
@@ -109,7 +109,7 @@ turn left 90 50%
 ### Test 2.2: Precision Zone Behavior
 **Command**:
 ```
-turn_to 180 50%  # Absolute heading
+turn_to 180 50% # Absolute heading
 ```
 
 **What to Check**:
@@ -142,11 +142,11 @@ turn left 90 50%
 
 **Success Criteria**:
 ```
-Corner 1: 90° ± 5° ✓
-Corner 2: 90° ± 5° ✓
-Corner 3: 90° ± 5° ✓
-Corner 4: 90° ± 5° ✓
-Closure error: <1.0m ✓
+Corner 1: 90° ± 5° [DONE]
+Corner 2: 90° ± 5° [DONE]
+Corner 3: 90° ± 5° [DONE]
+Corner 4: 90° ± 5° [DONE]
+Closure error: <1.0m [DONE]
 ```
 
 ---
@@ -207,9 +207,9 @@ StdDev: 0.04m (target: <0.15m)
 **Problem Solved**: 70%+ speed causes overshoots and misses
 
 ### Test 4.1: Gain Scheduling Transitions
-**Command**: 
+**Command**:
 ```
-forward 70% 5s  # High speed range
+forward 70% 5s # High speed range
 ```
 
 **What to Check**:
@@ -219,7 +219,7 @@ forward 70% 5s  # High speed range
 
 **Then**:
 ```
-forward 20% 3s  # Low speed range
+forward 20% 3s # Low speed range
 ```
 
 **What to Check**:
@@ -229,12 +229,12 @@ forward 20% 3s  # Low speed range
 ### Test 4.2: Acceleration Ramp
 **Command**:
 ```
-forward 80% 5s  # From stop
+forward 80% 5s # From stop
 ```
 
 **What to Check**:
 - [ ] Vehicle accelerates smoothly (not instant jump)
-- [ ] Log shows ramping: 0% → 10% → 20% → ... → 80%
+- [ ] Log shows ramping: 0% → 10% → 20% →... → 80%
 - [ ] Time to reach 80%: ~1.6 seconds (at 50%/sec)
 
 **If Too Slow**:
@@ -250,7 +250,7 @@ ros2 param set /mavlink_inspector max_accel_pct_per_sec 30.0
 ### Test 4.3: High-Speed Turn
 **Command**:
 ```
-turn left 90 70%  # High speed turn
+turn left 90 70% # High speed turn
 ```
 
 **What to Check**:
@@ -423,12 +423,12 @@ print(f"DVL IMU: {yaws.get('dvl_imu', 'N/A')}°")
 ### Key Files
 ```
 src/mavlink_inspector/mavlink_inspector/
-├── velocity_control.py     # VelocityEstimator, ConvergenceGate, CascadeController, etc.
-├── sensor_sources.py       # DVLSource, ExternalYawSource, SensorSourceManager
-├── command_handler.py      # Command dispatch, convergence helpers
-├── movement_commands.py    # Movement command definitions
-├── inspector_node.py       # Main node, parameters, wiring
-└── config/defaults.yaml    # All configuration parameters
+ velocity_control.py # VelocityEstimator, ConvergenceGate, CascadeController, etc.
+ sensor_sources.py # DVLSource, ExternalYawSource, SensorSourceManager
+ command_handler.py # Command dispatch, convergence helpers
+ movement_commands.py # Movement command definitions
+ inspector_node.py # Main node, parameters, wiring
+ config/defaults.yaml # All configuration parameters
 ```
 
 ### Testing Changes
@@ -461,22 +461,22 @@ All features have master enable switches - disable individually to isolate issue
 
 | Test | Result | Notes |
 |------|--------|-------|
-| 1.1 Stop Convergence | ✓/✗ | |
-| 1.2 Chain Commands | ✓/✗ | |
-| 2.1 Basic 90° Turn | ✓/✗ | |
-| 2.2 Precision Zone | ✓/✗ | |
-| 2.3 Square Pattern | ✓/✗ | Closure: ___m |
-| 3.1 Distance Movement | ✓/✗ | Accuracy: ±___m |
-| 4.1 Gain Scheduling | ✓/✗ | |
-| 4.2 Accel Ramp | ✓/✗ | |
-| 4.3 High-Speed Turn | ✓/✗ | Error: ±___° |
-| 5.1 DVL Connection | ✓/✗ | |
-| 5.3 Fallback | ✓/✗ | |
+| 1.1 Stop Convergence | [DONE]/ | |
+| 1.2 Chain Commands | [DONE]/ | |
+| 2.1 Basic 90° Turn | [DONE]/ | |
+| 2.2 Precision Zone | [DONE]/ | |
+| 2.3 Square Pattern | [DONE]/ | Closure: ___m |
+| 3.1 Distance Movement | [DONE]/ | Accuracy: ±___m |
+| 4.1 Gain Scheduling | [DONE]/ | |
+| 4.2 Accel Ramp | [DONE]/ | |
+| 4.3 High-Speed Turn | [DONE]/ | Error: ±___° |
+| 5.1 DVL Connection | [DONE]/ | |
+| 5.3 Fallback | [DONE]/ | |
 
 ### Parameters After Tuning
 ```yaml
 # Record final tuned values here
-convergence_velocity_threshold: 
+convergence_velocity_threshold:
 yaw_precision_deadband:
 yaw_gains_high_kp:
 max_accel_pct_per_sec:

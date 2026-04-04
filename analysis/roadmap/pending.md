@@ -6,26 +6,26 @@
 
 ## Immediate Priority (Before Pool Testing)
 
-### SITL Validation 🖥️
+### SITL Validation
 **Status:** NEXT UP
 
 - [ ] Connect Gazebo ArduSub simulator to ROS 2 pipeline
 - [ ] Test V2 features in simulation:
-  - [ ] Velocity estimator with gravity compensation
-  - [ ] Convergence gates for waypoint detection
-  - [ ] Active braking near waypoints
-  - [ ] Cascade position/velocity control
-  - [ ] Gain scheduling at different speeds
+ - [ ] Velocity estimator with gravity compensation
+ - [ ] Convergence gates for waypoint detection
+ - [ ] Active braking near waypoints
+ - [ ] Cascade position/velocity control
+ - [ ] Gain scheduling at different speeds
 - [ ] Run test missions:
-  - [ ] Square pattern with 90° turns
-  - [ ] Circle pattern with continuous yaw
-  - [ ] Complex multi-waypoint maneuvers
+ - [ ] Square pattern with 90° turns
+ - [ ] Circle pattern with continuous yaw
+ - [ ] Complex multi-waypoint maneuvers
 - [ ] Parameter tuning:
-  - [ ] Velocity estimator alpha filter
-  - [ ] Convergence gate thresholds
-  - [ ] Active braking gains
-  - [ ] Cascade controller PIDs
-  - [ ] Gain scheduling curves
+ - [ ] Velocity estimator alpha filter
+ - [ ] Convergence gate thresholds
+ - [ ] Active braking gains
+ - [ ] Cascade controller PIDs
+ - [ ] Gain scheduling curves
 - [ ] Record performance metrics (overshoot, settling time, accuracy)
 - [ ] Document tuned parameters for pool testing
 
@@ -35,7 +35,7 @@
 
 ## Short Term (Pool Testing Phase)
 
-### Pool Testing Preparation 🏊
+### Pool Testing Preparation
 **Status:** Waiting for SITL completion
 
 **Pre-Pool Checklist:**
@@ -57,18 +57,18 @@
 
 #### Session 2: Control Validation (2-3 hours)
 - [ ] Depth holding tests:
-  - [ ] 0.3m depth (5 minute hold)
-  - [ ] 0.5m depth (5 minute hold)
-  - [ ] 1.0m depth (5 minute hold)
-  - [ ] 2.0m depth (5 minute hold)
+ - [ ] 0.3m depth (5 minute hold)
+ - [ ] 0.5m depth (5 minute hold)
+ - [ ] 1.0m depth (5 minute hold)
+ - [ ] 2.0m depth (5 minute hold)
 - [ ] Yaw control tests:
-  - [ ] 90° turn precision
-  - [ ] 180° turn precision
-  - [ ] 270° turn precision
-  - [ ] Continuous slow rotation
+ - [ ] 90° turn precision
+ - [ ] 180° turn precision
+ - [ ] 270° turn precision
+ - [ ] Continuous slow rotation
 - [ ] Stability tests:
-  - [ ] Hold position in current/disturbance
-  - [ ] Recovery from manual displacement
+ - [ ] Hold position in current/disturbance
+ - [ ] Recovery from manual displacement
 
 #### Session 3: Mission Validation (2-3 hours)
 - [ ] Square mission (1m × 1m pattern)
@@ -90,42 +90,42 @@
 
 ## Medium Term (Post-Pool Development)
 
-### DVL Integration - Nortek Nucleus 1000 📡
+### DVL Integration - Nortek Nucleus 1000
 **Status:** Hardware available, driver needed
 
 **Phase 1: Driver Development**
 - [ ] Research ROS 2 DVL driver options:
-  - [ ] Check for existing Nortek ROS 2 drivers
-  - [ ] Evaluate community drivers
-  - [ ] Consider writing custom driver
+ - [ ] Check for existing Nortek ROS 2 drivers
+ - [ ] Evaluate community drivers
+ - [ ] Consider writing custom driver
 - [ ] Implement MAVLink DVL driver:
-  - [ ] Parse MAVLink `VISION_POSITION_DELTA` messages
-  - [ ] Extract velocity (vx, vy, vz) from DVL
-  - [ ] Publish to `/dvl/velocity` topic
-  - [ ] Add bottom lock detection
+ - [ ] Parse MAVLink `VISION_POSITION_DELTA` messages
+ - [ ] Extract velocity (vx, vy, vz) from DVL
+ - [ ] Publish to `/dvl/velocity` topic
+ - [ ] Add bottom lock detection
 - [ ] Integrate with velocity estimator:
-  - [ ] Fuse DVL velocity with IMU acceleration
-  - [ ] Implement fallback to IMU-only mode
-  - [ ] Handle bottom lock loss gracefully
+ - [ ] Fuse DVL velocity with IMU acceleration
+ - [ ] Implement fallback to IMU-only mode
+ - [ ] Handle bottom lock loss gracefully
 
 **Phase 2: Position Estimation**
 - [ ] Dead reckoning from DVL velocity:
-  - [ ] Integrate velocity to position
-  - [ ] Reset on known waypoints
-  - [ ] Publish `/dvl/position` estimate
+ - [ ] Integrate velocity to position
+ - [ ] Reset on known waypoints
+ - [ ] Publish `/dvl/position` estimate
 - [ ] Feed into Pixhawk EKF (if possible):
-  - [ ] MAVLink `VISION_POSITION_ESTIMATE` messages
-  - [ ] Or use software UKF in ROS 2
+ - [ ] MAVLink `VISION_POSITION_ESTIMATE` messages
+ - [ ] Or use software UKF in ROS 2
 
 **Phase 3: Navigation**
 - [ ] Implement `NavigateToWaypoint` YASMIN state:
-  - [ ] Closed-loop position control
-  - [ ] Target waypoint (x, y, z)
-  - [ ] Convergence detection
+ - [ ] Closed-loop position control
+ - [ ] Target waypoint (x, y, z)
+ - [ ] Convergence detection
 - [ ] Test waypoint navigation:
-  - [ ] Single waypoint accuracy (±20cm target)
-  - [ ] Multi-waypoint sequence
-  - [ ] Return-home capability
+ - [ ] Single waypoint accuracy (±20cm target)
+ - [ ] Multi-waypoint sequence
+ - [ ] Return-home capability
 
 **Phase 4: Mission Integration**
 - [ ] Update missions to use waypoint navigation
@@ -136,23 +136,23 @@
 
 ---
 
-### Vision-Based Autonomy Enhancements 📷
+### Vision-Based Autonomy Enhancements
 
 **Custom YOLO Models:**
 - [ ] Collect training data from pool sessions:
-  - [ ] Gate poles and crossbar
-  - [ ] Red and white slalom pipes
-  - [ ] Bin symbols (downward camera)
-  - [ ] Path markers (orange, on floor)
-  - [ ] Torpedo targets
+ - [ ] Gate poles and crossbar
+ - [ ] Red and white slalom pipes
+ - [ ] Bin symbols (downward camera)
+ - [ ] Path markers (orange, on floor)
+ - [ ] Torpedo targets
 - [ ] Augment with synthetic data (varied water conditions)
 - [ ] Train YOLO11n with RoboSub prop classes:
-  - [ ] `gate_pole`, `gate_crossbar`
-  - [ ] `red_pipe`, `white_pipe`
-  - [ ] `bin_symbol_*` (chevron, taurus, scorpio, etc.)
-  - [ ] `torpedo_target`
-  - [ ] `octagon_frame`
-  - [ ] `path_marker`
+ - [ ] `gate_pole`, `gate_crossbar`
+ - [ ] `red_pipe`, `white_pipe`
+ - [ ] `bin_symbol_*` (chevron, taurus, scorpio, etc.)
+ - [ ] `torpedo_target`
+ - [ ] `octagon_frame`
+ - [ ] `path_marker`
 - [ ] Export to TensorRT for Jetson Orin Nano
 - [ ] Target mAP > 0.8 on validation set
 
@@ -172,29 +172,29 @@
 
 ---
 
-### State Machine & Mission Development 🎯
+### State Machine & Mission Development
 
 **RoboSub 2026 Task State Machines:**
-- [ ] Task 1: Begin Assessment (Gate) — ✅ Already exists
+- [ ] Task 1: Begin Assessment (Gate) [DONE] Already exists
 - [ ] Task 2: Avoid Debris (Slalom):
-  - [ ] Multi-pipe detection and tracking
-  - [ ] Slalom waypoint planning
-  - [ ] Obstacle avoidance logic
+ - [ ] Multi-pipe detection and tracking
+ - [ ] Slalom waypoint planning
+ - [ ] Obstacle avoidance logic
 - [ ] Task 3: Recon (Bins):
-  - [ ] Downward camera symbol detection
-  - [ ] Bin alignment and hover
-  - [ ] Dropper integration
+ - [ ] Downward camera symbol detection
+ - [ ] Bin alignment and hover
+ - [ ] Dropper integration
 - [ ] Task 4: Deploy (Torpedoes):
-  - [ ] Torpedo target detection
-  - [ ] Alignment and range estimation
-  - [ ] Launcher integration
-  - [ ] Acoustic pinger integration (if available)
+ - [ ] Torpedo target detection
+ - [ ] Alignment and range estimation
+ - [ ] Launcher integration
+ - [ ] Acoustic pinger integration (if available)
 - [ ] Task 5: Resupply (Octagon):
-  - [ ] Octagon frame detection
-  - [ ] Surface maneuver
-  - [ ] Grabber pickup sequence
-  - [ ] Acoustic pinger integration (if available)
-- [ ] Task 6: Return Home (Gate) — ✅ Reuse Task 1 with DVL
+ - [ ] Octagon frame detection
+ - [ ] Surface maneuver
+ - [ ] Grabber pickup sequence
+ - [ ] Acoustic pinger integration (if available)
+- [ ] Task 6: Return Home (Gate) [DONE] Reuse Task 1 with DVL
 
 **Full Competition Mission:**
 - [ ] Chain all task state machines
@@ -208,7 +208,7 @@
 
 ## Long Term (Future Enhancements)
 
-### Simulation & Testing Infrastructure 🧪
+### Simulation & Testing Infrastructure
 
 **Gazebo Integration:**
 - [ ] Connect Gazebo SITL to ROS 2 pipeline
@@ -226,7 +226,7 @@
 
 ---
 
-### Acoustic Pinger Integration 🔊
+### Acoustic Pinger Integration
 
 **Research Phase:**
 - [ ] Research hydrophone hardware options
@@ -243,22 +243,22 @@
 
 ---
 
-### Dashboard & Monitoring 📊
+### Dashboard & Monitoring
 
 **Web Dashboard:**
 - [ ] WebSocket bridge for ROS 2 topics
 - [ ] React dashboard with:
-  - [ ] Real-time vehicle state (depth, heading, battery, mode)
-  - [ ] Camera feeds with detection overlays
-  - [ ] Mission progress indicator
-  - [ ] YASMIN state visualization
-  - [ ] Diagnostics and error messages
+ - [ ] Real-time vehicle state (depth, heading, battery, mode)
+ - [ ] Camera feeds with detection overlays
+ - [ ] Mission progress indicator
+ - [ ] YASMIN state visualization
+ - [ ] Diagnostics and error messages
 
 **Timeline:** May - June 2026
 
 ---
 
-### Actuator Integration 🤖
+### Actuator Integration
 
 **Torpedo Launcher:**
 - [ ] Test launcher mechanism
@@ -292,12 +292,12 @@
 
 ### Competition Day Strategy
 **Priority order by points-per-time:**
-1. ✅ Gate (easy, fast) — guaranteed points
-2. Square/Circle validation — baseline autonomy
-3. Return Home (reuses Gate) — bonus points
-4. Slalom (if tuned) — medium difficulty
-5. Bins (if downward cam ready) — skip if not
-6. Torpedoes/Octagon (require pinger) — skip if hardware not ready
+1. [DONE] Gate (easy, fast) guaranteed points
+2. Square/Circle validation baseline autonomy
+3. Return Home (reuses Gate) bonus points
+4. Slalom (if tuned) medium difficulty
+5. Bins (if downward cam ready) skip if not
+6. Torpedoes/Octagon (require pinger) skip if hardware not ready
 
 ---
 

@@ -1,6 +1,6 @@
 # RoboSub 2026 Timeline Analysis
 
-**Competition Date:** July 2026 (assumed week 3)  
+**Competition Date:** July 2026 (assumed week 3)
 **Days Remaining:** ~100 days (from April 3, 2026)
 
 ---
@@ -9,43 +9,43 @@
 
 ```mermaid
 gantt
-    title RoboSub 2026 Development Timeline
-    dateFormat YYYY-MM-DD
-    
-    section Controls
-    Control Stack Redesign     :done, ctrl1, 2026-03-15, 2026-04-02
-    Action Servers             :active, ctrl2, 2026-04-03, 7d
-    Pool Testing Round 1       :pool1, after ctrl2, 5d
-    PID Tuning                 :pid1, after pool1, 7d
-    
-    section Perception
-    YOLO Data Collection       :vis0, 2026-04-03, 21d
-    YOLO Training (Tasks)      :vis1, 2026-04-24, 14d
-    Visual Servoing Tuning     :vis2, after vis1, 7d
-    Multi-Object Tracking      :vis3, 2026-04-15, 14d
-    
-    section Simulation
-    Gazebo SITL Integration    :sim1, 2026-04-15, 14d
-    Test World Creation        :sim2, after sim1, 7d
-    Mission Testing (Sim)      :sim3, after sim2, 21d
-    
-    section Tasks
-    Gate Task SM (refine)      :task1, 2026-04-20, 7d
-    Slalom Task SM             :task2, after task1, 7d
-    Path Task SM               :task3, after task2, 5d
-    Bins Task SM               :task4, after task3, 7d
-    Return Home SM             :task5, after task4, 5d
-    
-    section Sensors
-    DVL Driver                 :dvl1, 2026-04-10, 14d
-    DVL Integration            :dvl2, after dvl1, 14d
-    DVL Testing                :dvl3, after dvl2, 7d
-    
-    section Integration
-    Full System Test           :int1, 2026-06-01, 14d
-    TDR Submission             :milestone, tdr, 2026-06-15, 1d
-    Competition Prep           :int2, 2026-06-15, 30d
-    RoboSub 2026               :milestone, comp, 2026-07-15, 7d
+ title RoboSub 2026 Development Timeline
+ dateFormat YYYY-MM-DD
+
+ section Controls
+ Control Stack Redesign :done, ctrl1, 2026-03-15, 2026-04-02
+ Action Servers :active, ctrl2, 2026-04-03, 7d
+ Pool Testing Round 1 :pool1, after ctrl2, 5d
+ PID Tuning :pid1, after pool1, 7d
+
+ section Perception
+ YOLO Data Collection :vis0, 2026-04-03, 21d
+ YOLO Training (Tasks) :vis1, 2026-04-24, 14d
+ Visual Servoing Tuning :vis2, after vis1, 7d
+ Multi-Object Tracking :vis3, 2026-04-15, 14d
+
+ section Simulation
+ Gazebo SITL Integration :sim1, 2026-04-15, 14d
+ Test World Creation :sim2, after sim1, 7d
+ Mission Testing (Sim) :sim3, after sim2, 21d
+
+ section Tasks
+ Gate Task SM (refine) :task1, 2026-04-20, 7d
+ Slalom Task SM :task2, after task1, 7d
+ Path Task SM :task3, after task2, 5d
+ Bins Task SM :task4, after task3, 7d
+ Return Home SM :task5, after task4, 5d
+
+ section Sensors
+ DVL Driver :dvl1, 2026-04-10, 14d
+ DVL Integration :dvl2, after dvl1, 14d
+ DVL Testing :dvl3, after dvl2, 7d
+
+ section Integration
+ Full System Test :int1, 2026-06-01, 14d
+ TDR Submission :milestone, tdr, 2026-06-15, 1d
+ Competition Prep :int2, 2026-06-15, 30d
+ RoboSub 2026 :milestone, comp, 2026-07-15, 7d
 ```
 
 ---
@@ -76,21 +76,20 @@ gantt
 ## Phase Timeline
 
 ```
-                    Apr 2026         May 2026         Jun 2026         Jul 2026
-                    ─────────────────────────────────────────────────────────────
-Phase 1 (Controls)  ████████░░░░░░░░░
-                         │
-Phase 2 (Missions)       ░░░████████████████░░░░░░░░░
-                              │           │
-Phase 3 (Perception)         ░░░░████████████████░░░░░
-                                   │
-Phase 4 (Sensors)                  ░░░░░░████████████████
-                                              │
-Phase 5 (Utils)             ░░░░░░░░░░░░░░████████████████
-                    ─────────────────────────────────────────────────────────────
-                                                         ▲
-                                                    Competition
-                                                    (Jul 15-21)
+ Apr 2026 May 2026 Jun 2026 Jul 2026
+
+Phase 1 (Controls)
+
+Phase 2 (Missions)
+
+Phase 3 (Perception)
+
+Phase 4 (Sensors)
+
+Phase 5 (Utils)
+
+ Competition
+ (Jul 15-21)
 ```
 
 ---
@@ -105,7 +104,7 @@ Phase 5 (Utils)             ░░░░░░░░░░░░░░███�
 | May 31 | **Core Tasks** | Gate, Slalom, Return Home SMs working in sim |
 | Jun 15 | **TDR Submitted** | Technical Design Report complete |
 | Jun 30 | **Competition Ready** | Full mission runs autonomously |
-| Jul 15 | **RoboSub 2026** | 🏆 |
+| Jul 15 | **RoboSub 2026** | |
 
 ---
 
@@ -113,14 +112,14 @@ Phase 5 (Utils)             ░░░░░░░░░░░░░░███�
 
 ```mermaid
 graph LR
-    A[Controls Tuning] --> B[Mission Testing]
-    C[YOLO Training] --> D[Visual Servoing]
-    D --> E[Task State Machines]
-    F[DVL Integration] --> G[Waypoint Navigation]
-    G --> E
-    H[Simulation] --> I[Rapid Iteration]
-    I --> E
-    E --> J[Competition]
+ A[Controls Tuning] --> B[Mission Testing]
+ C[YOLO Training] --> D[Visual Servoing]
+ D --> E[Task State Machines]
+ F[DVL Integration] --> G[Waypoint Navigation]
+ G --> E
+ H[Simulation] --> I[Rapid Iteration]
+ I --> E
+ E --> J[Competition]
 ```
 
 ### Blocking Relationships
@@ -142,10 +141,10 @@ These can proceed independently:
 
 | Stream | Owner | Focus |
 |--------|-------|-------|
-| **Controls** | — | PID tuning, pool testing |
-| **Vision** | — | YOLO training, tracking |
-| **Sim** | — | Gazebo integration |
-| **Sensors** | — | DVL driver |
+| **Controls** | | PID tuning, pool testing |
+| **Vision** | | YOLO training, tracking |
+| **Sim** | | Gazebo integration |
+| **Sensors** | | DVL driver |
 
 ### Bottlenecks
 
@@ -191,7 +190,7 @@ These can proceed independently:
 ```
 Gate → Return Home
 ```
-**Points:** ~200  
+**Points:** ~200
 **Confidence:** Very High
 
 ### Target Mission
@@ -199,7 +198,7 @@ Gate → Return Home
 ```
 Gate → Slalom → Return Home
 ```
-**Points:** ~400  
+**Points:** ~400
 **Confidence:** High
 
 ### Full Mission (if all systems work)
@@ -207,7 +206,7 @@ Gate → Slalom → Return Home
 ```
 Gate → Slalom → Bins → Return Home
 ```
-**Points:** ~600  
+**Points:** ~600
 **Confidence:** Medium
 
 ### Stretch (with pinger)
@@ -215,7 +214,7 @@ Gate → Slalom → Bins → Return Home
 ```
 Gate → Slalom → Torpedoes → Octagon → Bins → Return Home
 ```
-**Points:** ~900+  
+**Points:** ~900+
 **Confidence:** Low
 
 ---

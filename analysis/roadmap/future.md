@@ -6,39 +6,39 @@
 
 ## RoboSub 2026 Competition Task Analysis
 
-> Theme: *"Restore and Recovery"* — underwater pipeline maintenance scenario
+> Theme: *"Restore and Recovery"* underwater pipeline maintenance scenario
 
 ### Task Summary
 
 | Task | Name | What We Have | What We Need |
 |------|------|--------------|--------------|
 | 1 | Begin Assessment (Gate) | [DONE] YOLO, visual servo, gate SM | Custom YOLO model for props |
-| 2 | Avoid Debris (Slalom) | 🟡 Detection pipeline | Multi-object tracking, slalom SM |
-| 3 | Recon (Bins) | 🟡 Camera manager | Downward cam, dropper, bin SM |
-| 4 | Deploy (Torpedoes) | 🔴 Visual servo only | Pinger, launcher, torpedo SM |
-| 5 | Resupply (Octagon) | 🟡 Surface cmd, grabber | Pinger, octagon SM, pickup sequence |
+| 2 | Avoid Debris (Slalom) | [MEDIUM] Detection pipeline | Multi-object tracking, slalom SM |
+| 3 | Recon (Bins) | [MEDIUM] Camera manager | Downward cam, dropper, bin SM |
+| 4 | Deploy (Torpedoes) | [IN PROGRESS] Visual servo only | Pinger, launcher, torpedo SM |
+| 5 | Resupply (Octagon) | [MEDIUM] Surface cmd, grabber | Pinger, octagon SM, pickup sequence |
 | 6 | Return Home (Gate) | [DONE] Reuse Task 1 | DVL for position tracking |
 
 ### Cross-Cutting Elements
 
-- **Path Markers** (orange, on pool floor) — Need downward camera + YOLO model
-- **Acoustic Pingers** (at Tasks 4 & 5) — Need hydrophone array + DOA algorithm
-- **20-Minute Time Limit** — Need mission timeout + task prioritization
+- **Path Markers** (orange, on pool floor) Need downward camera + YOLO model
+- **Acoustic Pingers** (at Tasks 4 & 5) Need hydrophone array + DOA algorithm
+- **20-Minute Time Limit** Need mission timeout + task prioritization
 
 ---
 
-## Phase 3 — Perception Stack
+## Phase 3 Perception Stack
 
 ### 3.1 Multi-Camera Setup
 
 ```mermaid
 graph TD
-    A[camera_manager] --> B[Forward Camera]
-    A --> C[Downward Camera]
-    A --> D[Upward Camera - optional]
-    B --> E[Gate/Slalom/Torpedo Detection]
-    C --> F[Bin/Path Marker Detection]
-    D --> G[Octagon Detection]
+ A[camera_manager] --> B[Forward Camera]
+ A --> C[Downward Camera]
+ A --> D[Upward Camera - optional]
+ B --> E[Gate/Slalom/Torpedo Detection]
+ C --> F[Bin/Path Marker Detection]
+ D --> G[Octagon Detection]
 ```
 
 **Tasks:**
@@ -71,11 +71,11 @@ graph TD
 
 ```mermaid
 graph LR
-    A[YOLO Detections] --> B[Hungarian Association]
-    B --> C[Kalman Update]
-    C --> D[Track Management]
-    D --> E[TrackedObjectArray]
-    D --> F[Birth/Death Logic]
+ A[YOLO Detections] --> B[Hungarian Association]
+ B --> C[Kalman Update]
+ C --> D[Track Management]
+ D --> E[TrackedObjectArray]
+ D --> F[Birth/Death Logic]
 ```
 
 **Tasks:**
@@ -85,7 +85,7 @@ graph LR
 
 ---
 
-## Phase 4 — Additional Sensors
+## Phase 4 Additional Sensors
 
 ### 4.1 DVL Integration (Nortek Nucleus 1000)
 
@@ -120,18 +120,18 @@ graph LR
 
 ---
 
-## Phase 5 — Utils & Infrastructure
+## Phase 5 Utils & Infrastructure
 
 ### 5.1 Dashboard / Digital Twin
 
 ```mermaid
 graph TD
-    A[ROS 2 Topics] --> B[WebSocket Bridge]
-    B --> C[React Dashboard]
-    C --> D[Vehicle State]
-    C --> E[Camera Feeds]
-    C --> F[Mission Progress]
-    C --> G[YASMIN State]
+ A[ROS 2 Topics] --> B[WebSocket Bridge]
+ B --> C[React Dashboard]
+ C --> D[Vehicle State]
+ C --> E[Camera Feeds]
+ C --> F[Mission Progress]
+ C --> G[YASMIN State]
 ```
 
 **Features:**
@@ -144,12 +144,12 @@ graph TD
 
 ```mermaid
 graph LR
-    A[Gazebo + ArduSub SITL] --> B[MAVLink]
-    B --> C[mavlink_inspector]
-    A --> D[ROS 2 Cameras]
-    D --> E[vision_inspector]
-    C --> F[duburi_planner]
-    E --> F
+ A[Gazebo + ArduSub SITL] --> B[MAVLink]
+ B --> C[mavlink_inspector]
+ A --> D[ROS 2 Cameras]
+ D --> E[vision_inspector]
+ C --> F[duburi_planner]
+ E --> F
 ```
 
 **Tasks:**
@@ -171,41 +171,41 @@ graph LR
 
 ```mermaid
 graph TB
-    subgraph Phase 1
-        P1[Controls Tuning]
-    end
-    
-    subgraph Phase 2
-        P2A[File Missions]
-        P2B[YASMIN SMs]
-        P2C[Feedback Integration]
-    end
-    
-    subgraph Phase 3
-        P3A[Multi-Camera]
-        P3B[Custom YOLO]
-        P3C[Multi-Object Tracking]
-    end
-    
-    subgraph Phase 4
-        P4A[DVL Integration]
-        P4B[External Heading]
-    end
-    
-    subgraph Phase 5
-        P5A[Dashboard]
-        P5B[Simulation]
-        P5C[Testing]
-    end
-    
-    P1 --> P2A
-    P1 --> P2B
-    P3A --> P3B
-    P3B --> P3C
-    P3C --> P2B
-    P4A --> P2B
-    P5B --> P5C
-    P5C --> P2B
+ subgraph Phase 1
+ P1[Controls Tuning]
+ end
+
+ subgraph Phase 2
+ P2A[File Missions]
+ P2B[YASMIN SMs]
+ P2C[Feedback Integration]
+ end
+
+ subgraph Phase 3
+ P3A[Multi-Camera]
+ P3B[Custom YOLO]
+ P3C[Multi-Object Tracking]
+ end
+
+ subgraph Phase 4
+ P4A[DVL Integration]
+ P4B[External Heading]
+ end
+
+ subgraph Phase 5
+ P5A[Dashboard]
+ P5B[Simulation]
+ P5C[Testing]
+ end
+
+ P1 --> P2A
+ P1 --> P2B
+ P3A --> P3B
+ P3B --> P3C
+ P3C --> P2B
+ P4A --> P2B
+ P5B --> P5C
+ P5C --> P2B
 ```
 
 ---
@@ -229,11 +229,11 @@ graph TB
 ### Competition Day Strategy
 
 **Priority order by points-per-time:**
-1. Gate (easy, fast) — guaranteed points
-2. Slalom (medium) — if tuned
-3. Return Home (reuses Gate) — bonus points
-4. Bins (if downward cam ready) — skip if not
-5. Torpedoes/Octagon (require pinger) — skip if hardware not ready
+1. Gate (easy, fast) guaranteed points
+2. Slalom (medium) if tuned
+3. Return Home (reuses Gate) bonus points
+4. Bins (if downward cam ready) skip if not
+5. Torpedoes/Octagon (require pinger) skip if hardware not ready
 
 ### Post-RoboSub 2026
 

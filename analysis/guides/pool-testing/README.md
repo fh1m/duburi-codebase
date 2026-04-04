@@ -5,10 +5,10 @@
 This guide provides procedures to validate all V2 control improvements and bug fixes completed in April 2026.
 
 **What's New in V2:**
-- ✅ Gravity-compensated velocity estimation
-- ✅ Cascade position/velocity control
-- ✅ Active braking and smooth ramping
-- ✅ 30 bug fixes (MAVLink, sensors, threading, control)
+- [DONE] Gravity-compensated velocity estimation
+- [DONE] Cascade position/velocity control
+- [DONE] Active braking and smooth ramping
+- [DONE] 30 bug fixes (MAVLink, sensors, threading, control)
 
 **Testing Goals:**
 1. Verify all V2 improvements work in real-world pool environment
@@ -276,7 +276,7 @@ turn right 90 50%
 delay 2
 turn left 90 50%
 delay 2
-~turn 180 50%  # Relative turn
+~turn 180 50% # Relative turn
 delay 2
 stop
 disarm
@@ -519,14 +519,14 @@ ros2 topic echo /dvl/velocity
 
 | Test | Success Criteria | V2 Improvement | Bug Fixed |
 |------|------------------|----------------|-----------|
-| Heartbeat | 2Hz rate | Was 1Hz | ✅ Failsafe timing |
-| Depth Reading | Accurate ±0.05m | Was using MSL altitude | ✅ SCALED_PRESSURE |
-| Forward Movement | No drift after stop | Active braking added | ✅ Coasting eliminated |
-| Yaw Turns | Sharp 90° turns | Convergence gates | ✅ U-turn drift |
-| Depth Hold | ±0.05m stability | Improved PID tuning | ✅ Oscillations |
-| Square Mission | Return within 0.5m | Gravity compensation | ✅ Drift accumulation |
-| RC Watchdog | Triggers in 500ms | 20Hz sending | ✅ Timeout crashes |
-| Velocity Estimate | No tilt-induced drift | Gravity compensation | ✅ False motion |
+| Heartbeat | 2Hz rate | Was 1Hz | [DONE] Failsafe timing |
+| Depth Reading | Accurate ±0.05m | Was using MSL altitude | [DONE] SCALED_PRESSURE |
+| Forward Movement | No drift after stop | Active braking added | [DONE] Coasting eliminated |
+| Yaw Turns | Sharp 90° turns | Convergence gates | [DONE] U-turn drift |
+| Depth Hold | ±0.05m stability | Improved PID tuning | [DONE] Oscillations |
+| Square Mission | Return within 0.5m | Gravity compensation | [DONE] Drift accumulation |
+| RC Watchdog | Triggers in 500ms | 20Hz sending | [DONE] Timeout crashes |
+| Velocity Estimate | No tilt-induced drift | Gravity compensation | [DONE] False motion |
 
 ## Troubleshooting
 
@@ -554,11 +554,11 @@ ros2 topic echo /dvl/velocity
 
 **Solutions:**
 1. Check depth PID gains in defaults.yaml:
-   ```yaml
-   depth_kp: 100.0  # Try reducing to 80.0
-   depth_ki: 5.0
-   depth_kd: 50.0   # Try increasing to 70.0
-   ```
+ ```yaml
+ depth_kp: 100.0 # Try reducing to 80.0
+ depth_ki: 5.0
+ depth_kd: 50.0 # Try increasing to 70.0
+ ```
 2. Verify SCALED_PRESSURE messages arriving: `ros2 topic hz /mavlink/messages/scaled_pressure`
 3. Tune deadzone compensation for vertical thrusters
 4. Add low-pass filter to depth readings if noisy
@@ -573,10 +573,10 @@ ros2 topic echo /dvl/velocity
 
 **Solutions:**
 1. Check yaw PID gains:
-   ```yaml
-   yaw_kp: 2.0     # Try reducing to 1.5
-   yaw_kd: 0.5     # Increase for more damping
-   ```
+ ```yaml
+ yaw_kp: 2.0 # Try reducing to 1.5
+ yaw_kd: 0.5 # Increase for more damping
+ ```
 2. Increase convergence threshold: `convergence_yaw_threshold: 5.0` (degrees)
 3. Recalibrate compass away from magnetic interference
 4. Check for loose wires or metal objects near Pixhawk
@@ -659,34 +659,34 @@ ros2 bag play <bagfile> --topics /duburi/state
 **Key metrics to log:**
 
 1. **Depth Accuracy**
-   - Target depth vs actual depth
-   - Settling time to reach target
-   - Steady-state error
-   - Variance while holding
+ - Target depth vs actual depth
+ - Settling time to reach target
+ - Steady-state error
+ - Variance while holding
 
 2. **Yaw Precision**
-   - Target heading vs actual heading
-   - Turn completion time
-   - Overshoot amount
-   - Hold variance
+ - Target heading vs actual heading
+ - Turn completion time
+ - Overshoot amount
+ - Hold variance
 
 3. **Movement Accuracy**
-   - Commanded distance vs actual distance
-   - Stopping distance (overshoot)
-   - Drift after stop
-   - Path deviation
+ - Commanded distance vs actual distance
+ - Stopping distance (overshoot)
+ - Drift after stop
+ - Path deviation
 
 4. **Control Performance**
-   - Control loop frequency
-   - Thrust command range used
-   - Convergence time
-   - Number of convergence failures
+ - Control loop frequency
+ - Thrust command range used
+ - Convergence time
+ - Number of convergence failures
 
 5. **System Health**
-   - MAVLink heartbeat rate
-   - RC override send rate
-   - Watchdog trigger count
-   - Sensor update rates
+ - MAVLink heartbeat rate
+ - RC override send rate
+ - Watchdog trigger count
+ - Sensor update rates
 
 **Analysis Scripts:**
 ```bash
@@ -707,8 +707,8 @@ EOF
 ### 1. Review Bag Files
 ```bash
 # Play back at different speeds
-ros2 bag play <bagfile> --rate 0.5  # Half speed
-ros2 bag play <bagfile> --rate 2.0  # Double speed
+ros2 bag play <bagfile> --rate 0.5 # Half speed
+ros2 bag play <bagfile> --rate 2.0 # Double speed
 
 # Extract specific time windows
 ros2 bag play <bagfile> --start-offset 10.0 --duration 30.0
@@ -740,11 +740,11 @@ Based on test results:
 ```yaml
 # Example updated defaults.yaml
 control:
-  depth_kp: 90.0        # Reduced from 100.0 (was oscillating)
-  yaw_kd: 0.7          # Increased from 0.5 (needed more damping)
-  
+ depth_kp: 90.0 # Reduced from 100.0 (was oscillating)
+ yaw_kd: 0.7 # Increased from 0.5 (needed more damping)
+
 convergence:
-  depth_threshold: 0.08  # Relaxed from 0.05 (too tight for pool)
+ depth_threshold: 0.08 # Relaxed from 0.05 (too tight for pool)
 ```
 
 ## Next Steps After Pool Testing
@@ -788,20 +788,20 @@ convergence:
 ## Safety Reminders
 
 **ALWAYS:**
-- ✅ Test with multiple people present
-- ✅ Have emergency stop plan ready
-- ✅ Monitor battery voltage
-- ✅ Keep tether untangled
-- ✅ Know pool depth before diving
-- ✅ Have recovery tools ready (net, pole)
+- [DONE] Test with multiple people present
+- [DONE] Have emergency stop plan ready
+- [DONE] Monitor battery voltage
+- [DONE] Keep tether untangled
+- [DONE] Know pool depth before diving
+- [DONE] Have recovery tools ready (net, pole)
 
 **NEVER:**
-- ❌ Test alone
-- ❌ Exceed safe depth limits
-- ❌ Operate with low battery (<12V)
-- ❌ Test in thunderstorm
-- ❌ Leave vehicle unattended in water
-- ❌ Run thrusters out of water
+- Test alone
+- Exceed safe depth limits
+- Operate with low battery (<12V)
+- Test in thunderstorm
+- Leave vehicle unattended in water
+- Run thrusters out of water
 
 ## Appendix: Quick Reference Commands
 
@@ -828,23 +828,23 @@ ros2 topic pub /duburi/emergency_stop std_msgs/Bool "data: true" --once
 
 ### Check System Health
 ```bash
-ros2 topic hz /duburi/state          # Should be ~10Hz
-ros2 topic hz /mavlink/from          # Should be ~50Hz+
-ros2 topic echo /duburi/diagnostics  # Check all health metrics
+ros2 topic hz /duburi/state # Should be ~10Hz
+ros2 topic hz /mavlink/from # Should be ~50Hz+
+ros2 topic echo /duburi/diagnostics # Check all health metrics
 ```
 
 ### Record Everything
 ```bash
-ros2 bag record -a  # Record ALL topics (large file)
+ros2 bag record -a # Record ALL topics (large file)
 # or
 ros2 bag record /duburi/state /duburi/diagnostics /duburi/control_command
 ```
 
 ---
 
-**Document Version:** 1.0  
-**Last Updated:** 2026-04-XX  
-**Author:** Duburi Team  
+**Document Version:** 1.0
+**Last Updated:** 2026-04-XX
+**Author:** Duburi Team
 **Status:** Ready for Pool Testing
 
-**Good luck with your pool testing! 🚁💧**
+**Good luck with your pool testing! **

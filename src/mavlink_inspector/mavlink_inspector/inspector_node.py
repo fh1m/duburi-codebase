@@ -151,7 +151,7 @@ class MavlinkInspectorNode(Node):
         
         # Enable convergence checks after movements (Phase 1)
         self._convergence_enabled = self.declare_parameter(
-            'convergence_enabled', True).value
+            'convergence_enabled', False).value
         
         # Precision yaw control (Phase 2)
         self._yaw_precision_deadband = self.declare_parameter(

@@ -2,7 +2,7 @@
 
 > Source: [RoboNation Task Descriptions](https://robonation.gitbook.io/robosub-resources/section-3-autonomy-challenge/3.2-task-descriptions)
 >
-> Theme: *"Restore and Recovery"* — the AUV acts as a maintenance robot servicing a damaged underwater pipeline.
+> Theme: *"Restore and Recovery"* the AUV acts as a maintenance robot servicing a damaged underwater pipeline.
 
 ---
 
@@ -15,11 +15,11 @@
 | 3 | Recon (Bins) | ~300 | Hard | [TODO] Needs camera + SM |
 | 4 | Deploy (Torpedoes) | ~250 | Hard | [TODO] Needs actuator + SM |
 | 5 | Resupply (Octagon) | ~200 | Hard | [TODO] Needs pinger + SM |
-| 6 | Return Home (Gate) | ~100 | Easy | 🟡 Reuse Task 1 |
+| 6 | Return Home (Gate) | ~100 | Easy | [MEDIUM] Reuse Task 1 |
 
 ---
 
-## Task 1 — Begin Assessment (Gate)
+## Task 1 Begin Assessment (Gate)
 
 ### Description
 Pass through a gate (two vertical poles with a horizontal bar). A "coin flip" mechanism determines which side the AUV enters from. After passing, the AUV selects a role (affects subsequent task order).
@@ -32,9 +32,9 @@ Pass through a gate (two vertical poles with a horizontal bar). A "coin flip" me
 | Requirement | Status | Notes |
 |-------------|--------|-------|
 | Forward camera | [DONE] | USB camera integrated |
-| Gate pole detection | 🟡 | YOLO works, needs custom model |
-| Crossbar detection | 🟡 | Needs custom model |
-| Coin flip indicator | [TODO] | Low priority — complex, low points |
+| Gate pole detection | [MEDIUM] | YOLO works, needs custom model |
+| Crossbar detection | [MEDIUM] | Needs custom model |
+| Coin flip indicator | [TODO] | Low priority complex, low points |
 
 ### Control Requirements
 | Requirement | Status | Notes |
@@ -47,18 +47,18 @@ Pass through a gate (two vertical poles with a horizontal bar). A "coin flip" me
 ### State Machine Design
 
 ```
-SearchGate ──detected──→ AlignGate ──aligned──→ DriveThrough ──→ [done]
-     │                        │
-     └──timeout──→ DeadReckonGate ──→ DriveThrough
-                        │
-                  AlignGate ──lost──→ SearchGate (retry ×3)
+SearchGate detected→ AlignGate aligned→ DriveThrough → [done]
+
+ timeout→ DeadReckonGate → DriveThrough
+
+ AlignGate lost→ SearchGate (retry ×3)
 ```
 
 **States:**
 - `SearchGate`: Rotate/search pattern until gate detected
 - `AlignGate`: PID visual servo to center gate in frame
 - `DriveThrough`: Forward drive with heading hold
-- `DeadReckonGate`: Fallback — drive on last known heading
+- `DeadReckonGate`: Fallback drive on last known heading
 
 ### Test Cases
 - [ ] Gate detected at 5m, 3m, 1m distances
@@ -69,13 +69,13 @@ SearchGate ──detected──→ AlignGate ──aligned──→ DriveThrough
 
 ### Gap Checklist
 - [ ] Train custom YOLO model on RoboSub gate props (orange poles + crossbar)
-- [ ] Implement coin-flip visual detection (or skip — low points vs complexity)
+- [ ] Implement coin-flip visual detection (or skip low points vs complexity)
 - [ ] Tune alignment PID for gate-width target (approach distance matters)
 - [ ] Test dead reckoning fallback with known heading
 
 ---
 
-## Task 2 — Avoid Debris (Slalom)
+## Task 2 Avoid Debris (Slalom)
 
 ### Description
 Navigate through 3 sets of RED and WHITE vertical pipes arranged in a slalom pattern. The AUV must pass between each pair, alternating left and right.
@@ -97,15 +97,15 @@ Navigate through 3 sets of RED and WHITE vertical pipes arranged in a slalom pat
 |-------------|--------|-------|
 | Lateral correction | [DONE] | Visual servo |
 | Heading hold | [DONE] | Yaw PID |
-| Sequential waypoints | 🟡 | Needs SM iteration |
+| Sequential waypoints | [MEDIUM] | Needs SM iteration |
 
 ### State Machine Design
 
 ```
 For each pipe pair (i = 1, 2, 3):
-  SearchPipes_i ──detected──→ IdentifySide_i ──→ AlignPass_i ──→ DriveThrough_i
-       │                                               │
-       └──timeout──→ DeadReckonToNext_i                └──lost──→ SearchPipes_i
+ SearchPipes_i detected→ IdentifySide_i → AlignPass_i → DriveThrough_i
+
+ timeout→ DeadReckonToNext_i lost→ SearchPipes_i
 ```
 
 **States:**
@@ -113,7 +113,7 @@ For each pipe pair (i = 1, 2, 3):
 - `IdentifySide`: Determine which color is left/right
 - `AlignPass`: Position to pass on correct side
 - `DriveThrough`: Navigate through gap
-- `DeadReckonToNext`: Fallback — advance to next pair
+- `DeadReckonToNext`: Fallback advance to next pair
 
 ### Test Cases
 - [ ] Both pipes detected simultaneously
@@ -131,7 +131,7 @@ For each pipe pair (i = 1, 2, 3):
 
 ---
 
-## Task 3 — Recon (Bins)
+## Task 3 Recon (Bins)
 
 ### Description
 Locate bins on a 3D pipeline structure. Drop markers into the correct bins. Bins have visual indicators (symbols/colors) that determine which bin to target.
@@ -143,7 +143,7 @@ Locate bins on a 3D pipeline structure. Drop markers into the correct bins. Bins
 ### Perception Requirements
 | Requirement | Status | Notes |
 |-------------|--------|-------|
-| Downward camera | [TODO] | **Critical** — forward cam can't see bins |
+| Downward camera | [TODO] | **Critical** forward cam can't see bins |
 | Bin outline detection | [TODO] | Needs YOLO model |
 | Symbol recognition | [TODO] | Competition-specific props |
 | Height estimation | [TODO] | For drop altitude |
@@ -151,18 +151,18 @@ Locate bins on a 3D pipeline structure. Drop markers into the correct bins. Bins
 ### Control Requirements
 | Requirement | Status | Notes |
 |-------------|--------|-------|
-| Hover precision | 🟡 | Need < 5cm drift |
+| Hover precision | [MEDIUM] | Need < 5cm drift |
 | Depth hold at altitude | [DONE] | Depth PID |
 | Downward visual servo | [TODO] | Different axis mapping |
 
 ### State Machine Design
 
 ```
-NavigateToBins ──arrived──→ SearchBins (downward cam) ──detected──→ IdentifyTarget
-     │                            │                                      │
-     └──timeout──→ [skip]         └──timeout──→ [skip]           AlignOverBin
-                                                                        │
-                                                                  DropMarker ──→ [done]
+NavigateToBins arrived→ SearchBins (downward cam) detected→ IdentifyTarget
+
+ timeout→ [skip] timeout→ [skip] AlignOverBin
+
+ DropMarker → [done]
 ```
 
 **States:**
@@ -189,7 +189,7 @@ NavigateToBins ──arrived──→ SearchBins (downward cam) ──detected�
 
 ---
 
-## Task 4 — Deploy (Torpedoes)
+## Task 4 Deploy (Torpedoes)
 
 ### Description
 Fire torpedoes at designated targets. An acoustic pinger indicates the task location. Targets have visual markers indicating valid strike zones.
@@ -203,26 +203,26 @@ Fire torpedoes at designated targets. An acoustic pinger indicates the task loca
 |-------------|--------|-------|
 | Acoustic pinger DOA | [TODO] | No hardware |
 | Target detection | [TODO] | Needs YOLO model |
-| Precise alignment | 🟡 | Tighter than gate |
+| Precise alignment | [MEDIUM] | Tighter than gate |
 
 ### Control Requirements
 | Requirement | Status | Notes |
 |-------------|--------|-------|
 | Stable hover | [DONE] | Depth + heading hold |
-| Zero drift at fire | 🟡 | Needs testing |
+| Zero drift at fire | [MEDIUM] | Needs testing |
 | Torpedo actuator | [TODO] | Mechanical not integrated |
 
 ### State Machine Design
 
 ```
 If pinger available:
-  ListenForPinger ──bearing──→ NavigateToPinger ──arrived──→ SearchTargets
+ ListenForPinger bearing→ NavigateToPinger arrived→ SearchTargets
 Else:
-  DeadReckonToArea ──→ SearchTargets
+ DeadReckonToArea → SearchTargets
 
-SearchTargets ──detected──→ AlignToTarget ──aligned──→ FireTorpedo ──→ [done]
-     │                            │
-     └──timeout──→ [skip]         └──lost──→ SearchTargets (retry ×3)
+SearchTargets detected→ AlignToTarget aligned→ FireTorpedo → [done]
+
+ timeout→ [skip] lost→ SearchTargets (retry ×3)
 ```
 
 **States:**
@@ -249,7 +249,7 @@ SearchTargets ──detected──→ AlignToTarget ──aligned──→ FireT
 
 ---
 
-## Task 5 — Resupply (Octagon)
+## Task 5 Resupply (Octagon)
 
 ### Description
 Surface inside an octagonal structure. Pick up objects from the octagon. An acoustic pinger indicates the octagon location.
@@ -268,24 +268,24 @@ Surface inside an octagonal structure. Pick up objects from the octagon. An acou
 ### Control Requirements
 | Requirement | Status | Notes |
 |-------------|--------|-------|
-| Precise positioning | 🟡 | Under octagon center |
+| Precise positioning | [MEDIUM] | Under octagon center |
 | Controlled ascent | [DONE] | `surface` command |
-| Surface stability | 🟡 | Needs testing |
+| Surface stability | [MEDIUM] | Needs testing |
 | Grabber control | [DONE] | Open/close implemented |
 
 ### State Machine Design
 
 ```
 If pinger available:
-  ListenForPinger ──bearing──→ NavigateToPinger ──arrived──→ SearchOctagon
+ ListenForPinger bearing→ NavigateToPinger arrived→ SearchOctagon
 Else:
-  DeadReckonToArea ──→ SearchOctagon
+ DeadReckonToArea → SearchOctagon
 
-SearchOctagon (upward cam) ──detected──→ CenterUnder ──centered──→ Surface
-     │                                        │
-     └──timeout──→ SurfaceBlind               └──lost──→ SearchOctagon
+SearchOctagon (upward cam) detected→ CenterUnder centered→ Surface
 
-Surface ──surfaced──→ SearchObjects ──found──→ GrabObject ──→ [done]
+ timeout→ SurfaceBlind lost→ SearchOctagon
+
+Surface surfaced→ SearchObjects found→ GrabObject → [done]
 ```
 
 **States:**
@@ -304,7 +304,7 @@ Surface ──surfaced──→ SearchObjects ──found──→ GrabObject �
 - [ ] Grabber secures object successfully
 
 ### Gap Checklist
-- [ ] Acoustic pinger (shared with Task 4 — one hardware investment serves both)
+- [ ] Acoustic pinger (shared with Task 4 one hardware investment serves both)
 - [ ] Upward or downward camera for octagon detection
 - [ ] Octagon detection model (geometric shape detection or YOLO)
 - [ ] Object detection and grab sequence state machine
@@ -313,7 +313,7 @@ Surface ──surfaced──→ SearchObjects ──found──→ GrabObject �
 
 ---
 
-## Task 6 — Return Home (Gate)
+## Task 6 Return Home (Gate)
 
 ### Description
 Return through the starting gate from the opposite direction.
@@ -325,21 +325,21 @@ Return through the starting gate from the opposite direction.
 | Requirement | Status | Notes |
 |-------------|--------|-------|
 | Gate detection | [DONE] | Same as Task 1 |
-| Reverse approach | 🟡 | May look different |
+| Reverse approach | [MEDIUM] | May look different |
 
 ### Control Requirements
 | Requirement | Status | Notes |
 |-------------|--------|-------|
 | 180° turn | [DONE] | Yaw PID |
-| Long-range navigation | 🟡 | DVL/dead reckoning |
+| Long-range navigation | [MEDIUM] | DVL/dead reckoning |
 | Gate alignment | [DONE] | Reuse Task 1 |
 
 ### State Machine Design
 
 ```
-TurnAround (180° from start heading) ──→ NavigateHome (reverse heading, timed)
-     │                                          │
-     └──→ SearchGate (reuse Task 1) ──→ AlignGate ──→ DriveThrough ──→ [done]
+TurnAround (180° from start heading) → NavigateHome (reverse heading, timed)
+
+ → SearchGate (reuse Task 1) → AlignGate → DriveThrough → [done]
 ```
 
 ### Test Cases
@@ -372,26 +372,26 @@ TurnAround (180° from start heading) ──→ NavigateHome (reverse heading, t
 
 ```mermaid
 flowchart LR
-    START --> Gate
-    Gate --> Slalom
-    Slalom --> Bins
-    Bins --> Torpedoes
-    Torpedoes --> Octagon
-    Octagon --> ReturnHome
-    ReturnHome --> END
-    
-    style Gate fill:#90EE90
-    style Slalom fill:#FFD700
-    style Bins fill:#FF6B6B
-    style Torpedoes fill:#FF6B6B
-    style Octagon fill:#FF6B6B
-    style ReturnHome fill:#90EE90
+ START --> Gate
+ Gate --> Slalom
+ Slalom --> Bins
+ Bins --> Torpedoes
+ Torpedoes --> Octagon
+ Octagon --> ReturnHome
+ ReturnHome --> END
+
+ style Gate fill:#90EE90
+ style Slalom fill:#FFD700
+ style Bins fill:#FF6B6B
+ style Torpedoes fill:#FF6B6B
+ style Octagon fill:#FF6B6B
+ style ReturnHome fill:#90EE90
 ```
 
 **Priority Order (points-per-time):**
-1. Gate (easy, fast) — **must complete**
-2. Slalom (medium) — **high value**
-3. Return Home (reuses Task 1) — **easy points**
+1. Gate (easy, fast) **must complete**
+2. Slalom (medium) **high value**
+3. Return Home (reuses Task 1) **easy points**
 4. Bins (if downward cam ready)
 5. Torpedoes (if pinger ready)
 6. Octagon (if pinger ready)

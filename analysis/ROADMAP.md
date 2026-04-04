@@ -1,11 +1,11 @@
-# ROADMAP — Duburi 4.2  to  RoboSub 2026
+# ROADMAP Duburi 4.2 to RoboSub 2026
 
 > NOTE: **This document has been reorganized!** See the new structure in [`roadmap/`](roadmap/):
 >
 > | Document | Description |
 > |----------|-------------|
 > | [roadmap/README.md](roadmap/README.md) | Overview with visual timeline |
-> | [roadmap/completed.md](roadmap/completed.md) | ✅ **V2 Complete + All bugs fixed!** |
+> | [roadmap/completed.md](roadmap/completed.md) | [DONE] **V2 Complete + All bugs fixed!** |
 > | [roadmap/current.md](roadmap/current.md) | Active: SITL validation & pool testing |
 > | [roadmap/pending.md](roadmap/pending.md) | Upcoming: DVL, missions, competition prep |
 > | [roadmap/future.md](roadmap/future.md) | Long-term planned features |
@@ -17,15 +17,15 @@
 
 > **Living document.** Check off items as they're completed. Last updated: 2026-04-03.
 >
-> **Mission:** Win RoboSub 2026. Theme: *"Restore and Recovery"* — underwater pipeline maintenance scenario.
+> **Mission:** Win RoboSub 2026. Theme: *"Restore and Recovery"* underwater pipeline maintenance scenario.
 >
 > **Constraint:** Small team (~15), Jetson Orin Nano (8 GB), single vehicle, limited pool time. Every engineering-hour must count.
 
-**🎉 MAJOR MILESTONE (April 3, 2026): V2 Control Stack + Bug Fixes COMPLETE! 🎉**
-- ✅ All 5 V2 features implemented (velocity estimator, convergence gates, active braking, cascade control, gain scheduling)
-- ✅ All 30 bugs fixed (3 CRITICAL, 7 HIGH, 10 MEDIUM, 6 LOW, 4 INFO)
-- ✅ Build passing, ready for SITL validation and pool testing
-- 📋 See [Bug Fix Completion Report](roadmap/bugfix-completion-report.md)
+** MAJOR MILESTONE (April 3, 2026): V2 Control Stack + Bug Fixes COMPLETE! **
+- [DONE] All 5 V2 features implemented (velocity estimator, convergence gates, active braking, cascade control, gain scheduling)
+- [DONE] All 30 bugs fixed (3 CRITICAL, 7 HIGH, 10 MEDIUM, 6 LOW, 4 INFO)
+- [DONE] Build passing, ready for SITL validation and pool testing
+- See [Bug Fix Completion Report](roadmap/bugfix-completion-report.md)
 
 ---
 
@@ -33,11 +33,11 @@
 
 1. [Development So Far](#1-development-so-far)
 2. [RoboSub 2026 Competition Task Analysis](#2-robosub-2026-competition-task-analysis)
-3. [Phase 1 — Refine Controls](#3-phase-1--refine-controls)
-4. [Phase 2 — Autonomous Missions](#4-phase-2--autonomous-missions)
-5. [Phase 3 — Perception Stack](#5-phase-3--perception-stack)
-6. [Phase 4 — Additional Sensors](#6-phase-4--additional-sensors)
-7. [Phase 5 — Utils & Infrastructure](#7-phase-5--utils--infrastructure)
+3. [Phase 1 Refine Controls](#3-phase-1--refine-controls)
+4. [Phase 2 Autonomous Missions](#4-phase-2--autonomous-missions)
+5. [Phase 3 Perception Stack](#5-phase-3--perception-stack)
+6. [Phase 4 Additional Sensors](#6-phase-4--additional-sensors)
+7. [Phase 5 Utils & Infrastructure](#7-phase-5--utils--infrastructure)
 8. [Timeline & Dependencies](#8-timeline--dependencies)
 9. [Risk Register](#9-risk-register)
 
@@ -51,57 +51,56 @@ The Duburi 4.2 stack is a **10-package, 80-file** ROS 2 Humble codebase with:
 
 | Layer | Status | Details |
 |-------|--------|---------|
-| **MAVLink Bridge** | ✅ Production-ready | 7-module inspector: serial I/O, command dispatch, PID controllers, telemetry, RC override at 20 Hz |
-| **Control System V2** | ✅ **COMPLETE** | **Velocity estimator, convergence gates, active braking, cascade control, gain scheduling** |
-| **Control System V1** | ✅ Functional | Software depth PID + yaw PID, trapezoidal PWM ramp, 4-layer RC override, `just_*` instant variants |
-| **Command System** | ✅ Rich | 30+ commands: `move`, `go`, `cruise`, `at`, `just_*`, diagonals, PID depth/yaw, `~` prefix convention |
-| **Bug Fixes** | ✅ **ALL FIXED** | **30/30 issues resolved (100%) - 3 CRITICAL, 7 HIGH, 10 MEDIUM, 6 LOW, 4 INFO** |
-| **Interactive CLI** | ✅ Complete | `duburi_runner` REPL with history, file-based missions, chained commands, status dashboard |
-| **Mission Planner** | 🟡 Partial | YASMIN HFSM in `duburi_planner` — 8 reusable states, 2 missions (gate, demo_square). Needs 4 more task SMs |
-| **Vision Pipeline** | ✅ Functional | YOLO11n on CUDA (20-25 FPS on Orin Nano), Kalman tracking, PID visual servoing, multi-camera manager |
-| **Feedback System** | ✅ Implemented | `/driver/feedback` with `accepted`/`reached`/`completed`/`rejected` status + error magnitude |
-| **Teleop** | ✅ Implemented | `TeleopCommand` on `/driver/teleop` with multi-axis support + idle detection |
-| **BlueOS Integration** | ✅ Functional | REST API client for system monitoring, parameter management, endpoint health checks |
-| **Logging** | ✅ Functional | Session-based CSV/JSON logging with rotation |
-| **Documentation** | ✅ Extensive | 26+ analysis documents + comprehensive README + V2 guides |
-| **Simulation** | 🔴 **NEXT UP** | **SITL validation needed before pool testing** |
-| **DVL** | 🔴 Hardware only | Nortek Nucleus 1000 available, no ROS 2 driver integrated |
-| **Actuators** | 🟡 Grabber only | Open/close servo. Torpedo launcher and dropper not integrated |
-| **Acoustic Pinger** | 🔴 None | No hardware or software |
+| **MAVLink Bridge** | [DONE] Production-ready | 7-module inspector: serial I/O, command dispatch, PID controllers, telemetry, RC override at 20 Hz |
+| **Control System V2** | [DONE] **COMPLETE** | **Velocity estimator, convergence gates, active braking, cascade control, gain scheduling** |
+| **Control System V1** | [DONE] Functional | Software depth PID + yaw PID, trapezoidal PWM ramp, 4-layer RC override, `just_*` instant variants |
+| **Command System** | [DONE] Rich | 30+ commands: `move`, `go`, `cruise`, `at`, `just_*`, diagonals, PID depth/yaw, `~` prefix convention |
+| **Bug Fixes** | [DONE] **ALL FIXED** | **30/30 issues resolved (100%) - 3 CRITICAL, 7 HIGH, 10 MEDIUM, 6 LOW, 4 INFO** |
+| **Interactive CLI** | [DONE] Complete | `duburi_runner` REPL with history, file-based missions, chained commands, status dashboard |
+| **Mission Planner** | [MEDIUM] Partial | YASMIN HFSM in `duburi_planner` 8 reusable states, 2 missions (gate, demo_square). Needs 4 more task SMs |
+| **Vision Pipeline** | [DONE] Functional | YOLO11n on CUDA (20-25 FPS on Orin Nano), Kalman tracking, PID visual servoing, multi-camera manager |
+| **Feedback System** | [DONE] Implemented | `/driver/feedback` with `accepted`/`reached`/`completed`/`rejected` status + error magnitude |
+| **Teleop** | [DONE] Implemented | `TeleopCommand` on `/driver/teleop` with multi-axis support + idle detection |
+| **BlueOS Integration** | [DONE] Functional | REST API client for system monitoring, parameter management, endpoint health checks |
+| **Logging** | [DONE] Functional | Session-based CSV/JSON logging with rotation |
+| **Documentation** | [DONE] Extensive | 26+ analysis documents + comprehensive README + V2 guides |
+| **Simulation** | [IN PROGRESS] **NEXT UP** | **SITL validation needed before pool testing** |
+| **DVL** | [IN PROGRESS] Hardware only | Nortek Nucleus 1000 available, no ROS 2 driver integrated |
+| **Actuators** | [MEDIUM] Grabber only | Open/close servo. Torpedo launcher and dropper not integrated |
+| **Acoustic Pinger** | [IN PROGRESS] None | No hardware or software |
 
 ### Architecture Diagram (Current)
 
 ```
-                     ┌─── CONTROLS ────────────────────┐   ┌──── PERCEPTION ──────────┐
-                     │                                  │   │                           │
-                     │  Pixhawk 2.4.8 (/dev/ttyACM0)   │   │  USB Camera(s)            │
-                     │          │                       │   │       │                    │
-                     │  mavlink_inspector (7 modules)   │   │  vision_inspector          │
-                     │  ├─ connection_manager            │   │  (camera_manager)          │
-                     │  ├─ telemetry_parser              │   │       │                    │
-                     │  ├─ command_handler               │   │  /camera/<name>/image_raw  │
-                     │  ├─ movement_commands             │   │       │                    │
-                     │  ├─ rc_controller                 │   │  vision (detector_node)    │
-                     │  ├─ pid_controller ×2             │   │       │                    │
-                     │  └─ inspector_node                │   │  /vision/detections        │
-                     │          │                       │   │       │                    │
-                     │  /mavlink/vehicle_state           │   │  alignment_controller      │
-                     │  /mavlink/events                  │   │  (PID visual servo)        │
-                     │  /mavlink/diagnostics             │   │       │                    │
-                     │  /driver/feedback                 │   └───────┼────────────────────┘
-                     │          │                       │           │
-                     │  /driver/command ◄───────────────┼───────────┘
-                     │  /driver/teleop                  │
-                     │          │                       │
-                     │  ┌───────┴──────────┐            │
-                     │  │ mavlink_runner   │            │     ┌──────────────────┐
-                     │  │ mission_executor │            │     │ duburi_planner   │
-                     │  │ teleop_driver    │            │     │ (YASMIN HFSM)    │
-                     │  └──────────────────┘            │     │  to  /driver/command│
-                     │                                  │     └──────────────────┘
-                     │  mavlink_logger  to  logs/           │
-                     │  duburi_blueos  to  /blueos/*        │
-                     └──────────────────────────────────┘
+ CONTROLS PERCEPTION
+
+ Pixhawk 2.4.8 (/dev/ttyACM0) USB Camera(s)
+
+ mavlink_inspector (7 modules) vision_inspector
+ connection_manager (camera_manager)
+ telemetry_parser
+ command_handler /camera/<name>/image_raw
+ movement_commands
+ rc_controller vision (detector_node)
+ pid_controller ×2
+ inspector_node /vision/detections
+
+ /mavlink/vehicle_state alignment_controller
+ /mavlink/events (PID visual servo)
+ /mavlink/diagnostics
+ /driver/feedback
+
+ /driver/command
+ /driver/teleop
+
+ mavlink_runner
+ mission_executor duburi_planner
+ teleop_driver (YASMIN HFSM)
+ to /driver/command
+
+ mavlink_logger to logs/
+ duburi_blueos to /blueos/*
+
 ```
 
 ---
@@ -110,9 +109,9 @@ The Duburi 4.2 stack is a **10-package, 80-file** ROS 2 Humble codebase with:
 
 > Source: [RoboNation Task Descriptions](https://robonation.gitbook.io/robosub-resources/section-3-autonomy-challenge/3.2-task-descriptions)
 >
-> Theme: *"Restore and Recovery"* — the AUV acts as a maintenance robot servicing a damaged underwater pipeline.
+> Theme: *"Restore and Recovery"* the AUV acts as a maintenance robot servicing a damaged underwater pipeline.
 
-### 2.1 Task 1 — Begin Assessment (Gate)
+### 2.1 Task 1 Begin Assessment (Gate)
 
 **What:** Pass through a gate (two vertical poles with a horizontal bar). A "coin flip" mechanism determines which side the AUV enters from. After passing, the AUV selects a role (affects subsequent task order).
 
@@ -120,40 +119,40 @@ The Duburi 4.2 stack is a **10-package, 80-file** ROS 2 Humble codebase with:
 
 **First Principles Analysis:**
 - **Core challenge:** Detect two vertical poles + crossbar, determine center, drive through.
-- **Perception need:** Forward camera, YOLO model trained on gate poles (orange/white), bounding box center  to  alignment target.
+- **Perception need:** Forward camera, YOLO model trained on gate poles (orange/white), bounding box center to alignment target.
 - **Control need:** `go_forward` with heading hold + visual servo lateral correction. Depth hold at gate height.
-- **Failure mode:** Gate not detected (sun glare, turbidity)  to  fallback to dead reckoning on known heading.
+- **Failure mode:** Gate not detected (sun glare, turbidity) to fallback to dead reckoning on known heading.
 
 **What Duburi Has:**
 - [DONE] YOLO detection pipeline with Kalman tracking
 - [DONE] PID visual servoing (lateral + vertical + forward)
 - [DONE] `go_forward` with heading PID
-- [DONE] YASMIN gate mission (`gate.py`) with search  to  align  to  drive-through
+- [DONE] YASMIN gate mission (`gate.py`) with search to align to drive-through
 - [TODO] No coin-flip detection (requires reading a visual indicator)
 - [TODO] No custom YOLO model for RoboSub props (using generic COCO model)
 
 **What Other Teams Do:**
 - **Bumblebee:** YOLO + XFeat feature matching for precise pole localization, PnP for distance estimate, Selector fallback to dead reckoning.
-- **Desert WAVE:** Surveyed GPS waypoints — drives to gate location without vision, HSV color detection as backup.
+- **Desert WAVE:** Surveyed GPS waypoints drives to gate location without vision, HSV color detection as backup.
 
 **Our Approach:**
 ```
-SearchGate ──detected── to  AlignGate ──aligned── to  DriveThrough ── to  [done]
-     │                        │
-     └──timeout── to  DeadReckonGate ── to  DriveThrough
-                        │
-                  AlignGate ──lost── to  SearchGate (retry ×3)
+SearchGate detected to AlignGate aligned to DriveThrough to [done]
+
+ timeout to DeadReckonGate to DriveThrough
+
+ AlignGate lost to SearchGate (retry ×3)
 ```
 
 **Gap Checklist:**
 - [ ] Train custom YOLO model on RoboSub gate props (orange poles + crossbar)
-- [ ] Implement coin-flip visual detection (or skip — low points vs complexity)
+- [ ] Implement coin-flip visual detection (or skip low points vs complexity)
 - [ ] Tune alignment PID for gate-width target (approach distance matters)
 - [ ] Test dead reckoning fallback with known heading
 
 ---
 
-### 2.2 Task 2 — Avoid Debris (Slalom)
+### 2.2 Task 2 Avoid Debris (Slalom)
 
 **What:** Navigate through 3 sets of RED and WHITE vertical pipes arranged in a slalom pattern. The AUV must pass between each pair, alternating left and right.
 
@@ -167,7 +166,7 @@ SearchGate ──detected── to  AlignGate ──aligned── to  DriveThrou
 
 **What Duburi Has:**
 - [DONE] YOLO detection (can distinguish colors if model is trained)
-- [DONE] Kalman tracking (currently single-object — needs extension)
+- [DONE] Kalman tracking (currently single-object needs extension)
 - [DONE] Lateral + forward visual servo
 - [TODO] No slalom state machine
 - [TODO] Single-object tracker won't handle multiple pipes simultaneously
@@ -180,9 +179,9 @@ SearchGate ──detected── to  AlignGate ──aligned── to  DriveThrou
 **Our Approach (Proposed):**
 ```
 For each pipe pair (i = 1, 2, 3):
-  SearchPipes_i ──detected── to  IdentifySide_i ── to  AlignPass_i ── to  DriveThrough_i
-       │                                               │
-       └──timeout── to  DeadReckonToNext_i                └──lost── to  SearchPipes_i
+ SearchPipes_i detected to IdentifySide_i to AlignPass_i to DriveThrough_i
+
+ timeout to DeadReckonToNext_i lost to SearchPipes_i
 ```
 
 **Gap Checklist:**
@@ -194,7 +193,7 @@ For each pipe pair (i = 1, 2, 3):
 
 ---
 
-### 2.3 Task 3 — Recon (Bins)
+### 2.3 Task 3 Recon (Bins)
 
 **What:** Locate bins on a 3D pipeline structure. Drop markers into the correct bins. Bins have visual indicators (symbols/colors) that determine which bin to target.
 
@@ -202,7 +201,7 @@ For each pipe pair (i = 1, 2, 3):
 
 **First Principles Analysis:**
 - **Core challenge:** Downward-looking detection of bins, marker identification, precise positioning above target, actuator release.
-- **Perception need:** **Downward camera** (critical — forward camera can't see bins below). Detect bin outlines + symbols. Determine which bin matches the mission target.
+- **Perception need:** **Downward camera** (critical forward camera can't see bins below). Detect bin outlines + symbols. Determine which bin matches the mission target.
 - **Control need:** Hover over target bin with < 5cm precision. Depth hold at drop altitude. Zero lateral drift during drop.
 - **Failure mode:** Bin symbol misidentification (wrong bin), lateral drift during drop, dropper actuator failure.
 
@@ -220,11 +219,11 @@ For each pipe pair (i = 1, 2, 3):
 
 **Our Approach (Proposed):**
 ```
-NavigateToBins ──arrived── to  SearchBins (downward cam) ──detected── to  IdentifyTarget
-     │                            │                                      │
-     └──timeout── to  [skip]         └──timeout── to  [skip]           AlignOverBin
-                                                                        │
-                                                                  DropMarker ── to  [done]
+NavigateToBins arrived to SearchBins (downward cam) detected to IdentifyTarget
+
+ timeout to [skip] timeout to [skip] AlignOverBin
+
+ DropMarker to [done]
 ```
 
 **Gap Checklist:**
@@ -237,7 +236,7 @@ NavigateToBins ──arrived── to  SearchBins (downward cam) ──detected�
 
 ---
 
-### 2.4 Task 4 — Deploy (Torpedoes)
+### 2.4 Task 4 Deploy (Torpedoes)
 
 **What:** Fire torpedoes at designated targets. An acoustic pinger indicates the task location. Targets have visual markers indicating valid strike zones.
 
@@ -245,7 +244,7 @@ NavigateToBins ──arrived── to  SearchBins (downward cam) ──detected�
 
 **First Principles Analysis:**
 - **Core challenge:** Navigate to task area (acoustic pinger), detect torpedo targets, align precisely, fire.
-- **Perception need:** Acoustic pinger detection for navigation. Forward camera for target detection. Precise alignment (tighter than gate — torpedo travel path must intersect target).
+- **Perception need:** Acoustic pinger detection for navigation. Forward camera for target detection. Precise alignment (tighter than gate torpedo travel path must intersect target).
 - **Control need:** Stable hover at firing distance. Zero angular drift during fire. Heading + depth + lateral all locked.
 - **Failure mode:** Miss due to alignment error at fire moment, pinger localization error, torpedo mechanism jam.
 
@@ -264,13 +263,13 @@ NavigateToBins ──arrived── to  SearchBins (downward cam) ──detected�
 **Our Approach (Proposed):**
 ```
 If pinger available:
-  ListenForPinger ──bearing── to  NavigateToPinger ──arrived── to  SearchTargets
+ ListenForPinger bearing to NavigateToPinger arrived to SearchTargets
 Else:
-  DeadReckonToArea ── to  SearchTargets
+ DeadReckonToArea to SearchTargets
 
-SearchTargets ──detected── to  AlignToTarget ──aligned── to  FireTorpedo ── to  [done]
-     │                            │
-     └──timeout── to  [skip]         └──lost── to  SearchTargets (retry ×3)
+SearchTargets detected to AlignToTarget aligned to FireTorpedo to [done]
+
+ timeout to [skip] lost to SearchTargets (retry ×3)
 ```
 
 **Gap Checklist:**
@@ -283,7 +282,7 @@ SearchTargets ──detected── to  AlignToTarget ──aligned── to  Fir
 
 ---
 
-### 2.5 Task 5 — Resupply (Octagon)
+### 2.5 Task 5 Resupply (Octagon)
 
 **What:** Surface inside an octagonal structure. Pick up objects from the octagon. An acoustic pinger indicates the octagon location.
 
@@ -304,25 +303,25 @@ SearchTargets ──detected── to  AlignToTarget ──aligned── to  Fir
 - [TODO] No object pickup sequence
 
 **What Other Teams Do:**
-- **Bumblebee:** Pinger DOA  to  navigate  to  upward camera detects octagon  to  center  to  surface  to  pick objects with manipulator.
+- **Bumblebee:** Pinger DOA to navigate to upward camera detects octagon to center to surface to pick objects with manipulator.
 - **Desert WAVE:** Surveyed octagon location, drive to waypoint, surface.
 
 **Our Approach (Proposed):**
 ```
 If pinger available:
-  ListenForPinger ──bearing── to  NavigateToPinger ──arrived── to  SearchOctagon
+ ListenForPinger bearing to NavigateToPinger arrived to SearchOctagon
 Else:
-  DeadReckonToArea ── to  SearchOctagon
+ DeadReckonToArea to SearchOctagon
 
-SearchOctagon (upward cam) ──detected── to  CenterUnder ──centered── to  Surface
-     │                                        │
-     └──timeout── to  SurfaceBlind               └──lost── to  SearchOctagon
+SearchOctagon (upward cam) detected to CenterUnder centered to Surface
 
-Surface ──surfaced── to  SearchObjects ──found── to  GrabObject ── to  [done]
+ timeout to SurfaceBlind lost to SearchOctagon
+
+Surface surfaced to SearchObjects found to GrabObject to [done]
 ```
 
 **Gap Checklist:**
-- [ ] Acoustic pinger (shared with Task 4 — one hardware investment serves both)
+- [ ] Acoustic pinger (shared with Task 4 one hardware investment serves both)
 - [ ] Upward or downward camera for octagon detection
 - [ ] Octagon detection model (geometric shape detection or YOLO)
 - [ ] Object detection and grab sequence state machine
@@ -331,7 +330,7 @@ Surface ──surfaced── to  SearchObjects ──found── to  GrabObject 
 
 ---
 
-### 2.6 Task 6 — Return Home (Gate)
+### 2.6 Task 6 Return Home (Gate)
 
 **What:** Return through the starting gate from the opposite direction.
 
@@ -351,9 +350,9 @@ Surface ──surfaced── to  SearchObjects ──found── to  GrabObject 
 
 **Our Approach:**
 ```
-TurnAround (180° from start heading) ── to  NavigateHome (reverse heading, timed)
-     │
-     └── to  SearchGate (reuse Task 1) ── to  AlignGate ── to  DriveThrough ── to  [done]
+TurnAround (180° from start heading) to NavigateHome (reverse heading, timed)
+
+ to SearchGate (reuse Task 1) to AlignGate to DriveThrough to [done]
 ```
 
 **Gap Checklist:**
@@ -367,9 +366,9 @@ TurnAround (180° from start heading) ── to  NavigateHome (reverse heading, 
 
 **Path Markers (ORANGE, ~4ft × 6in):**
 - Placed on pool floor between tasks to guide the AUV.
-- Downward camera can detect them  to  heading correction.
+- Downward camera can detect them to heading correction.
 - [ ] Train YOLO model on orange path markers
-- [ ] Implement path-marker-follow state (detect  to  align heading  to  advance)
+- [ ] Implement path-marker-follow state (detect to align heading to advance)
 
 **Acoustic Pingers (at Torpedoes + Octagon):**
 - 25-40 kHz pulsed signals.
@@ -379,29 +378,29 @@ TurnAround (180° from start heading) ── to  NavigateHome (reverse heading, 
 
 **20-Minute Time Limit:**
 - Must prioritize tasks by points-per-time ratio.
-- Gate (easy, fast)  to  Slalom (medium)  to  Bins (if downward cam ready)  to  Return Home.
-- Torpedoes and Octagon require pinger — skip if hardware not ready.
+- Gate (easy, fast) to Slalom (medium) to Bins (if downward cam ready) to Return Home.
+- Torpedoes and Octagon require pinger skip if hardware not ready.
 - [ ] Implement mission timeout in top-level YASMIN SM (skip remaining tasks, go to Return Home)
 - [ ] Profile per-task time in simulation
 
 ---
 
-## 3. Phase 1 — Refine Controls
+## 3. Phase 1 Refine Controls
 
 > **Goal:** Make the AUV's motion smooth, accurate, and robust. Every subsequent phase depends on reliable control.
 >
-> **Status:** ✅ **V2 CONTROL STACK COMPLETE** — All 5 advanced features implemented
-> - ✅ Velocity Estimator (IMU integration with gravity compensation)
-> - ✅ Convergence Gates (position & velocity thresholds)
-> - ✅ Active Braking (deceleration near waypoints)
-> - ✅ Cascade Position/Velocity Control
-> - ✅ Gain Scheduling (speed-adaptive gains)
+> **Status:** [DONE] **V2 CONTROL STACK COMPLETE** All 5 advanced features implemented
+> - [DONE] Velocity Estimator (IMU integration with gravity compensation)
+> - [DONE] Convergence Gates (position & velocity thresholds)
+> - [DONE] Active Braking (deceleration near waypoints)
+> - [DONE] Cascade Position/Velocity Control
+> - [DONE] Gain Scheduling (speed-adaptive gains)
 >
 > **Next:** SITL validation → Pool testing → DVL integration
 
 ### 3.1 Depth PID Tuning
 
-**Status:** ✅ V2 cascade control implemented, ready for SITL tuning
+**Status:** [DONE] V2 cascade control implemented, ready for SITL tuning
 
 - [ ] SITL-test cascade controller at multiple depths (0.3m, 0.5m, 1.0m, 2.0m)
 - [ ] Document steady-state error, overshoot, and settling time at each depth
@@ -413,18 +412,18 @@ TurnAround (180° from start heading) ── to  NavigateHome (reverse heading, 
 
 ### 3.2 Yaw PID Tuning
 
-**Status:** ✅ V1 yaw control working, V2 adds gain scheduling
+**Status:** [DONE] V1 yaw control working, V2 adds gain scheduling
 
 - [ ] SITL-test yaw PID (kp=2.0, ki=0.05, kd=0.5) for 90°, 180°, and 270° turns
 - [ ] Test gain scheduling: verify gains adapt with vehicle speed
 - [ ] Measure heading accuracy after `go_forward` (does it hold heading under thrust?)
 - [ ] Test `~turn` precision: command 90° turn, measure actual turn
-- [ ] Tune for minimum overshoot — competition tasks need precise heading
+- [ ] Tune for minimum overshoot competition tasks need precise heading
 - [ ] Pool-validate SITL-tuned parameters
 
 ### 3.3 Velocity Estimator Tuning
 
-**Status:** ✅ Implemented, needs parameter tuning
+**Status:** [DONE] Implemented, needs parameter tuning
 
 - [ ] SITL-test alpha filter value (currently configurable)
 - [ ] Validate gravity compensation accuracy (compare IMU vs ground truth)
@@ -434,7 +433,7 @@ TurnAround (180° from start heading) ── to  NavigateHome (reverse heading, 
 
 ### 3.4 Active Braking Tuning
 
-**Status:** ✅ Implemented, needs gain tuning
+**Status:** [DONE] Implemented, needs gain tuning
 
 - [ ] SITL-test brake gain parameter
 - [ ] Measure overshoot reduction vs non-braking mode
@@ -444,7 +443,7 @@ TurnAround (180° from start heading) ── to  NavigateHome (reverse heading, 
 
 ### 3.5 Thruster Characterization
 
-**Status:** ✅ V1 complete, V2 ready for testing
+**Status:** [DONE] V1 complete, V2 ready for testing
 
 - [ ] Measure actual thrust vs PWM curve (nonlinear at extremes)
 - [ ] Verify trapezoidal ramp rate is appropriate for pool conditions (too slow = sluggish, too fast = overshoot)
@@ -453,7 +452,7 @@ TurnAround (180° from start heading) ── to  NavigateHome (reverse heading, 
 
 ### 3.6 Visual Servo Tuning
 
-**Status:** ✅ V1 working, ready for pool testing
+**Status:** [DONE] V1 working, ready for pool testing
 
 - [ ] Tune alignment controller PIDs for gate-sized target at 1-3m range
 - [ ] Measure alignment settling time and precision (±pixels → ±cm at target distance)
@@ -462,7 +461,7 @@ TurnAround (180° from start heading) ── to  NavigateHome (reverse heading, 
 
 ### 3.7 Motion Smoothness
 
-**Status:** ✅ V2 improvements implemented
+**Status:** [DONE] V2 improvements implemented
 
 - [ ] SITL-profile jitter in PID output during steady-state hold (depth + yaw)
 - [ ] Test convergence gates prevent oscillation at waypoints
@@ -472,35 +471,35 @@ TurnAround (180° from start heading) ── to  NavigateHome (reverse heading, 
 
 ---
 
-## 4. Phase 2 — Autonomous Missions
+## 4. Phase 2 Autonomous Missions
 
-> **Goal:** The AUV performs competition tasks autonomously — first via file-based missions, then via YASMIN state machine planner.
+> **Goal:** The AUV performs competition tasks autonomously first via file-based missions, then via YASMIN state machine planner.
 
 ### 4.1 File-Based Mission Testing
 
 - [ ] Write `.txt` mission files for each competition task approach pattern
 - [ ] Test gate approach: `arm; ~depth 0.5; go forward <heading> 50% 8s; stop; surface; disarm`
 - [ ] Test slalom pattern: series of `go forward-right`, `go forward-left` with heading holds
-- [ ] Use file missions as **regression baselines** — if YASMIN produces worse results, debug against file mission
+- [ ] Use file missions as **regression baselines** if YASMIN produces worse results, debug against file mission
 
-### 4.2 YASMIN State Machine — Complete Task Coverage
+### 4.2 YASMIN State Machine Complete Task Coverage
 
 **Currently implemented:** `gate.py`, `demo_square.py`
 
 - [ ] **Slalom SM:** 3 pipe-pair iterations with alternating pass direction
-- [ ] **Bins SM:** Navigate  to  search (downward cam)  to  identify  to  align  to  drop
-- [ ] **Torpedoes SM:** Navigate (pinger or dead reckon)  to  search  to  align  to  fire
-- [ ] **Octagon SM:** Navigate (pinger or dead reckon)  to  search  to  center  to  surface  to  grab
-- [ ] **Return Home SM:** Turn around  to  navigate  to  search gate  to  align  to  drive through
+- [ ] **Bins SM:** Navigate to search (downward cam) to identify to align to drop
+- [ ] **Torpedoes SM:** Navigate (pinger or dead reckon) to search to align to fire
+- [ ] **Octagon SM:** Navigate (pinger or dead reckon) to search to center to surface to grab
+- [ ] **Return Home SM:** Turn around to navigate to search gate to align to drive through
 - [ ] **Top-level Mission SM:** Chain all task SMs with timeout transitions + task skipping
 
 ### 4.3 YASMIN Infrastructure
 
-- [ ] Implement `mission_node.py` — ROS 2 node that constructs and runs the top-level SM
+- [ ] Implement `mission_node.py` ROS 2 node that constructs and runs the top-level SM
 - [ ] Implement configurable mission ordering (blackboard parameters for task sequence)
 - [ ] Add per-task timeout in top-level SM (skip task if timeout, proceed to next)
-- [ ] Implement `watchdog.py` — monitor battery, leak sensor, heartbeat; trigger emergency surface
-- [ ] Create `mission.launch.py` — launch planner + vision + inspector together
+- [ ] Implement `watchdog.py` monitor battery, leak sensor, heartbeat; trigger emergency surface
+- [ ] Create `mission.launch.py` launch planner + vision + inspector together
 - [ ] Test YASMIN Viewer web UI during pool sessions (phone/laptop access)
 
 ### 4.4 Feedback Loop Integration
@@ -512,7 +511,7 @@ TurnAround (180° from start heading) ── to  NavigateHome (reverse heading, 
 
 ---
 
-## 5. Phase 3 — Perception Stack
+## 5. Phase 3 Perception Stack
 
 > **Goal:** Forward + downward cameras with custom YOLO models trained on RoboSub competition props.
 
@@ -534,7 +533,7 @@ TurnAround (180° from start heading) ── to  NavigateHome (reverse heading, 
 | `gate_crossbar` | Task 1, 6 | Forward | HIGH |
 | `red_pipe` | Task 2 | Forward | HIGH |
 | `white_pipe` | Task 2 | Forward | HIGH |
-| `bin_symbol_A` ... | Task 3 | Downward | MEDIUM |
+| `bin_symbol_A`... | Task 3 | Downward | MEDIUM |
 | `torpedo_target` | Task 4 | Forward | MEDIUM |
 | `octagon_frame` | Task 5 | Upward/Downward | LOW |
 | `path_marker` | Cross-cutting | Downward | MEDIUM |
@@ -566,11 +565,11 @@ TurnAround (180° from start heading) ── to  NavigateHome (reverse heading, 
 - [ ] Implement detection confidence filtering per task (gate needs high confidence, fallback to dead reckon)
 - [ ] Add temporal consistency check: N detections in M frames before triggering transition
 - [ ] Test under competition-like conditions: moving water, other robots, spectators above pool
-- [ ] Measure and log detection latency: camera frame  to  YOLO  to  published detection (target: <100ms)
+- [ ] Measure and log detection latency: camera frame to YOLO to published detection (target: <100ms)
 
 ---
 
-## 6. Phase 4 — Additional Sensors
+## 6. Phase 4 Additional Sensors
 
 > **Goal:** DVL for distance-based navigation, external heading for compass accuracy.
 
@@ -587,10 +586,10 @@ TurnAround (180° from start heading) ── to  NavigateHome (reverse heading, 
 
 **Why DVL is transformative:**
 ```
-Without DVL:                          With DVL:
-  "go forward 50% 5s" (open-loop)     "navigate to (3.0, 1.5, 0.5)" (closed-loop)
-   to  distance depends on current,        to  actual position feedback,
-    battery, thrust nonlinearity         corrects for drift in real-time
+Without DVL: With DVL:
+ "go forward 50% 5s" (open-loop) "navigate to (3.0, 1.5, 0.5)" (closed-loop)
+ to distance depends on current, to actual position feedback,
+ battery, thrust nonlinearity corrects for drift in real-time
 ```
 
 ### 6.2 External Heading (Witmotion or similar)
@@ -610,9 +609,9 @@ Without DVL:                          With DVL:
 
 ---
 
-## 7. Phase 5 — Utils & Infrastructure
+## 7. Phase 5 Utils & Infrastructure
 
-> **Goal:** Dashboard, digital twin, calibration tools, unit tests — everything that makes the team faster.
+> **Goal:** Dashboard, digital twin, calibration tools, unit tests everything that makes the team faster.
 
 ### 7.1 Dashboard / Digital Twin
 
@@ -632,11 +631,11 @@ Without DVL:                          With DVL:
 
 ### 7.3 Testing Infrastructure
 
-- [ ] Connect Gazebo SITL to ROS 2 pipeline (documented in `17_SIMULATION` — needs actual integration)
+- [ ] Connect Gazebo SITL to ROS 2 pipeline (documented in `17_SIMULATION` needs actual integration)
 - [ ] Create test world with gate, slalom pipes, and bins
 - [ ] Run YASMIN missions in simulation before pool testing
 - [ ] Implement `rosbag2` recording in launch files (record all topics during pool sessions)
-- [ ] Build replay-and-evaluate workflow: replay bag  to  run detection  to  compare results
+- [ ] Build replay-and-evaluate workflow: replay bag to run detection to compare results
 - [ ] Unit tests for state machine transitions (mock `/driver/feedback` and `/vision/detections`)
 - [ ] Integration tests: full mission in simulation with assertions on task completion
 
@@ -653,46 +652,45 @@ Without DVL:                          With DVL:
 - [ ] Fix `perception.launch.py` default model mismatch (Issue 5)
 - [ ] Add `stop` command on runner/executor shutdown (Issue 6)
 - [ ] Align all launch files for consistent parameter naming
-- [ ] Type hints across all Python files (gradual — prioritize driver_client and states)
+- [ ] Type hints across all Python files (gradual prioritize driver_client and states)
 
 ---
 
 ## 8. Timeline & Dependencies
 
 ```
-                    Apr 2026         May 2026         Jun 2026         Jul 2026
-                    ─────────────────────────────────────────────────────────────
-Phase 1 (Controls)  ████████░░░░░░░░░
-                         │
-Phase 2 (Missions)       ░░░████████████████░░░░░░░░░
-                              │           │
-Phase 3 (Perception)         ░░░░████████████████░░░░░
-                                   │
-Phase 4 (Sensors)                  ░░░░░░████████████████
-                                              │
-Phase 5 (Utils)             ░░░░░░░░░░░░░░████████████████
-                    ─────────────────────────────────────────────────────────────
-                                                         ▲
-                                                    Competition
-                                                    (late Jul / Aug)
+ Apr 2026 May 2026 Jun 2026 Jul 2026
+
+Phase 1 (Controls)
+
+Phase 2 (Missions)
+
+Phase 3 (Perception)
+
+Phase 4 (Sensors)
+
+Phase 5 (Utils)
+
+ Competition
+ (late Jul / Aug)
 ```
 
 ### Critical Dependencies
 
 ```
-Phase 1 (Controls) ── to  Phase 2 (Missions)    # Can't automate bad controls
-Phase 3 (Perception) ── to  Phase 2 (Missions)   # Vision states need detection
-Phase 4 (DVL) ── to  Phase 2 (Navigation states) # Waypoint nav needs position
-Phase 5 (Simulation) ── to  Phase 2 (Testing)    # Mission testing needs sim
+Phase 1 (Controls) to Phase 2 (Missions) # Can't automate bad controls
+Phase 3 (Perception) to Phase 2 (Missions) # Vision states need detection
+Phase 4 (DVL) to Phase 2 (Navigation states) # Waypoint nav needs position
+Phase 5 (Simulation) to Phase 2 (Testing) # Mission testing needs sim
 ```
 
 ### Parallel Tracks
 
 These can proceed independently:
-- **Custom YOLO training** (Phase 3.2) — can start immediately with data collection
-- **DVL hardware integration** (Phase 4.1) — independent of software missions
-- **Simulation setup** (Phase 5.3) — independent of pool testing
-- **Dashboard** (Phase 5.1) — independent of everything
+- **Custom YOLO training** (Phase 3.2) can start immediately with data collection
+- **DVL hardware integration** (Phase 4.1) independent of software missions
+- **Simulation setup** (Phase 5.3) independent of pool testing
+- **Dashboard** (Phase 5.1) independent of everything
 
 ---
 
@@ -715,14 +713,14 @@ These can proceed independently:
 ## Quick Reference: What to Work on Now
 
 **Immediate (this week):**
-1. Pool-test control PIDs (Phase 1.1, 1.2) — foundation for everything
-2. Start YOLO training data collection (Phase 3.2) — long lead time
-3. Write slalom + return-home YASMIN SMs (Phase 2.2) — low-hanging fruit
+1. Pool-test control PIDs (Phase 1.1, 1.2) foundation for everything
+2. Start YOLO training data collection (Phase 3.2) long lead time
+3. Write slalom + return-home YASMIN SMs (Phase 2.2) low-hanging fruit
 
 **Next 2 weeks:**
-4. DVL ROS 2 driver (Phase 4.1) — transforms navigation capability
-5. Simulation integration (Phase 5.3) — unblocks rapid mission iteration
-6. Multi-object tracking (Phase 3.3) — required for slalom
+4. DVL ROS 2 driver (Phase 4.1) transforms navigation capability
+5. Simulation integration (Phase 5.3) unblocks rapid mission iteration
+6. Multi-object tracking (Phase 3.3) required for slalom
 
 **Next month:**
 7. Remaining YASMIN task SMs (bins, torpedoes, octagon)

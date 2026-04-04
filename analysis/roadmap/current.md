@@ -4,25 +4,25 @@
 
 ---
 
-## 🎉 MAJOR MILESTONE: V2 Control Stack Complete + All Bugs Fixed! ✅
+## MAJOR MILESTONE: V2 Control Stack Complete + All Bugs Fixed! [DONE]
 
 **Status:** **READY FOR TESTING**
 
 The V2 control redesign and comprehensive bug fix effort are **100% COMPLETE**:
-- ✅ **V2 Control Stack**: All 5 phases implemented and verified
-- ✅ **Bug Fixes**: All 30 issues resolved (3 CRITICAL, 7 HIGH, 10 MEDIUM, 6 LOW, 4 INFO)
-- ✅ **Build Status**: PASSING (4.10s, all 10 packages)
+- [DONE] **V2 Control Stack**: All 5 phases implemented and verified
+- [DONE] **Bug Fixes**: All 30 issues resolved (3 CRITICAL, 7 HIGH, 10 MEDIUM, 6 LOW, 4 INFO)
+- [DONE] **Build Status**: PASSING (4.10s, all 10 packages)
 
 **See detailed reports:**
-- 📋 [Bug Fix Completion Report](bugfix-completion-report.md)
-- 📝 [Detailed Bug Tracking](bugfixes-2026-04.md)
-- ✅ [Completed Features](completed.md)
+- [Bug Fix Completion Report](bugfix-completion-report.md)
+- [Detailed Bug Tracking](bugfixes-2026-04.md)
+- [DONE] [Completed Features](completed.md)
 
 ---
 
 ## Active Focus Areas
 
-### 1. SITL Validation 🖥️
+### 1. SITL Validation
 
 **Status:** NEXT PRIORITY
 
@@ -43,11 +43,11 @@ Before pool testing, validate control stack in ArduSub SITL simulator.
 
 ---
 
-### 2. Pool Testing Preparation 🏊
+### 2. Pool Testing Preparation
 
 **Status:** Scheduled (Post-SITL)
 
-Pool time is limited — every session must count.
+Pool time is limited every session must count.
 
 **Pre-Pool Checklist:**
 - [ ] Complete SITL validation
@@ -58,15 +58,15 @@ Pool time is limited — every session must count.
 - [ ] Load tuned parameters from SITL
 
 **Testing Priorities:**
-1. **Shallow Water Tests** — 0.5m depth, stability validation
-2. **Depth Holding** — Test at 0.3m, 0.5m, 1.0m, 2.0m (hold 5 minutes)
-3. **Yaw Control** — 90°, 180°, 270° turns with precision
-4. **Square Mission** — Test turn accuracy and position tracking
-5. **Emergency Procedures** — RC override, surface command, kill switch
+1. **Shallow Water Tests** 0.5m depth, stability validation
+2. **Depth Holding** Test at 0.3m, 0.5m, 1.0m, 2.0m (hold 5 minutes)
+3. **Yaw Control** 90°, 180°, 270° turns with precision
+4. **Square Mission** Test turn accuracy and position tracking
+5. **Emergency Procedures** RC override, surface command, kill switch
 
 ---
 
-### 3. Parameter Tuning 🎛️
+### 3. Parameter Tuning
 
 **Status:** Ready for SITL
 
@@ -90,78 +90,78 @@ V2 control stack has new parameters to tune:
 
 ---
 
-## V2 Control Stack Features (All Implemented) ✅
+## V2 Control Stack Features (All Implemented) [DONE]
 
 | Feature | Status | Description |
 |---------|--------|-------------|
-| **Velocity Estimator** | ✅ COMPLETE | IMU acceleration integration with gravity compensation via quaternion rotation |
-| **Convergence Gates** | ✅ COMPLETE | Position & velocity thresholds for mission reliability |
-| **Active Braking** | ✅ COMPLETE | Automatic deceleration near waypoints to reduce overshoot |
-| **Cascade Control** | ✅ COMPLETE | Position controller → Velocity controller → Thrust output |
-| **Gain Scheduling** | ✅ COMPLETE | Speed-adaptive gains for stable control across velocities |
+| **Velocity Estimator** | [DONE] COMPLETE | IMU acceleration integration with gravity compensation via quaternion rotation |
+| **Convergence Gates** | [DONE] COMPLETE | Position & velocity thresholds for mission reliability |
+| **Active Braking** | [DONE] COMPLETE | Automatic deceleration near waypoints to reduce overshoot |
+| **Cascade Control** | [DONE] COMPLETE | Position controller → Velocity controller → Thrust output |
+| **Gain Scheduling** | [DONE] COMPLETE | Speed-adaptive gains for stable control across velocities |
 
 **Documentation:** See [V2 Features Guide](../guides/v2-features.md)
 
 ---
 
-## Bug Fixes - Complete ✅
+## Bug Fixes - Complete [DONE]
 
 > **See detailed tracking:** [bugfixes-2026-04.md](bugfixes-2026-04.md)
 
-### 🎉 **ALL BUGS FIXED! (30/30 - 100%)** ✅
+### **ALL BUGS FIXED! (30/30 - 100%)** [DONE]
 
-#### 🚨 CRITICAL (3/3 - 100%) ✅
+#### CRITICAL CRITICAL (3/3 - 100%) [DONE]
 | # | Issue | Status |
 |---|-------|--------|
-| ✅ 1 | GCS Heartbeat Rate 1Hz → 2Hz | **FIXED** |
-| ✅ 2 | RC Override Not Continuous | **ALREADY IMPLEMENTED** |
-| ✅ 3 | Depth from AHRS2 (MSL altitude) | **FIXED** |
+| [DONE] 1 | GCS Heartbeat Rate 1Hz → 2Hz | **FIXED** |
+| [DONE] 2 | RC Override Not Continuous | **ALREADY IMPLEMENTED** |
+| [DONE] 3 | Depth from AHRS2 (MSL altitude) | **FIXED** |
 
-#### ⚠️ HIGH Priority (7/7 - 100%) ✅
+#### WARNING HIGH Priority (7/7 - 100%) [DONE]
 | # | Issue | Status |
 |---|-------|--------|
-| ✅ 4 | IMU velocity integration gravity | **FIXED** |
-| ✅ 5 | Thread safety: _ramped dict | **FIXED** |
-| ✅ 6 | CH_THROTTLE neutral depth oscillation | **VERIFIED CORRECT** |
-| ✅ 7 | PID derivative kick | **VERIFIED CORRECT** |
-| ✅ 8 | MAV_FRAME_GLOBAL_INT wrong | **FIXED** |
-| ✅ 9 | CascadeController integral state | **FIXED** |
-| ✅ 10 | IMU gravity fallback | **FIXED** |
+| [DONE] 4 | IMU velocity integration gravity | **FIXED** |
+| [DONE] 5 | Thread safety: _ramped dict | **FIXED** |
+| [DONE] 6 | CH_THROTTLE neutral depth oscillation | **VERIFIED CORRECT** |
+| [DONE] 7 | PID derivative kick | **VERIFIED CORRECT** |
+| [DONE] 8 | MAV_FRAME_GLOBAL_INT wrong | **FIXED** |
+| [DONE] 9 | CascadeController integral state | **FIXED** |
+| [DONE] 10 | IMU gravity fallback | **FIXED** |
 
-#### 🔵 MEDIUM Priority (10/10 - 100%) ✅
+#### [INFO] MEDIUM Priority (10/10 - 100%) [DONE]
 | # | Issue | Status |
 |---|-------|--------|
-| ✅ 11 | DVL bottom_lock detection | **FIXED** |
-| ✅ 12 | MAVLink source_system | **VERIFIED CORRECT** |
-| ✅ 13 | Blocking wait in callback | **VERIFIED CORRECT** |
-| ✅ 14 | V2 features documentation | **FIXED** |
-| ✅ 15 | wait_for_ready blocks | **FIXED** |
-| ✅ 16 | Trailing slash inconsistent | **FIXED** |
-| ✅ 17 | Fixed dt=0.05s in yaw | **FIXED** |
-| ✅ 18 | ZUPT threshold too low | **FIXED** |
-| ✅ 19 | Ramp decel fights braking | **FIXED** |
-| ✅ 20 | SET_ATTITUDE_TARGET | **VERIFIED CORRECT** |
+| [DONE] 11 | DVL bottom_lock detection | **FIXED** |
+| [DONE] 12 | MAVLink source_system | **VERIFIED CORRECT** |
+| [DONE] 13 | Blocking wait in callback | **VERIFIED CORRECT** |
+| [DONE] 14 | V2 features documentation | **FIXED** |
+| [DONE] 15 | wait_for_ready blocks | **FIXED** |
+| [DONE] 16 | Trailing slash inconsistent | **FIXED** |
+| [DONE] 17 | Fixed dt=0.05s in yaw | **FIXED** |
+| [DONE] 18 | ZUPT threshold too low | **FIXED** |
+| [DONE] 19 | Ramp decel fights braking | **FIXED** |
+| [DONE] 20 | SET_ATTITUDE_TARGET | **VERIFIED CORRECT** |
 
-#### 🟢 LOW Priority (6/6 - 100%) ✅
+#### [COMPLETE] LOW Priority (6/6 - 100%) [DONE]
 | # | Issue | Status |
 |---|-------|--------|
-| ✅ 21 | Variable names unclear | **FIXED** |
-| ✅ 22 | CommandSpec design | **VERIFIED CORRECT** |
-| ✅ 23 | Speed param docs missing | **FIXED** |
-| ✅ 24 | State log interval hardcoded | **FIXED** |
-| ✅ 25 | DEFAULT_SPEED unclear units | **FIXED** |
-| ✅ 26 | DuburiClient API | **VERIFIED CORRECT** |
+| [DONE] 21 | Variable names unclear | **FIXED** |
+| [DONE] 22 | CommandSpec design | **VERIFIED CORRECT** |
+| [DONE] 23 | Speed param docs missing | **FIXED** |
+| [DONE] 24 | State log interval hardcoded | **FIXED** |
+| [DONE] 25 | DEFAULT_SPEED unclear units | **FIXED** |
+| [DONE] 26 | DuburiClient API | **VERIFIED CORRECT** |
 
-#### ℹ️ INFO/Enhancements (4/4 - 100%) ✅
+#### [INFO] INFO/Enhancements (4/4 - 100%) [DONE]
 | # | Issue | Status |
 |---|-------|--------|
-| ✅ 27 | MAVLink message watchdog | **IMPLEMENTED** |
-| ✅ 28 | Parameter validation | **IMPLEMENTED** |
-| ✅ 29 | MAV_CMD_DO_SET_HOME | **IMPLEMENTED** |
-| ✅ 30 | Simulation time support | **IMPLEMENTED** |
+| [DONE] 27 | MAVLink message watchdog | **IMPLEMENTED** |
+| [DONE] 28 | Parameter validation | **IMPLEMENTED** |
+| [DONE] 29 | MAV_CMD_DO_SET_HOME | **IMPLEMENTED** |
+| [DONE] 30 | Simulation time support | **IMPLEMENTED** |
 
-**Build Status:** ✅ PASSING (4.10s, all 10 packages)  
-**Final Progress:** 30/30 issues resolved (100%) 🎉  
+**Build Status:** [DONE] PASSING (4.10s, all 10 packages)
+**Final Progress:** 30/30 issues resolved (100%)
 **Ready for:** SITL validation, pool testing, DVL integration
 
 ---
@@ -202,11 +202,11 @@ V2 control stack has new parameters to tune:
 
 | Priority | Task | ETA |
 |----------|------|-----|
-| 🔴 CRITICAL | SITL validation and V2 testing | Apr 5 |
-| 🔴 HIGH | Parameter tuning in simulation | Apr 6 |
-| 🔴 HIGH | Schedule pool session | Apr 7 |
-| 🟡 MEDIUM | Document V2 tuning guide | Apr 8 |
-| 🟡 MEDIUM | DVL integration planning | Apr 10 |
+| [IN PROGRESS] CRITICAL | SITL validation and V2 testing | Apr 5 |
+| [IN PROGRESS] HIGH | Parameter tuning in simulation | Apr 6 |
+| [IN PROGRESS] HIGH | Schedule pool session | Apr 7 |
+| [MEDIUM] MEDIUM | Document V2 tuning guide | Apr 8 |
+| [MEDIUM] MEDIUM | DVL integration planning | Apr 10 |
 
 ---
 
@@ -225,12 +225,12 @@ V2 control stack has new parameters to tune:
 
 | Metric | Value |
 |--------|-------|
-| V2 Control Stack Phases | 5/5 (100%) ✅ |
-| Bug Fixes Resolved | 30/30 (100%) ✅ |
-| Critical Issues | 0 remaining ✅ |
-| High Priority Issues | 0 remaining ✅ |
-| Build Status | PASSING ✅ |
-| Ready for Testing | YES ✅ |
+| V2 Control Stack Phases | 5/5 (100%) [DONE] |
+| Bug Fixes Resolved | 30/30 (100%) [DONE] |
+| Critical Issues | 0 remaining [DONE] |
+| High Priority Issues | 0 remaining [DONE] |
+| Build Status | PASSING [DONE] |
+| Ready for Testing | YES [DONE] |
 
 **Last Major Update:** April 3, 2026 - All V2 features and bug fixes completed
 

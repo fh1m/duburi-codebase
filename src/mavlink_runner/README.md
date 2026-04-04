@@ -31,31 +31,31 @@ Convergence gates ensure the AUV reaches and stabilizes at the target before pro
 **Configuration (in launch file or defaults.yaml):**
 ```yaml
 convergence_enabled: true
-convergence_velocity_threshold: 0.05  # m/s - threshold for "stopped"
-convergence_settling_time: 0.2        # seconds - must stay stable
-convergence_timeout: 5.0              # seconds - max wait time
+convergence_velocity_threshold: 0.05 # m/s - threshold for "stopped"
+convergence_settling_time: 0.2 # seconds - must stay stable
+convergence_timeout: 5.0 # seconds - max wait time
 ```
 
 **Example behavior:**
 ```
-forward 30% 5s       # Accelerate forward
-                     # Move for 5 seconds
-                     # Active braking applies
-                     # Wait for velocity < 0.05 m/s
-                     # Wait 0.2s to ensure stability
-                     # ✓ Convergence achieved, proceed
+forward 30% 5s # Accelerate forward
+ # Move for 5 seconds
+ # Active braking applies
+ # Wait for velocity < 0.05 m/s
+ # Wait 0.2s to ensure stability
+ # [DONE] Convergence achieved, proceed
 
-turn left 90 50%     # Turn 90 degrees
-                     # Wait for heading stable
-                     # ✓ Proceed to next command
+turn left 90 50% # Turn 90 degrees
+ # Wait for heading stable
+ # [DONE] Proceed to next command
 ```
 
 **When to use:**
-- ✅ Precision missions (gate passing, object manipulation)
-- ✅ Multi-step sequences requiring accuracy
-- ✅ Competition missions with tight waypoints
-- ❌ Open-water transit (unnecessary overhead)
-- ❌ Time-critical maneuvers (use instant commands)
+- [DONE] Precision missions (gate passing, object manipulation)
+- [DONE] Multi-step sequences requiring accuracy
+- [DONE] Competition missions with tight waypoints
+- Open-water transit (unnecessary overhead)
+- Time-critical maneuvers (use instant commands)
 
 ### Active Braking
 
@@ -70,17 +70,17 @@ Active braking reduces overshoot and drift by applying reverse thrust at the end
 **Configuration:**
 ```yaml
 braking_enabled: true
-braking_threshold: 0.1       # m/s - start braking below this
-braking_duration_max: 2.0    # seconds - max braking time
+braking_threshold: 0.1 # m/s - start braking below this
+braking_duration_max: 2.0 # seconds - max braking time
 ```
 
 **Example:**
 ```
 # Without braking:
-forward 50% 3s  → moves 5m, drifts 2m = 7m total ❌
+forward 50% 3s → moves 5m, drifts 2m = 7m total
 
 # With braking:
-forward 50% 3s  → moves 5m, brakes, stops at 5.4m ✓
+forward 50% 3s → moves 5m, brakes, stops at 5.4m [DONE]
 ```
 
 **Performance:**
@@ -94,14 +94,14 @@ Cascade control provides smooth, accurate position-based movement using a Positi
 
 **Architecture:**
 ```
-Target Position → [Position PID] → Target Velocity 
-                                  ↓
-                  Current Position (from DVL/IMU fusion)
-                  
+Target Position → [Position PID] → Target Velocity
+ ↓
+ Current Position (from DVL/IMU fusion)
+
 Target Velocity → [Velocity PID] → Target Thrust
-                                  ↓
-                  Current Velocity (gravity-compensated)
-                  
+ ↓
+ Current Velocity (gravity-compensated)
+
 Target Thrust → [Thrust Mapping] → PWM Commands
 ```
 
@@ -121,11 +121,11 @@ velocity_kd: 5.0
 ```
 
 **When to use:**
-- ✅ Waypoint navigation
-- ✅ Hold position in current
-- ✅ Precise alignment tasks
-- ❌ Simple forward/backward (use velocity mode)
-- ❌ Vision servoing (already position-controlled)
+- [DONE] Waypoint navigation
+- [DONE] Hold position in current
+- [DONE] Precise alignment tasks
+- Simple forward/backward (use velocity mode)
+- Vision servoing (already position-controlled)
 
 ### Gain Scheduling
 
@@ -133,14 +133,14 @@ Automatically adjusts PID gains based on current speed for optimal performance a
 
 **Speed ranges:**
 ```
-0-30%:   High gains   - Precise, low-speed maneuvering
-                        Kp=60, Ki=0.2, Kd=8
+0-30%: High gains - Precise, low-speed maneuvering
+ Kp=60, Ki=0.2, Kd=8
 
-30-60%:  Medium gains - Balanced performance
-                        Kp=50, Ki=0.1, Kd=5
+30-60%: Medium gains - Balanced performance
+ Kp=50, Ki=0.1, Kd=5
 
-60-100%: Low gains    - Stable, high-speed transit
-                        Kp=40, Ki=0.05, Kd=3
+60-100%: Low gains - Stable, high-speed transit
+ Kp=40, Ki=0.05, Kd=3
 ```
 
 **Configuration:**
@@ -149,18 +149,18 @@ gain_scheduling_enabled: true
 
 # Define speed breakpoints and gains
 gain_schedule:
-  - speed_max: 30
-    kp: 60.0
-    ki: 0.2
-    kd: 8.0
-  - speed_max: 60
-    kp: 50.0
-    ki: 0.1
-    kd: 5.0
-  - speed_max: 100
-    kp: 40.0
-    ki: 0.05
-    kd: 3.0
+ - speed_max: 30
+ kp: 60.0
+ ki: 0.2
+ kd: 8.0
+ - speed_max: 60
+ kp: 50.0
+ ki: 0.1
+ kd: 5.0
+ - speed_max: 100
+ kp: 40.0
+ ki: 0.05
+ kd: 3.0
 ```
 
 **Benefits:**
@@ -186,8 +186,8 @@ Improves velocity accuracy by compensating for gravity and buoyancy forces.
 **Configuration:**
 ```yaml
 gravity_compensation_enabled: true
-gravity_constant: 9.81        # m/s²
-buoyancy_coefficient: 0.05    # N/m depth change
+gravity_constant: 9.81 # m/s²
+buoyancy_coefficient: 0.05 # N/m depth change
 ```
 
 ## Installation
@@ -257,10 +257,10 @@ Launch YASMIN FSM-based missions:
 ```bash
 ros2 run mavlink_runner runner
 
-duburi> planner demo      # Demo square pattern
-duburi> planner mission   # Full competition mission
-duburi> planner stop      # Stop running mission
-duburi> planner viewer    # Launch web viewer at http://localhost:5000
+duburi> planner demo # Demo square pattern
+duburi> planner mission # Full competition mission
+duburi> planner stop # Stop running mission
+duburi> planner viewer # Launch web viewer at http://localhost:5000
 ```
 
 ## Command Reference
@@ -271,35 +271,35 @@ See [analysis/reference/command-reference.md](../../analysis/reference/command-r
 
 ### Movement Commands
 ```
-forward [speed%] [duration_s]    # Move forward
-back [speed%] [duration_s]       # Move backward
-left [speed%] [duration_s]       # Strafe left
-right [speed%] [duration_s]      # Strafe right
-turn left [angle] [speed%]       # Turn left
-turn right [angle] [speed%]      # Turn right
+forward [speed%] [duration_s] # Move forward
+back [speed%] [duration_s] # Move backward
+left [speed%] [duration_s] # Strafe left
+right [speed%] [duration_s] # Strafe right
+turn left [angle] [speed%] # Turn left
+turn right [angle] [speed%] # Turn right
 ```
 
 ### Depth Commands
 ```
-depth [target_m]                 # Dive to depth
-~depth [target_m]                # PID depth hold
-surface                          # Surface
+depth [target_m] # Dive to depth
+~depth [target_m] # PID depth hold
+surface # Surface
 ```
 
 ### Mode & Arming
 ```
-mode MANUAL                      # Set manual mode
-mode ALT_HOLD                    # Set altitude hold (depth)
-arm                              # Arm motors
-disarm                           # Disarm motors
-stop                             # Emergency stop
+mode MANUAL # Set manual mode
+mode ALT_HOLD # Set altitude hold (depth)
+arm # Arm motors
+disarm # Disarm motors
+stop # Emergency stop
 ```
 
 ### Mission Control
 ```
-run <mission_file>               # Run mission file
-list missions                    # List available missions
-planner demo                     # Run planner demo
+run <mission_file> # Run mission file
+list missions # List available missions
+planner demo # Run planner demo
 ```
 
 ## Configuration
@@ -310,15 +310,15 @@ Default parameters are set in the launch file:
 
 ```python
 Node(
-    package='mavlink_runner',
-    executable='runner',
-    parameters=[{
-        'convergence_enabled': True,
-        'braking_enabled': True,
-        'cascade_enabled': False,  # Disable for velocity-mode missions
-        'gain_scheduling_enabled': True,
-        # ... other params
-    }]
+ package='mavlink_runner',
+ executable='runner',
+ parameters=[{
+ 'convergence_enabled': True,
+ 'braking_enabled': True,
+ 'cascade_enabled': False, # Disable for velocity-mode missions
+ 'gain_scheduling_enabled': True,
+ #... other params
+ }]
 )
 ```
 
@@ -343,24 +343,24 @@ Create a `defaults.yaml` file in the package:
 
 ```yaml
 mavlink_inspector:
-  ros__parameters:
-    # V2 Control Features
-    convergence_enabled: true
-    convergence_velocity_threshold: 0.05
-    convergence_settling_time: 0.2
-    convergence_timeout: 5.0
-    
-    braking_enabled: true
-    braking_threshold: 0.1
-    braking_duration_max: 2.0
-    
-    cascade_enabled: false
-    gain_scheduling_enabled: true
-    
-    # Speed and safety
-    default_speed_percent: 50
-    max_speed_percent: 80
-    ramp_rate: 800  # PWM/s
+ ros__parameters:
+ # V2 Control Features
+ convergence_enabled: true
+ convergence_velocity_threshold: 0.05
+ convergence_settling_time: 0.2
+ convergence_timeout: 5.0
+
+ braking_enabled: true
+ braking_threshold: 0.1
+ braking_duration_max: 2.0
+
+ cascade_enabled: false
+ gain_scheduling_enabled: true
+
+ # Speed and safety
+ default_speed_percent: 50
+ max_speed_percent: 80
+ ramp_rate: 800 # PWM/s
 ```
 
 ## V2 Best Practices
@@ -369,13 +369,13 @@ mavlink_inspector:
 
 **For precision missions (gates, manipulation):**
 ```
-forward 30% 5s      # Slow, precise
-turn left 90 40%    # Controlled turn
+forward 30% 5s # Slow, precise
+turn left 90 40% # Controlled turn
 ```
 
 **For transit (open water):**
 ```
-forward 60% 10s     # Faster, efficient
+forward 60% 10s # Faster, efficient
 ```
 
 **Speed ranges:**
@@ -387,7 +387,7 @@ forward 60% 10s     # Faster, efficient
 
 ```
 forward 30% 5s
-delay 1              # Let convergence fully stabilize
+delay 1 # Let convergence fully stabilize
 turn left 90 50%
 delay 1
 forward 30% 3s
@@ -480,15 +480,15 @@ Adjust thresholds if timeouts are frequent.
 
 ```
 mavlink_runner/
-├── mavlink_runner/
-│   ├── __init__.py
-│   ├── constants.py         # Help text, constants
-│   ├── command_parser.py    # Command parsing logic
-│   ├── runner.py            # Main CLI and mission runner
-│   └── status_display.py    # Real-time status display
-├── package.xml
-├── setup.py
-└── README.md (this file)
+ mavlink_runner/
+ __init__.py
+ constants.py # Help text, constants
+ command_parser.py # Command parsing logic
+ runner.py # Main CLI and mission runner
+ status_display.py # Real-time status display
+ package.xml
+ setup.py
+ README.md (this file)
 ```
 
 ### Adding New Commands

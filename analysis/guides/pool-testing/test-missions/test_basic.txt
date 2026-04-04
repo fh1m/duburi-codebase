@@ -8,11 +8,11 @@ mode MANUAL
 
 # Forward movement test
 forward 30% 5s
-delay 2
+sleep 2
 
 # Backward movement test
 backward 30% 5s
-delay 2
+sleep 2
 
 # Stop and disarm
 stop

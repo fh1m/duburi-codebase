@@ -6,38 +6,38 @@ Welcome to the Duburi AUV documentation. This folder contains comprehensive anal
 
 ```mermaid
 mindmap
-  root((Duburi<br/>Documentation))
-    Architecture
-      System Overview
-      ROS Interfaces
-      Design Issues
-    Design Decisions
-      Core Decisions
-      Control Redesign V1/V2
-      ArduSub Constraints
-    Guides
-      Getting Started
-      Simulation
-      Pool Testing
-      Planner
-    Reference
-      Command Reference
-      Code Reference
-      MAVLink Deep Dive
-    Contributing
-      Known Issues
-      How to Add Commands
-    Roadmap
-      Completed
-      Current
-      Future
-    RoboSub
-      Competition Guide
-      Task Analysis
-      Team Analysis
-    Code Review
-      Inspector Analysis
-      Driver Analysis
+ root((Duburi<br/>Documentation))
+ Architecture
+ System Overview
+ ROS Interfaces
+ Design Issues
+ Design Decisions
+ Core Decisions
+ Control Redesign V1/V2
+ ArduSub Constraints
+ Guides
+ Getting Started
+ Simulation
+ Pool Testing
+ Planner
+ Reference
+ Command Reference
+ Code Reference
+ MAVLink Deep Dive
+ Contributing
+ Known Issues
+ How to Add Commands
+ Roadmap
+ Completed
+ Current
+ Future
+ RoboSub
+ Competition Guide
+ Task Analysis
+ Team Analysis
+ Code Review
+ Inspector Analysis
+ Driver Analysis
 ```
 
 ---
@@ -46,98 +46,98 @@ mindmap
 
 ```mermaid
 flowchart TB
-    subgraph "Control Stack (Phase 1-5)"
-        direction TB
-        
-        subgraph "Phase 5: Sensor Sources"
-            DVL[DVL<br/>Nortek Nucleus 1000]
-            ExtIMU[External IMU<br/>Witmotion/BNO085]
-            PixIMU[Pixhawk IMU<br/>Default Fallback]
-            SSM[SensorSourceManager]
-            
-            DVL --> SSM
-            ExtIMU --> SSM
-            PixIMU --> SSM
-        end
-        
-        subgraph "Phase 1: Velocity Estimation"
-            VE[VelocityEstimator]
-            ZUPT[ZUPT Correction]
-            CG[ConvergenceGate]
-            
-            SSM --> VE
-            VE --> ZUPT
-            ZUPT --> CG
-        end
-        
-        subgraph "Phase 2: Yaw Control"
-            RIP[Rotate-in-Place]
-            PYaw[Precision PID<br/>3 Zones]
-            TL[Translation Lockout]
-            
-            CG --> RIP
-            RIP --> PYaw
-            PYaw --> TL
-        end
-        
-        subgraph "Phase 3: Cascade Control"
-            PE[PositionEstimator]
-            CC[CascadeController<br/>Position→Velocity→Thrust]
-            
-            VE --> PE
-            PE --> CC
-        end
-        
-        subgraph "Phase 4: Gain Scheduling"
-            GS[GainScheduler<br/>3 Speed Ranges]
-            AL[AccelerationLimiter<br/>50%/sec]
-            
-            CC --> GS
-            GS --> AL
-        end
-        
-        RC[RC Controller<br/>PWM Output]
-        AL --> RC
-        TL --> RC
-    end
-    
-    RC --> Pixhawk[Pixhawk/ArduSub]
+ subgraph "Control Stack (Phase 1-5)"
+ direction TB
+
+ subgraph "Phase 5: Sensor Sources"
+ DVL[DVL<br/>Nortek Nucleus 1000]
+ ExtIMU[External IMU<br/>Witmotion/BNO085]
+ PixIMU[Pixhawk IMU<br/>Default Fallback]
+ SSM[SensorSourceManager]
+
+ DVL --> SSM
+ ExtIMU --> SSM
+ PixIMU --> SSM
+ end
+
+ subgraph "Phase 1: Velocity Estimation"
+ VE[VelocityEstimator]
+ ZUPT[ZUPT Correction]
+ CG[ConvergenceGate]
+
+ SSM --> VE
+ VE --> ZUPT
+ ZUPT --> CG
+ end
+
+ subgraph "Phase 2: Yaw Control"
+ RIP[Rotate-in-Place]
+ PYaw[Precision PID<br/>3 Zones]
+ TL[Translation Lockout]
+
+ CG --> RIP
+ RIP --> PYaw
+ PYaw --> TL
+ end
+
+ subgraph "Phase 3: Cascade Control"
+ PE[PositionEstimator]
+ CC[CascadeController<br/>Position→Velocity→Thrust]
+
+ VE --> PE
+ PE --> CC
+ end
+
+ subgraph "Phase 4: Gain Scheduling"
+ GS[GainScheduler<br/>3 Speed Ranges]
+ AL[AccelerationLimiter<br/>50%/sec]
+
+ CC --> GS
+ GS --> AL
+ end
+
+ RC[RC Controller<br/>PWM Output]
+ AL --> RC
+ TL --> RC
+ end
+
+ RC --> Pixhawk[Pixhawk/ArduSub]
 ```
 
 ## Message Flow
 
 ```mermaid
 sequenceDiagram
-    participant Mission as Mission File
-    participant Driver as mavlink_driver
-    participant Inspector as mavlink_inspector
-    participant Pixhawk as Pixhawk/ArduSub
-    participant Sensors as Sensors
-    
-    Mission->>Driver: Load mission.txt
-    Driver->>Inspector: DriverCommand
-    
-    Inspector->>Inspector: Parse command
-    Inspector->>Inspector: Apply gain scheduling
-    Inspector->>Inspector: Check convergence
-    
-    loop Control Loop (20 Hz)
-        Sensors->>Inspector: IMU/DVL data
-        Inspector->>Inspector: Update velocity estimate
-        Inspector->>Inspector: Position estimation
-        Inspector->>Inspector: Cascade control
-        Inspector->>Pixhawk: RC Override
-    end
-    
-    Inspector->>Driver: Command complete
-    Driver->>Mission: Next command
+ participant Mission as Mission File
+ participant Driver as mavlink_driver
+ participant Inspector as mavlink_inspector
+ participant Pixhawk as Pixhawk/ArduSub
+ participant Sensors as Sensors
+
+ Mission->>Driver: Load mission.txt
+ Driver->>Inspector: DriverCommand
+
+ Inspector->>Inspector: Parse command
+ Inspector->>Inspector: Apply gain scheduling
+ Inspector->>Inspector: Check convergence
+
+ loop Control Loop (20 Hz)
+ Sensors->>Inspector: IMU/DVL data
+ Inspector->>Inspector: Update velocity estimate
+ Inspector->>Inspector: Position estimation
+ Inspector->>Inspector: Cascade control
+ Inspector->>Pixhawk: RC Override
+ end
+
+ Inspector->>Driver: Command complete
+ Driver->>Mission: Next command
 ```
 
 ---
 
-## 📁 Folder Structure
+## Folder Structure
 
-### 🏗️ [architecture/](architecture/)
+### [architecture/](architecture/)
 
 System design and high-level architecture documentation.
 
@@ -148,7 +148,7 @@ System design and high-level architecture documentation.
 | [ros-interfaces.md](architecture/ros-interfaces.md) | ROS2 messages, services, topics |
 | [design-issues.md](architecture/design-issues.md) | Known architectural issues |
 
-### 🎯 [design-decisions/](design-decisions/)
+### [design-decisions/](design-decisions/)
 
 Why we made the decisions we made.
 
@@ -162,7 +162,7 @@ Why we made the decisions we made.
 | [movement-vocabulary.md](design-decisions/movement-vocabulary.md) | Movement command vocabulary |
 | [dvl-integration.md](design-decisions/dvl-integration.md) | **Phase 5** DVL integration technical plan |
 
-### 📖 [guides/](guides/)
+### [guides/](guides/)
 
 How-to guides for users and developers.
 
@@ -177,7 +177,7 @@ How-to guides for users and developers.
 | [pool-testing/](guides/pool-testing/) | **V2** Pool testing guides and checklists |
 | [dvl-integration-guide.md](guides/dvl-integration-guide.md) | **Phase 5** DVL quick start guide |
 
-### 📚 [reference/](reference/)
+### [reference/](reference/)
 
 Technical reference documentation.
 
@@ -188,7 +188,7 @@ Technical reference documentation.
 | [mavlink-deep-dive.md](reference/mavlink-deep-dive.md) | MAVLink protocol details |
 | [blueos-package.md](reference/blueos-package.md) | BlueOS package analysis |
 
-### 🤝 [contributing/](contributing/)
+### [contributing/](contributing/)
 
 Guidelines for contributors.
 
@@ -198,7 +198,7 @@ Guidelines for contributors.
 | [recommendations.md](contributing/recommendations.md) | Improvement recommendations |
 | [refactoring-plan.md](contributing/refactoring-plan.md) | Refactoring roadmap |
 
-### 🔍 [code-review/](code-review/)
+### [code-review/](code-review/)
 
 Line-by-line code analysis.
 
@@ -211,7 +211,7 @@ Line-by-line code analysis.
 
 ---
 
-## 🚀 Quick Start Paths
+## Quick Start Paths
 
 ### "I want to understand the codebase"
 1. Start with [architecture/overview.md](architecture/overview.md)
@@ -234,7 +234,7 @@ Line-by-line code analysis.
 
 ---
 
-## 📊 Documentation Stats
+## Documentation Stats
 
 | Metric | Value |
 |--------|-------|
@@ -245,17 +245,17 @@ Line-by-line code analysis.
 
 ---
 
-## 🔄 Recent Updates
+## Recent Updates
 
-### April 2026 - V2 Bug Fix Completion ✅
+### April 2026 - V2 Bug Fix Completion [DONE]
 
-**ALL 30 ISSUES RESOLVED** — Production-ready for pool testing
+**ALL 30 ISSUES RESOLVED** Production-ready for pool testing
 
-- ✅ **3 CRITICAL** - GCS heartbeat 2Hz, RC override watchdog, depth from pressure sensor
-- ✅ **7 HIGH** - Gravity compensation, thread safety, per-DOF integrals
-- ✅ **10 MEDIUM** - DVL detection, V2 docs, ZUPT tuning, dynamic PID timing
-- ✅ **6 LOW** - Variable clarity, parameter docs, configurable logging
-- ✅ **4 INFO** - Telemetry watchdog, parameter validation, SITL support
+- [DONE] **3 CRITICAL** - GCS heartbeat 2Hz, RC override watchdog, depth from pressure sensor
+- [DONE] **7 HIGH** - Gravity compensation, thread safety, per-DOF integrals
+- [DONE] **10 MEDIUM** - DVL detection, V2 docs, ZUPT tuning, dynamic PID timing
+- [DONE] **6 LOW** - Variable clarity, parameter docs, configurable logging
+- [DONE] **4 INFO** - Telemetry watchdog, parameter validation, SITL support
 
 **See:** [`roadmap/bugfix-completion-report.md`](roadmap/bugfix-completion-report.md) for complete technical details.
 
@@ -266,7 +266,7 @@ Line-by-line code analysis.
 - MAVLink compliant (2Hz heartbeat, 20Hz RC override)
 - Production-ready error handling and validation
 
-**Build Status:** ✅ 10/10 packages, 4.10s build time, zero errors
+**Build Status:** [DONE] 10/10 packages, 4.10s build time, zero errors
 
 ### March 2026 - Control Stack Redesign V2
 
@@ -275,7 +275,7 @@ Line-by-line code analysis.
 - **Phase 3:** Cascade control, position estimation
 - **Phase 4:** Gain scheduling (3 speed ranges), acceleration limiting
 - **Phase 5:** Multi-source sensors (DVL, External IMU)
-  
+
 ### February 2026 - Control Stack Redesign V1 (Stable Branch)
 
 - Decorator-based command registry
@@ -285,58 +285,58 @@ Line-by-line code analysis.
 
 ---
 
-## 🧪 V2 Testing Recommendations
+## V2 Testing Recommendations
 
 ### Before Pool Testing
 
 1. **SITL Validation**
-   ```bash
-   # Start ArduSub SITL
-   cd ~/ardupilot/Tools/autotest
-   python3 sim_vehicle.py -v ArduSub -f vectored_6dof --console --map
-   
-   # Start ROS2 Inspector
-   ros2 launch mavlink_inspector inspector.launch.py
-   ```
-   
-   **Verify:**
-   - 2Hz heartbeat in diagnostics
-   - Depth from pressure sensor (not altitude)
-   - No RC timeout warnings
-   - Gravity compensation (pitch 30° → velocity stays ~0 m/s)
+ ```bash
+ # Start ArduSub SITL
+ cd ~/ardupilot/Tools/autotest
+ python3 sim_vehicle.py -v ArduSub -f vectored_6dof --console --map
+
+ # Start ROS2 Inspector
+ ros2 launch mavlink_inspector inspector.launch.py
+ ```
+
+ **Verify:**
+ - 2Hz heartbeat in diagnostics
+ - Depth from pressure sensor (not altitude)
+ - No RC timeout warnings
+ - Gravity compensation (pitch 30° → velocity stays ~0 m/s)
 
 2. **Movement Test Mission**
-   
-   Create `missions/test_square.txt`:
-   ```
-   arm
-   mode MANUAL
-   
-   forward 30% 5s
-   turn left 90 50%
-   forward 30% 5s
-   turn left 90 50%
-   forward 30% 5s
-   turn left 90 50%
-   forward 30% 5s
-   
-   stop
-   disarm
-   ```
-   
-   **Expected:** Clean square with sharp 90° turns, no drift
-   
+
+ Create `missions/test_square.txt`:
+ ```
+ arm
+ mode MANUAL
+
+ forward 30% 5s
+ turn left 90 50%
+ forward 30% 5s
+ turn left 90 50%
+ forward 30% 5s
+ turn left 90 50%
+ forward 30% 5s
+
+ stop
+ disarm
+ ```
+
+ **Expected:** Clean square with sharp 90° turns, no drift
+
 3. **V2 Features Test**
-   ```bash
-   ros2 launch mavlink_inspector inspector.launch.py \
-     params_file:=src/mavlink_inspector/config/v2_enabled.yaml
-   ```
-   
-   **Test:**
-   - Convergence gates (movement waits for settling)
-   - Active braking (reduced overshoot)
-   - Cascade control (smooth position tracking)
-   - Gain scheduling (adaptive gains at different speeds)
+ ```bash
+ ros2 launch mavlink_inspector inspector.launch.py \
+ params_file:=src/mavlink_inspector/config/v2_enabled.yaml
+ ```
+
+ **Test:**
+ - Convergence gates (movement waits for settling)
+ - Active braking (reduced overshoot)
+ - Cascade control (smooth position tracking)
+ - Gain scheduling (adaptive gains at different speeds)
 
 ### Pool Testing Checklist
 
@@ -344,7 +344,7 @@ See [`guides/pool-testing/next_things_to_check.md`](guides/pool-testing/next_thi
 
 ---
 
-## 🔮 Future Development: DVL Integration
+## Future Development: DVL Integration
 
 DVL (Doppler Velocity Logger) integration is planned for Phase 5. This will provide highly accurate bottom-relative velocity measurements for closed-loop control.
 

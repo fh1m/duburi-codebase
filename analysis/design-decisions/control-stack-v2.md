@@ -1,4 +1,4 @@
-# Control Stack Redesign V2 — Design Decision Document
+# Control Stack Redesign V2 Design Decision Document
 
 ## Executive Summary
 
@@ -8,7 +8,7 @@ Control Redesign V2 addresses fundamental control theory problems identified dur
 - 5-phase implementation addressing 3 critical control issues
 - 74+ configuration parameters (all disabled by default for safety)
 - Multi-source sensor architecture (DVL, external compass ready)
-- Backward compatible — all existing commands work unchanged
+- Backward compatible all existing commands work unchanged
 
 ---
 
@@ -33,18 +33,18 @@ Control Redesign V2 addresses fundamental control theory problems identified dur
 
 ```mermaid
 sequenceDiagram
-    participant CMD as Command
-    participant AUV as Vehicle
-    participant WATER as Water
-    
-    CMD->>AUV: forward 30% 5s
-    Note over AUV: Accelerates
-    AUV->>WATER: Moving forward
-    CMD->>AUV: stop (at 5s)
-    Note over AUV,WATER: Inertia continues!
-    AUV-->>WATER: Drifts 0.5-1m past target
-    CMD->>AUV: turn left 90°
-    Note over AUV: Turn starts from wrong position
+ participant CMD as Command
+ participant AUV as Vehicle
+ participant WATER as Water
+
+ CMD->>AUV: forward 30% 5s
+ Note over AUV: Accelerates
+ AUV->>WATER: Moving forward
+ CMD->>AUV: stop (at 5s)
+ Note over AUV,WATER: Inertia continues!
+ AUV-->>WATER: Drifts 0.5-1m past target
+ CMD->>AUV: turn left 90°
+ Note over AUV: Turn starts from wrong position
 ```
 
 **Symptoms:**
@@ -58,15 +58,15 @@ sequenceDiagram
 
 ```mermaid
 graph LR
-    subgraph "Commanded: 90° Turn"
-        A[Start] --> B[Target: +90°]
-    end
-    
-    subgraph "Actual: U-Turn Pattern"
-        C[Start] --> D[Drift outward]
-        D --> E[Over-rotate]
-        E --> F[Final: ~95°]
-    end
+ subgraph "Commanded: 90° Turn"
+ A[Start] --> B[Target: +90°]
+ end
+
+ subgraph "Actual: U-Turn Pattern"
+ C[Start] --> D[Drift outward]
+ D --> E[Over-rotate]
+ E --> F[Final: ~95°]
+ end
 ```
 
 **Symptoms:**
@@ -80,9 +80,9 @@ graph LR
 
 | Speed Range | Reliability | Issue |
 |-------------|-------------|-------|
-| 0-30% | ✅ Good | PID tuned for this range |
-| 30-60% | ⚠️ Marginal | Slight overshoot |
-| 60-100% | ❌ Poor | Massive overshoot, instability |
+| 0-30% | [DONE] Good | PID tuned for this range |
+| 30-60% | WARNING Marginal | Slight overshoot |
+| 60-100% | Poor | Massive overshoot, instability |
 
 **Root Cause:** Single set of PID gains optimized for low speed. At high speeds, gains are too aggressive.
 
@@ -95,7 +95,7 @@ graph LR
 Every V2 feature has an enable/disable switch:
 
 ```yaml
-# All off by default — enable after testing
+# All off by default enable after testing
 convergence_enabled: false
 rotate_in_place_enabled: false
 cascade_enabled: false
@@ -108,26 +108,26 @@ gain_scheduling_enabled: false
 
 ```mermaid
 graph TB
-    subgraph "velocity_control.py"
-        VE[VelocityEstimator]
-        CG[ConvergenceGate]
-        PE[PositionEstimator]
-        CC[CascadeController]
-        GS[GainScheduler]
-        AL[AccelerationLimiter]
-    end
-    
-    subgraph "sensor_sources.py"
-        SSM[SensorSourceManager]
-        DVL[DVLSource]
-        EXT[ExternalYawSource]
-    end
-    
-    VE --> CG
-    PE --> CC
-    SSM --> VE
-    CC --> GS
-    GS --> AL
+ subgraph "velocity_control.py"
+ VE[VelocityEstimator]
+ CG[ConvergenceGate]
+ PE[PositionEstimator]
+ CC[CascadeController]
+ GS[GainScheduler]
+ AL[AccelerationLimiter]
+ end
+
+ subgraph "sensor_sources.py"
+ SSM[SensorSourceManager]
+ DVL[DVLSource]
+ EXT[ExternalYawSource]
+ end
+
+ VE --> CG
+ PE --> CC
+ SSM --> VE
+ CC --> GS
+ GS --> AL
 ```
 
 Each class is:
@@ -139,11 +139,11 @@ Each class is:
 
 ```mermaid
 graph LR
-    A[DVL Velocity] -->|timeout| B[IMU Estimate]
-    B -->|failure| C[Open-loop]
-    
-    D[DVL IMU Yaw] -->|timeout| E[External Compass]
-    E -->|failure| F[Pixhawk IMU]
+ A[DVL Velocity] -->|timeout| B[IMU Estimate]
+ B -->|failure| C[Open-loop]
+
+ D[DVL IMU Yaw] -->|timeout| E[External Compass]
+ E -->|failure| F[Pixhawk IMU]
 ```
 
 **Why:** Sensors fail. External compass cable disconnects. DVL loses bottom lock. The system must degrade gracefully.
@@ -158,14 +158,14 @@ graph LR
 
 ```python
 class VelocityEstimator:
-    def update(self, accel_x, accel_y, accel_z, dt):
-        # Trapezoidal integration (better than Euler)
-        self.velocity[0] += 0.5 * (self.prev_accel[0] + accel_x) * dt
-        self.velocity[1] += 0.5 * (self.prev_accel[1] + accel_y) * dt
-        
-        # ZUPT: Zero-velocity Update (drift correction)
-        if self._is_stationary():
-            self.velocity = [0.0, 0.0, 0.0]
+ def update(self, accel_x, accel_y, accel_z, dt):
+ # Trapezoidal integration (better than Euler)
+ self.velocity[0] += 0.5 * (self.prev_accel[0] + accel_x) * dt
+ self.velocity[1] += 0.5 * (self.prev_accel[1] + accel_y) * dt
+
+ # ZUPT: Zero-velocity Update (drift correction)
+ if self._is_stationary():
+ self.velocity = [0.0, 0.0, 0.0]
 ```
 
 **ZUPT (Zero-velocity Update):**
@@ -182,16 +182,16 @@ When accelerometer reads near-zero for N seconds, we know velocity must be zero.
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Waiting: start_wait()
-    Waiting --> Settling: velocity < threshold
-    Settling --> Converged: stable for N ms
-    Settling --> Waiting: velocity spike
-    Converged --> [*]: is_converged() = True
-    Waiting --> Timeout: max_time exceeded
-    Timeout --> [*]: is_converged() = True (forced)
+ [*] --> Waiting: start_wait()
+ Waiting --> Settling: velocity < threshold
+ Settling --> Converged: stable for N ms
+ Settling --> Waiting: velocity spike
+ Converged --> [*]: is_converged() = True
+ Waiting --> Timeout: max_time exceeded
+ Timeout --> [*]: is_converged() = True (forced)
 ```
 
-**Key Insight:** We don't just wait for velocity to drop — we wait for it to *stay* low. A momentary dip due to wave action doesn't count.
+**Key Insight:** We don't just wait for velocity to drop we wait for it to *stay* low. A momentary dip due to wave action doesn't count.
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
@@ -209,19 +209,19 @@ stateDiagram-v2
 
 ```python
 def _execute_rotate_in_place(self, target_heading, speed):
-    # Lock translation
-    self.rc_controller.set_movement({
-        CH_FORWARD: NEUTRAL_PWM,
-        CH_LATERAL: NEUTRAL_PWM,
-        CH_THROTTLE: NEUTRAL_PWM,
-    }, 'translation_lock')
-    
-    # Only yaw active
-    self._yaw_to_heading = {
-        'target': target_heading,
-        'gain_offset': speed,
-        'mode': 'rotate_in_place'
-    }
+ # Lock translation
+ self.rc_controller.set_movement({
+ CH_FORWARD: NEUTRAL_PWM,
+ CH_LATERAL: NEUTRAL_PWM,
+ CH_THROTTLE: NEUTRAL_PWM,
+ }, 'translation_lock')
+
+ # Only yaw active
+ self._yaw_to_heading = {
+ 'target': target_heading,
+ 'gain_offset': speed,
+ 'mode': 'rotate_in_place'
+ }
 ```
 
 **Result:** Vehicle rotates on its axis without drifting laterally.
@@ -230,14 +230,14 @@ def _execute_rotate_in_place(self, target_heading, speed):
 
 ```mermaid
 graph LR
-    subgraph "Yaw Error Zones"
-        A[">10°: Full PID"] --> B["5-10°: Precision Zone"]
-        B --> C["<5°: Final Zone"]
-    end
-    
-    A -->|Kp = 2.5| D[Fast correction]
-    B -->|Kp = 1.25| E[Reduced gains]
-    C -->|Kp = 0.5| F[Fine positioning]
+ subgraph "Yaw Error Zones"
+ A[">10°: Full PID"] --> B["5-10°: Precision Zone"]
+ B --> C["<5°: Final Zone"]
+ end
+
+ A -->|Kp = 2.5| D[Fast correction]
+ B -->|Kp = 1.25| E[Reduced gains]
+ C -->|Kp = 0.5| F[Fine positioning]
 ```
 
 | Zone | Error Range | Kp Multiplier | Purpose |
@@ -248,16 +248,16 @@ graph LR
 
 ### Settling Time
 
-Not just *reach* target — *stay* at target:
+Not just *reach* target *stay* at target:
 
 ```python
 if abs(yaw_error) < self.final_deadband:
-    if self.in_final_zone_since is None:
-        self.in_final_zone_since = now
-    elif now - self.in_final_zone_since > self.settling_time:
-        return True  # Actually converged
+ if self.in_final_zone_since is None:
+ self.in_final_zone_since = now
+ elif now - self.in_final_zone_since > self.settling_time:
+ return True # Actually converged
 else:
-    self.in_final_zone_since = None  # Reset
+ self.in_final_zone_since = None # Reset
 ```
 
 | Parameter | Default | Description |
@@ -274,15 +274,15 @@ else:
 
 ```mermaid
 graph LR
-    subgraph "Cascade Controller"
-        POS[Position Error] -->|Position PID| VEL_SP[Velocity Setpoint]
-        VEL_SP --> VEL[Velocity Error]
-        VEL -->|Velocity PID| THR[Thrust Command]
-    end
-    
-    TARGET[Target Position] --> POS
-    CURRENT[Estimated Position] --> POS
-    VELOCITY[Estimated Velocity] --> VEL
+ subgraph "Cascade Controller"
+ POS[Position Error] -->|Position PID| VEL_SP[Velocity Setpoint]
+ VEL_SP --> VEL[Velocity Error]
+ VEL -->|Velocity PID| THR[Thrust Command]
+ end
+
+ TARGET[Target Position] --> POS
+ CURRENT[Estimated Position] --> POS
+ VELOCITY[Estimated Velocity] --> VEL
 ```
 
 **Why Cascade?**
@@ -295,19 +295,19 @@ graph LR
 **Outer Loop (Position):**
 ```python
 velocity_setpoint = position_pid.compute(
-    error=target_position - estimated_position,
-    dt=dt
+ error=target_position - estimated_position,
+ dt=dt
 )
-velocity_setpoint = clamp(velocity_setpoint, -0.5, 0.5)  # m/s limit
+velocity_setpoint = clamp(velocity_setpoint, -0.5, 0.5) # m/s limit
 ```
 
 **Inner Loop (Velocity):**
 ```python
 thrust = velocity_pid.compute(
-    error=velocity_setpoint - estimated_velocity,
-    dt=dt
+ error=velocity_setpoint - estimated_velocity,
+ dt=dt
 )
-thrust = clamp(thrust, -400, 400)  # PWM limit
+thrust = clamp(thrust, -400, 400) # PWM limit
 ```
 
 | Parameter | Default | Description |
@@ -329,17 +329,17 @@ thrust = clamp(thrust, -400, 400)  # PWM limit
 
 ```mermaid
 graph TB
-    subgraph "Speed Ranges"
-        LOW["0-30%: Low Speed"]
-        MED["30-60%: Medium Speed"]
-        HIGH["60-100%: High Speed"]
-    end
-    
-    subgraph "Gain Sets"
-        LOW --> GAINS_L["Kp=2.5, Ki=0.3, Kd=0.8"]
-        MED --> GAINS_M["Kp=2.0, Ki=0.2, Kd=0.6"]
-        HIGH --> GAINS_H["Kp=1.2, Ki=0.1, Kd=0.4"]
-    end
+ subgraph "Speed Ranges"
+ LOW["0-30%: Low Speed"]
+ MED["30-60%: Medium Speed"]
+ HIGH["60-100%: High Speed"]
+ end
+
+ subgraph "Gain Sets"
+ LOW --> GAINS_L["Kp=2.5, Ki=0.3, Kd=0.8"]
+ MED --> GAINS_M["Kp=2.0, Ki=0.2, Kd=0.6"]
+ HIGH --> GAINS_H["Kp=1.2, Ki=0.1, Kd=0.4"]
+ end
 ```
 
 **Why Different Gains?**
@@ -360,17 +360,17 @@ graph TB
 
 ```mermaid
 sequenceDiagram
-    participant CMD as Command
-    participant AL as AccelerationLimiter
-    participant RC as RC Controller
-    
-    CMD->>AL: speed = 80%
-    Note over AL: Current: 0%
-    AL->>RC: Tick 1: 2.5%
-    AL->>RC: Tick 2: 5.0%
-    AL->>RC: Tick 3: 7.5%
-    Note over AL: ...gradual ramp...
-    AL->>RC: Tick 32: 80%
+ participant CMD as Command
+ participant AL as AccelerationLimiter
+ participant RC as RC Controller
+
+ CMD->>AL: speed = 80%
+ Note over AL: Current: 0%
+ AL->>RC: Tick 1: 2.5%
+ AL->>RC: Tick 2: 5.0%
+ AL->>RC: Tick 3: 7.5%
+ Note over AL:...gradual ramp...
+ AL->>RC: Tick 32: 80%
 ```
 
 | Parameter | Default | Description |
@@ -388,54 +388,54 @@ sequenceDiagram
 
 ```mermaid
 classDiagram
-    class SensorSource {
-        <<abstract>>
-        +get_value() float
-        +is_valid() bool
-        +get_age() float
-    }
-    
-    class DVLSource {
-        -subscriber
-        -quality_threshold
-        +get_velocity() Tuple
-    }
-    
-    class ExternalYawSource {
-        -subscriber
-        -offset
-        +get_heading() float
-    }
-    
-    class PixhawkYawSource {
-        -telemetry_parser
-        +get_heading() float
-    }
-    
-    class SensorSourceManager {
-        -sources: Dict
-        -priorities: List
-        +get_velocity() Tuple
-        +get_heading() float
-        +get_active_source() str
-    }
-    
-    SensorSource <|-- DVLSource
-    SensorSource <|-- ExternalYawSource
-    SensorSource <|-- PixhawkYawSource
-    SensorSourceManager o-- SensorSource
+ class SensorSource {
+ <<abstract>>
+ +get_value() float
+ +is_valid() bool
+ +get_age() float
+ }
+
+ class DVLSource {
+ -subscriber
+ -quality_threshold
+ +get_velocity() Tuple
+ }
+
+ class ExternalYawSource {
+ -subscriber
+ -offset
+ +get_heading() float
+ }
+
+ class PixhawkYawSource {
+ -telemetry_parser
+ +get_heading() float
+ }
+
+ class SensorSourceManager {
+ -sources: Dict
+ -priorities: List
+ +get_velocity() Tuple
+ +get_heading() float
+ +get_active_source() str
+ }
+
+ SensorSource <|-- DVLSource
+ SensorSource <|-- ExternalYawSource
+ SensorSource <|-- PixhawkYawSource
+ SensorSourceManager o-- SensorSource
 ```
 
 ### Priority Fallback
 
 ```python
 class SensorSourceManager:
-    def get_velocity(self):
-        for source_name in self.velocity_priority:
-            source = self.sources.get(source_name)
-            if source and source.is_valid():
-                return source.get_velocity(), source_name
-        return None, 'none'
+ def get_velocity(self):
+ for source_name in self.velocity_priority:
+ source = self.sources.get(source_name)
+ if source and source.is_valid():
+ return source.get_velocity(), source_name
+ return None, 'none'
 ```
 
 **Default Priorities:**
@@ -452,20 +452,20 @@ class SensorSourceManager:
 **Quality Filtering:**
 ```python
 if msg.covariance[0] < self.min_quality:
-    return None  # Reject low-quality reading
+ return None # Reject low-quality reading
 ```
 
 ### External Compass Support
 
 **Supported Message Types:**
-- `std_msgs/Float32` — Raw heading in degrees
-- `sensor_msgs/Imu` — Extract yaw from quaternion
-- `geometry_msgs/Vector3Stamped` — Use x field
+- `std_msgs/Float32` Raw heading in degrees
+- `sensor_msgs/Imu` Extract yaw from quaternion
+- `geometry_msgs/Vector3Stamped` Use x field
 
 **Calibration Offset:**
 ```python
 heading = raw_heading + self.offset
-heading = heading % 360  # Normalize
+heading = heading % 360 # Normalize
 ```
 
 ---
@@ -476,25 +476,25 @@ heading = heading % 360  # Normalize
 
 ```
 src/mavlink_inspector/mavlink_inspector/
-├── velocity_control.py    # Phase 1-4 classes (~940 lines)
-│   ├── VelocityEstimator
-│   ├── ConvergenceGate
-│   ├── PositionEstimator
-│   ├── CascadeController
-│   ├── GainScheduler
-│   └── AccelerationLimiter
-│
-├── sensor_sources.py      # Phase 5 classes (~800 lines)
-│   ├── SensorSource (ABC)
-│   ├── DVLSource
-│   ├── DVLIMUSource
-│   ├── ExternalYawSource
-│   ├── PixhawkYawSource
-│   └── SensorSourceManager
-│
-├── inspector_node.py      # +578 lines for wiring
-├── command_handler.py     # +476 lines for helpers
-└── movement_commands.py   # +144 lines for rotate-in-place
+ velocity_control.py # Phase 1-4 classes (~940 lines)
+ VelocityEstimator
+ ConvergenceGate
+ PositionEstimator
+ CascadeController
+ GainScheduler
+ AccelerationLimiter
+
+ sensor_sources.py # Phase 5 classes (~800 lines)
+ SensorSource (ABC)
+ DVLSource
+ DVLIMUSource
+ ExternalYawSource
+ PixhawkYawSource
+ SensorSourceManager
+
+ inspector_node.py # +578 lines for wiring
+ command_handler.py # +476 lines for helpers
+ movement_commands.py # +144 lines for rotate-in-place
 ```
 
 ### Module Wiring (inspector_node.py)
@@ -516,14 +516,14 @@ self.sensor_manager = SensorSourceManager(node=self)
 
 ```python
 def _handle_scaled_imu2(self, msg):
-    # Extract accelerometer data
-    accel_x = msg.xacc / 1000.0  # milli-g to g
-    accel_y = msg.yacc / 1000.0
-    accel_z = msg.zacc / 1000.0
-    
-    # Update velocity estimate
-    if self.velocity_estimator_enabled:
-        self.velocity_estimator.update(accel_x, accel_y, accel_z, dt)
+ # Extract accelerometer data
+ accel_x = msg.xacc / 1000.0 # milli-g to g
+ accel_y = msg.yacc / 1000.0
+ accel_z = msg.zacc / 1000.0
+
+ # Update velocity estimate
+ if self.velocity_estimator_enabled:
+ self.velocity_estimator.update(accel_x, accel_y, accel_z, dt)
 ```
 
 ---
@@ -547,7 +547,7 @@ See `analysis/guides/pool-testing/next_things_to_check.md` for comprehensive tes
 ### Phase 3-4 Testing
 
 1. **Cascade:** Compare overshoot with/without cascade
-2. **Gain Scheduling:** Test same command at 30%, 60%, 90% — verify stability
+2. **Gain Scheduling:** Test same command at 30%, 60%, 90% verify stability
 3. **Acceleration Limiting:** Verify smooth ramp-up
 
 ### Phase 5 Testing
@@ -651,9 +651,9 @@ V2 is fully backward compatible. To migrate:
 2. **Build:** `colcon build`
 3. **Test without V2 features:** All existing commands work unchanged
 4. **Enable features one at a time:**
-   ```yaml
-   convergence_enabled: true  # Start here
-   ```
+ ```yaml
+ convergence_enabled: true # Start here
+ ```
 5. **Pool test each feature before enabling next**
 
 ---
