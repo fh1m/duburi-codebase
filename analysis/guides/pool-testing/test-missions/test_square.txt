@@ -1,0 +1,43 @@
+# Square Pattern Mission
+# Purpose: Validate integrated control and position accuracy
+# Expected duration: ~40 seconds
+# Expected behavior: Returns to starting position within 0.5m (gravity compensation test)
+
+arm
+mode MANUAL
+
+# Side 1: Move forward
+forward 30% 5s
+delay 1
+
+# Turn 1: 90 degrees left
+turn left 90 50%
+delay 1
+
+# Side 2: Move forward
+forward 30% 5s
+delay 1
+
+# Turn 2: 90 degrees left
+turn left 90 50%
+delay 1
+
+# Side 3: Move forward
+forward 30% 5s
+delay 1
+
+# Turn 3: 90 degrees left
+turn left 90 50%
+delay 1
+
+# Side 4: Move forward (return to start)
+forward 30% 5s
+delay 1
+
+# Final turn to original heading
+turn left 90 50%
+delay 2
+
+# Stop and disarm
+stop
+disarm

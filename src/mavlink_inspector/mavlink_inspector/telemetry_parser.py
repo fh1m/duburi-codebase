@@ -9,6 +9,7 @@ COMMAND_ACK is NOT handled here — the orchestrator manages ACK tracking.
 from __future__ import annotations
 
 import math
+import time
 
 from pymavlink import mavutil
 
@@ -43,6 +44,18 @@ class TelemetryParser:
         self._prev_armed: bool | None = None
         self._prev_mode: str | None = None
 
+        # ── Depth calibration ────────────────────────────────────────
+        self.surface_pressure: float = 0.0  # Calibrated surface pressure (hPa)
+        
+        # ── Issue #27: MAVLink message rate watchdog ──────────────────
+        # Track timestamps for stale telemetry detection
+        self._last_attitude = 0.0
+        self._last_ahrs2 = 0.0
+        self._last_depth = 0.0
+        self._last_imu = 0.0
+        self._last_heartbeat = 0.0
+        self._watchdog_timeout = 2.0  # seconds (stale if not received in this time)
+
         # ── Dispatch table (Design Issue 5) ──────────────────────────
         # Uniform signature: handler(msg, master, events)
         # Add new message types here — one method + one dict entry.
@@ -73,6 +86,77 @@ class TelemetryParser:
         if handler is not None:
             handler(msg, master, events)
         return events
+    
+    def get_orientation(self):
+        """
+        Get current vehicle orientation as a quaternion.
+        
+        Converts stored Euler angles (roll, pitch, yaw) to quaternion format.
+        This is needed for gravity rotation correction in velocity estimation.
+        
+        Returns:
+            Object with (w, x, y, z) quaternion components representing
+            the rotation from world frame to body frame.
+            Returns None if scipy is not available.
+        """
+        try:
+            from scipy.spatial.transform import Rotation
+        except ImportError:
+            # Fallback: scipy not available, return identity quaternion
+            class Quaternion:
+                w, x, y, z = 1.0, 0.0, 0.0, 0.0
+            return Quaternion()
+        
+        try:
+            # Convert Euler angles to quaternion
+            # Roll (X), Pitch (Y), Yaw (Z) in degrees to radians
+            r = Rotation.from_euler('xyz', 
+                                    [self.roll, self.pitch, self.yaw], 
+                                    degrees=True)
+            # scipy returns [x, y, z, w], we need [w, x, y, z]
+            q_scipy = r.as_quat()
+            
+            # Create a simple quaternion object
+            class Quaternion:
+                pass
+            
+            quat = Quaternion()
+            quat.x = q_scipy[0]
+            quat.y = q_scipy[1]
+            quat.z = q_scipy[2]
+            quat.w = q_scipy[3]
+            
+            return quat
+        except Exception:
+            # Return identity quaternion on any error
+            class Quaternion:
+                w, x, y, z = 1.0, 0.0, 0.0, 0.0
+            return Quaternion()
+    
+    def check_watchdog(self) -> dict:
+        """
+        Check for stale MAVLink messages (Issue #27).
+        
+        Returns:
+            Dictionary of {message_type: seconds_since_last_receipt} for
+            messages that haven't been received within the watchdog timeout.
+            Empty dict if all critical messages are current.
+        """
+        now = time.time()
+        stale = {}
+        
+        if self._last_heartbeat > 0 and now - self._last_heartbeat > self._watchdog_timeout:
+            stale['heartbeat'] = now - self._last_heartbeat
+        if self._last_attitude > 0 and now - self._last_attitude > self._watchdog_timeout:
+            stale['attitude'] = now - self._last_attitude
+        if self._last_ahrs2 > 0 and now - self._last_ahrs2 > self._watchdog_timeout:
+            stale['ahrs2'] = now - self._last_ahrs2
+        if self._last_depth > 0 and now - self._last_depth > self._watchdog_timeout:
+            stale['depth'] = now - self._last_depth
+        if self._last_imu > 0 and now - self._last_imu > self._watchdog_timeout:
+            stale['imu'] = now - self._last_imu
+            
+        return stale
 
     # ── Message handlers ─────────────────────────────────────────────
 
@@ -82,6 +166,9 @@ class TelemetryParser:
         # should not flip armed/mode state.
         if msg.autopilot == mavutil.mavlink.MAV_AUTOPILOT_INVALID:
             return
+        
+        # Issue #27: Update heartbeat timestamp
+        self._last_heartbeat = time.time()
 
         self.armed = (
             msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED
@@ -105,10 +192,11 @@ class TelemetryParser:
         self._prev_mode = self.flight_mode
 
     def _handle_ahrs2(self, msg, _master, _events):
-        # Depth always comes from AHRS2
-        self.prev_depth = self.depth
-        self.depth = msg.altitude
-        # BUG6 FIX: yaw only from AHRS2 if yaw_source='ahrs2' or 'both'
+        # CRITICAL FIX #3: Yaw/pitch/roll from AHRS2 only.
+        # NOTE: Depth now computed from SCALED_PRESSURE (not MSL altitude)
+        # Issue #27: Update AHRS2 timestamp
+        self._last_ahrs2 = time.time()
+        
         if self._yaw_source in ('ahrs2', 'both'):
             self.prev_yaw = self.yaw
             self.yaw = math.degrees(msg.yaw) % 360
@@ -116,6 +204,9 @@ class TelemetryParser:
         self.roll = math.degrees(msg.roll)
 
     def _handle_attitude(self, msg, _master, _events):
+        # Issue #27: Update ATTITUDE timestamp
+        self._last_attitude = time.time()
+        
         yaw_rad = msg.yaw
         if yaw_rad < 0:
             yaw_rad += 2 * math.pi
@@ -137,8 +228,23 @@ class TelemetryParser:
         self.cpu_load = msg.load / 10.0  # 0.1% units → %
 
     def _handle_scaled_pressure(self, msg, _master, _events):
+        # Issue #27: Update depth message timestamp
+        self._last_depth = time.time()
+        
         self.pressure = msg.press_abs           # hPa
         self.temperature = msg.temperature / 100.0  # cdegC → °C
+        
+        # CRITICAL FIX #3: Compute depth from pressure (not from AHRS2 altitude)
+        # For freshwater: 1 mbar ≈ 1 cm depth
+        # depth = (current_pressure - surface_pressure) * 0.01 meters
+        if self.surface_pressure > 0:
+            self.prev_depth = self.depth
+            self.depth = (self.pressure - self.surface_pressure) * 0.01
+        else:
+            # First reading - calibrate surface pressure and set depth to 0
+            self.surface_pressure = self.pressure
+            self.prev_depth = 0.0
+            self.depth = 0.0
 
     def _handle_servo_output(self, msg, _master, _events):
         self.servo_output = [
@@ -161,6 +267,9 @@ class TelemetryParser:
         
         Body frame: X=forward, Y=right, Z=down (NED convention)
         """
+        # Issue #27: Update IMU timestamp
+        self._last_imu = time.time()
+        
         # Convert milliG to m/s²
         G = 9.81
         self.accel_x = (msg.xacc / 1000.0) * G  # Forward

@@ -42,6 +42,7 @@ from .telemetry_parser import TelemetryParser
 from .rc_controller import (
     RcController, NEUTRAL_CHANNELS, NEUTRAL_PWM, PWM_RANGE,
     CH_FORWARD, CH_LATERAL, CH_THROTTLE, CH_YAW,
+    set_pwm_config,
 )
 from .command_handler import CommandHandler
 from .velocity_control import (
@@ -60,6 +61,9 @@ class MavlinkInspectorNode(Node):
         self._boot_time = time.time()
 
         # ── ROS parameters ───────────────────────────────────────────
+        # Issue #30: Simulation time support
+        self._use_sim_time = self.declare_parameter('use_sim_time', False).value
+        
         _conn_desc = ParameterDescriptor(
             description=(
                 'Serial device (e.g. /dev/ttyACM0) or pymavlink URL. '
@@ -115,6 +119,10 @@ class MavlinkInspectorNode(Node):
         self._brake_strength = self.declare_parameter('brake_strength', 0.3).value
         self._brake_duration = self.declare_parameter('brake_duration', 0.5).value
         self._min_speed_pct = self.declare_parameter('min_speed_pct', 10.0).value
+
+        # Publishing rates (Hz)
+        self._state_publish_rate = self.declare_parameter('state_publish_rate', 10.0).value
+        self._diagnostics_publish_rate = self.declare_parameter('diagnostics_publish_rate', 2.0).value
 
         # Auto station-keeping after movement (NEW)
         self._auto_depth_hold = self.declare_parameter('auto_depth_hold', True).value
@@ -268,6 +276,13 @@ class MavlinkInspectorNode(Node):
                 )
             ),
         ).value
+
+        # PWM Configuration (Issue #14)
+        pwm_neutral = self.declare_parameter('pwm_neutral', 1500).value
+        pwm_range = self.declare_parameter('pwm_range', 400).value
+        
+        # Apply PWM configuration to rc_controller module
+        set_pwm_config(pwm_neutral, pwm_range)
 
         # ── Modules ──────────────────────────────────────────────────
         self._conn = ConnectionManager(
@@ -482,12 +497,13 @@ class MavlinkInspectorNode(Node):
 
         # ── Timers ───────────────────────────────────────────────────
         self.create_timer(0.02, self._read_mavlink)       # 50 Hz
-        self.create_timer(0.1, self._publish_state)       # 10 Hz
-        self.create_timer(1.0, self._conn.send_heartbeat) # 1 Hz
+        self.create_timer(1.0 / self._state_publish_rate, self._publish_state)
+        self.create_timer(0.5, self._conn.send_heartbeat) # 2 Hz for ArduSub GCS failsafe
         self.create_timer(0.05, self._send_rc_override)   # 20 Hz
-        self.create_timer(0.5, self._publish_diagnostics) # 2 Hz
+        self.create_timer(1.0 / self._diagnostics_publish_rate, self._publish_diagnostics)
         self.create_timer(0.5, self._resend_depth_target) # 2 Hz
         self.create_timer(0.5, self._check_ack_timeouts)  # 2 Hz
+        self.create_timer(1.0, self._check_telemetry_watchdog)  # Issue #27: 1 Hz watchdog check
         
         # Phase 3: Position estimation update
         position_update_period = 1.0 / self._position_update_rate
@@ -496,9 +512,155 @@ class MavlinkInspectorNode(Node):
         # Dynamic reconfigure callback
         from rcl_interfaces.msg import SetParametersResult
         self.add_on_set_parameters_callback(self._on_param_change)
+        
+        # ── Issue #28: Validate all parameters on startup ──────────────
+        self._validate_parameters()
 
         # ── Start connection ─────────────────────────────────────────
         self._conn.start_background()
+    
+    # ── Issue #28: Parameter validation ──────────────────────────────
+    
+    def _validate_parameters(self):
+        """
+        Validate all parameter ranges on startup (Issue #28).
+        
+        Raises:
+            ValueError: If any parameters are out of valid ranges
+        """
+        errors = []
+        
+        # PID gains must be non-negative
+        if self._depth_kp < 0 or self._depth_ki < 0 or self._depth_kd < 0:
+            errors.append(
+                f"Depth PID gains must be non-negative: "
+                f"kp={self._depth_kp}, ki={self._depth_ki}, kd={self._depth_kd}"
+            )
+        
+        if self._yaw_kp < 0 or self._yaw_ki < 0 or self._yaw_kd < 0:
+            errors.append(
+                f"Yaw PID gains must be non-negative: "
+                f"kp={self._yaw_kp}, ki={self._yaw_ki}, kd={self._yaw_kd}"
+            )
+        
+        # PWM values must be in servo range [1000, 2000] PWM units
+        # Neutral should typically be near 1500, range should allow +/- offset
+        pwm_neutral = self.declare_parameter('pwm_neutral', 1500).value
+        pwm_range = self.declare_parameter('pwm_range', 400).value
+        pwm_min = pwm_neutral - pwm_range
+        pwm_max = pwm_neutral + pwm_range
+        
+        if not (1000 <= pwm_min and pwm_max <= 2000):
+            errors.append(
+                f"PWM range out of servo limits [1000, 2000]: "
+                f"neutral={pwm_neutral}, range={pwm_range} gives [{pwm_min}, {pwm_max}]"
+            )
+        
+        # Update rates must be positive
+        if self._state_publish_rate <= 0:
+            errors.append(
+                f"state_publish_rate must be > 0, got {self._state_publish_rate}"
+            )
+        
+        if self._diagnostics_publish_rate <= 0:
+            errors.append(
+                f"diagnostics_publish_rate must be > 0, got {self._diagnostics_publish_rate}"
+            )
+        
+        if self._position_update_rate <= 0:
+            errors.append(
+                f"position_update_rate must be > 0, got {self._position_update_rate}"
+            )
+        
+        if self._pid_max_rate <= 0:
+            errors.append(
+                f"pid_max_rate must be > 0, got {self._pid_max_rate}"
+            )
+        
+        # Ramp rate must be non-negative
+        if self._ramp_rate < 0:
+            errors.append(
+                f"ramp_rate must be >= 0, got {self._ramp_rate}"
+            )
+        
+        # Timeouts must be positive
+        if self._ack_timeout <= 0:
+            errors.append(
+                f"ack_timeout must be > 0, got {self._ack_timeout}"
+            )
+        
+        if self._rc_watchdog_timeout <= 0:
+            errors.append(
+                f"rc_watchdog_timeout must be > 0, got {self._rc_watchdog_timeout}"
+            )
+        
+        # Depth tolerance must be non-negative
+        if self._depth_tolerance < 0:
+            errors.append(
+                f"depth_tolerance must be >= 0, got {self._depth_tolerance}"
+            )
+        
+        # Position parameters (cascade control)
+        if self._max_velocity_setpoint < 0:
+            errors.append(
+                f"max_velocity_setpoint must be >= 0, got {self._max_velocity_setpoint}"
+            )
+        
+        if self._position_tolerance < 0:
+            errors.append(
+                f"position_tolerance must be >= 0, got {self._position_tolerance}"
+            )
+        
+        # Convergence parameters must be positive
+        if self._convergence_velocity_threshold < 0:
+            errors.append(
+                f"convergence_velocity_threshold must be >= 0, got {self._convergence_velocity_threshold}"
+            )
+        
+        if self._convergence_settling_time < 0:
+            errors.append(
+                f"convergence_settling_time must be >= 0, got {self._convergence_settling_time}"
+            )
+        
+        if self._convergence_timeout <= 0:
+            errors.append(
+                f"convergence_timeout must be > 0, got {self._convergence_timeout}"
+            )
+        
+        # Log any errors and raise exception if validation failed
+        if errors:
+            for err in errors:
+                self.get_logger().error(f"Parameter validation failed: {err}")
+            raise ValueError(
+                f"Invalid parameters: {len(errors)} validation error(s). "
+                f"See logs for details."
+            )
+        
+        self.get_logger().info(
+            "Parameter validation passed: all parameters within valid ranges"
+        )
+    
+    # ── Issue #30: Simulation time support ────────────────────────────
+    
+    def get_current_time(self) -> float:
+        """
+        Get current time (simulation or wall-clock).
+        
+        Returns the current time in seconds. If use_sim_time is enabled,
+        returns the ROS simulation time. Otherwise, returns wall-clock time.
+        
+        This method should be used instead of time.time() when simulator
+        support is needed.
+        
+        Returns:
+            float: Current time in seconds
+        """
+        if self._use_sim_time:
+            # Return ROS simulation time in seconds
+            return self.get_clock().now().nanoseconds / 1e9
+        else:
+            # Return wall-clock time
+            return time.time()
 
     # ── Event / feedback helpers ─────────────────────────────────────
 
@@ -606,29 +768,49 @@ class MavlinkInspectorNode(Node):
                 self._ack_timeout = value
             elif name == 'rc_watchdog_timeout':
                 self._rc_watchdog_timeout = value
+            elif name == 'use_sim_time':
+                # Issue #30: Handle simulation time parameter changes
+                self._use_sim_time = value
             
             self.get_logger().info(f'Parameter updated: {name} = {value}')
         
         return SetParametersResult(successful=True)
 
     # ── State publishing ─────────────────────────────────────────────
+    
+    def _check_telemetry_watchdog(self):
+        """
+        Check for stale MAVLink messages (Issue #27).
+        
+        Called periodically (1 Hz) to detect if critical telemetry messages
+        haven't been received within the watchdog timeout period.
+        """
+        stale = self._telemetry.check_watchdog()
+        if stale:
+            stale_str = ', '.join(
+                f"{msg_type}: {elapsed:.1f}s"
+                for msg_type, elapsed in stale.items()
+            )
+            self.get_logger().warning(
+                f"Stale telemetry detected: {stale_str}"
+            )
 
     def _publish_state(self):
         try:
             if not rclpy.ok():
                 return
-            t = self._telemetry
+            telemetry = self._telemetry
             msg = VehicleState()
             msg.header.stamp = self.get_clock().now().to_msg()
             msg.header.frame_id = 'base_link'
-            msg.armed = t.armed
-            msg.flight_mode = t.flight_mode
-            msg.depth = float(t.depth)
-            msg.yaw = float(t.yaw)
-            msg.pitch = float(t.pitch)
-            msg.roll = float(t.roll)
-            msg.voltage = float(t.voltage)
-            msg.current = float(t.current)
+            msg.armed = telemetry.armed
+            msg.flight_mode = telemetry.flight_mode
+            msg.depth = float(telemetry.depth)
+            msg.yaw = float(telemetry.yaw)
+            msg.pitch = float(telemetry.pitch)
+            msg.roll = float(telemetry.roll)
+            msg.voltage = float(telemetry.voltage)
+            msg.current = float(telemetry.current)
             self._state_pub.publish(msg)
         except Exception as e:
             self.get_logger().error(f'State publish failed: {e}')
@@ -637,16 +819,16 @@ class MavlinkInspectorNode(Node):
         try:
             if not rclpy.ok():
                 return
-            t = self._telemetry
+            telemetry = self._telemetry
             msg = VehicleDiagnostics()
             msg.header.stamp = self.get_clock().now().to_msg()
             msg.header.frame_id = 'base_link'
-            msg.heading_rate = float(t.heading_rate)
-            msg.pressure = float(t.pressure)
-            msg.temperature = float(t.temperature)
-            msg.servo_output = [int(v) for v in t.servo_output]
-            msg.rc_channels = [int(v) for v in t.rc_channels]
-            msg.cpu_load = float(t.cpu_load)
+            msg.heading_rate = float(telemetry.heading_rate)
+            msg.pressure = float(telemetry.pressure)
+            msg.temperature = float(telemetry.temperature)
+            msg.servo_output = [int(v) for v in telemetry.servo_output]
+            msg.rc_channels = [int(v) for v in telemetry.rc_channels]
+            msg.cpu_load = float(telemetry.cpu_load)
             self._diag_pub.publish(msg)
         except Exception as e:
             self.get_logger().error(f'Diagnostics publish failed: {e}')
@@ -698,7 +880,9 @@ class MavlinkInspectorNode(Node):
                 self._telemetry.accel_y,
                 self._telemetry.accel_z
             )
-            self._velocity_estimator.update(imu_msg)
+            # Get current orientation quaternion for gravity correction
+            orientation_quat = self._telemetry.get_orientation()
+            self._velocity_estimator.update(imu_msg, orientation_quat)
     
     def _update_position(self):
         """Update position estimate from velocity (Phase 3)."""
@@ -773,38 +957,15 @@ class MavlinkInspectorNode(Node):
 
         # ── Layer 3: depth PID (overrides CH_THROTTLE) ───────────────
         if depth_pid is not None and depth_target is not None:
-            dt = now - self._depth_pid_last_time if self._depth_pid_last_time > 0 else 0            # Auto station-keeping: activate depth/heading hold after movement
-            if self._telemetry is not None:
-                if self._auto_depth_hold and depth_pid is None:
-                    # Activate depth hold at current depth
-                    current_depth = self._telemetry.depth
-                    self.get_logger().info(
-                        f'Auto depth-hold at {current_depth:.2f}m')
-                    self._cmd_handler.activate_depth_pid(current_depth)
-                    # Update local refs for this cycle
-                    depth_pid = self._depth_pid
-                    depth_target = current_depth
-
-                if self._auto_heading_hold and yaw_target is None:
-                    # Activate heading hold at current heading
-                    current_heading = self._telemetry.heading
-                    self.get_logger().info(
-                        f'Auto heading-hold at {current_heading:.1f}°')
-                    self._cmd_handler.activate_yaw_pid(current_heading)
-                    # Update local refs for this cycle
-                    yaw_pid = self._yaw_pid
-                    yaw_target = current_heading
-
-.05
+            dt = now - self._depth_pid_last_time if self._depth_pid_last_time > 0 else 0.05
             self._depth_pid_last_time = now
             if dt <= 0:
                 dt = 0.05
 
-            t = self._telemetry
-            error = depth_target - t.depth
-           end_time = mv.get('end_time') if mv else None
-        self._rc.apply_movement(channels, mv, bypass, end_time=end_time)
-        output = depth_pid.compute(error, dt,
+            telemetry = self._telemetry
+            error = depth_target - telemetry.depth
+            raw_rate = (telemetry.depth - telemetry.prev_depth) / dt if dt > 0 else 0.0
+            output = depth_pid.compute(error, dt,
                                        measurement_rate=raw_rate)
 
             if depth_pid.in_deadband:
@@ -817,16 +978,7 @@ class MavlinkInspectorNode(Node):
             err = self._angle_error(self._telemetry.yaw, yaw_target)
 
             if abs(err) <= yaw_tolerance:
-                # Target reached
-                with self._movement_lock:
-                    self._yaw_pid = None
-                    self._yaw_target = None
-                    self._yaw_bang_offset = None
-                self._publish_event(
-                    'movement', f'Heading reached: {yaw_target}°')
-                self._publish_feedback(
-                    self._yaw_command or 'yaw_to_heading', 'reached',
-                    error=err, d                # Within tolerance - start or continue settling
+                # Within tolerance - start or continue settling
                 if self._yaw_settle_start is None:
                     self._yaw_settle_start = now
                     # Keep PID/bang-bang active during settling
@@ -889,7 +1041,14 @@ class MavlinkInspectorNode(Node):
                     # Bang-bang mode
                     channels[CH_YAW] = NEUTRAL_PWM + (
                         yaw_bang if err > 0 else -yaw_bang)
-watchdog_timeout:
+
+        # ── Send RC override and track success ────────────────────────
+        success = self._rc.send_rc(channels, self._conn.master, self.get_logger())
+        if success:
+            self._last_rc_success = now
+
+        # ── Watchdog timeout check ───────────────────────────────────
+        if now - self._last_rc_success > self._rc_watchdog_timeout:
             self.get_logger().fatal(
                 f'RC watchdog timeout! No successful RC send for '
                 f'{self._rc_watchdog_timeout}s - forcing emergency neutral')
@@ -1072,7 +1231,7 @@ watchdog_timeout:
             int(1e3 * (time.time() - self._boot_time)),
             self._conn.master.target_system,
             self._conn.master.target_component,
-            mavutil.mavlink.MAV_FRAME_GLOBAL_INT,
+            mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
             type_mask,
             0, 0, depth, 0, 0, 0, 0, 0, 0, 0, 0)
 
@@ -1084,9 +1243,9 @@ watchdog_timeout:
         if not self._conn.connected or self._conn.master is None:
             return
         action = 'Arming' if do_arm else 'Disarming'
-        v = 1 if do_arm else 0
+        arm_value = 1 if do_arm else 0
         self.get_logger().info(
-            f'TX COMMAND_LONG  COMPONENT_ARM_DISARM  arm={v}')
+            f'TX COMMAND_LONG  COMPONENT_ARM_DISARM  arm={arm_value}')
         self._publish_event('arm' if do_arm else 'disarm',
                             f'{action}...')
         try:
@@ -1130,6 +1289,53 @@ watchdog_timeout:
             self._conn.master.target_component,
             mavutil.mavlink.MAV_CMD_DO_SET_SERVO, 0,
             servo_n + 8, microseconds, 0, 0, 0, 0, 0)
+    
+    def set_home_position(self, lat: float = None, lon: float = None, 
+                          alt: float = None):
+        """
+        Set home position using MAV_CMD_DO_SET_HOME (Issue #29).
+        
+        Args:
+            lat: Latitude in degrees. If None, use current position.
+            lon: Longitude in degrees. If None, use current position.
+            alt: Altitude in meters. If None, use current position.
+        
+        If all parameters are None, sets home to the vehicle's current position.
+        """
+        if not self._conn.connected or self._conn.master is None:
+            self.get_logger().error(
+                'Cannot set home position: vehicle not connected'
+            )
+            return
+        
+        if lat is None or lon is None or alt is None:
+            # Use current position (param1=1)
+            self.get_logger().info(
+                'TX COMMAND_LONG MAV_CMD_DO_SET_HOME (use current position)'
+            )
+            self._conn.master.mav.command_long_send(
+                self._conn.master.target_system,
+                self._conn.master.target_component,
+                mavutil.mavlink.MAV_CMD_DO_SET_HOME,
+                0,  # confirmation
+                1,  # param1: 1=use current position, 0=use specified
+                0, 0, 0, 0, 0, 0  # params 2-7 unused
+            )
+        else:
+            # Use specified position (param1=0)
+            self.get_logger().info(
+                f'TX COMMAND_LONG MAV_CMD_DO_SET_HOME '
+                f'(lat={lat}, lon={lon}, alt={alt})'
+            )
+            self._conn.master.mav.command_long_send(
+                self._conn.master.target_system,
+                self._conn.master.target_component,
+                mavutil.mavlink.MAV_CMD_DO_SET_HOME,
+                0,  # confirmation
+                0,  # param1: 0=use specified position
+                0, 0, 0,
+                lat, lon, alt  # params 5, 6, 7
+            )
 
     # ── Service handler ──────────────────────────────────────────────
 

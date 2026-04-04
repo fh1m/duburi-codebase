@@ -181,6 +181,14 @@ class BlueOSAPI:
         """Build URL for a BlueOS service endpoint."""
         return f"http://{self.host}:{port}{path}"
 
+    def _normalize_url(self, endpoint: str) -> str:
+        """Ensure consistent URL formatting (Issue #16).
+        
+        Normalizes trailing slashes for consistent API behavior.
+        """
+        # Remove trailing slash from endpoint
+        return endpoint.rstrip('/')
+
     # ─────────────────────────────────────────────────────────────────
     # Synchronous API (using requests)
     # ─────────────────────────────────────────────────────────────────
@@ -271,8 +279,8 @@ class BlueOSAPI:
 
         Returns list of all MAVLink endpoints (UDP, TCP, Serial).
         """
-        # BlueOS requires trailing slash on this endpoint
-        data = self._get(self.PORT_ARDUPILOT_MANAGER, "/v1.0/endpoints/")
+        # Issue #16: Normalize endpoint path for consistency
+        data = self._get(self.PORT_ARDUPILOT_MANAGER, "/v1.0/endpoints")
         return [MavlinkEndpoint.from_dict(e) for e in data]
 
     def add_mavlink_endpoint(self, endpoint: MavlinkEndpoint) -> None:
@@ -282,9 +290,10 @@ class BlueOSAPI:
         Args:
             endpoint: Endpoint configuration to add.
         """
+        # Issue #16: Normalize endpoint path for consistency
         self._post(
             self.PORT_ARDUPILOT_MANAGER,
-            "/v1.0/endpoints/",
+            "/v1.0/endpoints",
             endpoint.to_dict(),
         )
 

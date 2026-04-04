@@ -49,7 +49,8 @@ DEFAULT_SERIAL_PORTS = [
 ]
 
 # ── Speed / timing defaults ──────────────────────────────────────────
-DEFAULT_SPEED = 50
+DEFAULT_SPEED_PERCENT = 50  # Default thrust percentage (0-100%)
+DEFAULT_SPEED = DEFAULT_SPEED_PERCENT  # Backwards compatibility
 ARM_WAIT = 4.0
 DISARM_WAIT = 2.0
 SURFACE_WAIT = 5.0

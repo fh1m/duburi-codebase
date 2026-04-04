@@ -1,0 +1,31 @@
+# Depth Profile Mission
+# Purpose: Test depth control and stability at multiple depths
+# Expected duration: ~60 seconds
+# Expected behavior: Smooth depth transitions, stable holds at each level
+
+arm
+mode MANUAL
+
+# Dive to 0.5m and hold
+dive 0.5m 50%
+hold depth 10s
+
+# Dive to 1.0m and hold
+dive 1.0m 50%
+hold depth 10s
+
+# Dive to 1.5m and hold
+dive 1.5m 50%
+hold depth 10s
+
+# Return to 1.0m and hold
+dive 1.0m 50%
+hold depth 10s
+
+# Surface
+surface
+delay 2
+
+# Stop and disarm
+stop
+disarm

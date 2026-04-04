@@ -75,40 +75,63 @@ mavlink_inspector:
     # ═══════════════════════════════════════════════════════════════════
     rc_watchdog_timeout: 0.5  # Seconds without RC success → emergency neutral
     
-    # ═══════════════════════════════════════════════════════════════════
-    # VELOCITY ESTIMATION & CONVERGENCE (Phase 1)
-    # ═══════════════════════════════════════════════════════════════════
-    # Convergence gate - blocks next command until vehicle stops
+    # ═══════════════════════════════════════════════════════════════════════
+    # V2 CONTROL FEATURES (Phases 1-4)
+    # ═══════════════════════════════════════════════════════════════════════
+    # These advanced features improve control accuracy but require careful
+    # tuning for your specific AUV. Start with defaults (mostly disabled),
+    # enable and test one feature at a time.
+    #
+    # RECOMMENDED ENABLING ORDER:
+    # 1. Enable convergence_enabled → test stability after movements
+    # 2. Enable rotate_in_place_enabled → test precision yaw control
+    # 3. Enable cascade_enabled → tune position/velocity cascade loops
+    # 4. Enable gain_scheduling_enabled → fine-tune speed-adaptive gains
+    #
+    # Each step should be tested in the pool before enabling the next.
+    # ═══════════════════════════════════════════════════════════════════════
+    
+    # ───────────────────────────────────────────────────────────────────────
+    # PHASE 1: CONVERGENCE GATES (Wait for setpoint convergence)
+    # ───────────────────────────────────────────────────────────────────────
+    # Convergence gate blocks next command until vehicle stops.
+    # Improves waypoint precision by ensuring stable state before next move.
+    convergence_enabled: false             # DISABLED by default - enable for precision
     convergence_velocity_threshold: 0.05  # m/s - max velocity to consider "stopped"
     convergence_settling_time: 200        # milliseconds to stay below threshold
-    convergence_timeout: 5.0              # seconds max wait (safety)
+    convergence_timeout: 5.0              # seconds max wait (safety limit)
     
-    # IMU velocity estimation - body-frame integration with ZUPT
-    imu_stopped_accel_threshold: 0.02     # m/s² - accel below this = stopped (for ZUPT)
+    # IMU velocity estimation (used by convergence gate)
+    imu_stopped_accel_threshold: 0.02     # m/s² - accel below this = stopped (ZUPT)
     imu_stopped_time_required: 0.3        # seconds - time at low accel to trigger ZUPT
     imu_bias_x: 0.0                       # m/s² - forward accel bias correction
     imu_bias_y: 0.0                       # m/s² - lateral accel bias correction
-    # Enable convergence checks after movements (Phase 1)  
-    convergence_enabled: true             # If true, wait for vehicle to stop after each movement
     
-    # ═══════════════════════════════════════════════════════════════════
-    # PRECISION YAW CONTROL (Phase 2 - Rotate-in-Place)
-    # ═══════════════════════════════════════════════════════════════════
-    rotate_in_place_enabled: true         # Master enable for rotate-in-place mode
+    # ───────────────────────────────────────────────────────────────────────
+    # PHASE 2: PRECISION YAW CONTROL (Rotate-in-Place)
+    # ───────────────────────────────────────────────────────────────────────
+    # Precision yaw reduces overshoot and improves heading accuracy.
+    # Uses reduced gains in final approach zone for smooth settling.
+    rotate_in_place_enabled: true         # ENABLED - provides smooth yaw control
     yaw_precision_deadband: 5.0           # degrees - enter precision zone below this error
     yaw_final_deadband: 1.0               # degrees - must stay within this to converge
     yaw_settling_time: 0.5                # seconds - time in final zone before "reached"
     yaw_precision_kp_reduction: 0.5       # Multiply Kp by this in precision zone (0.5 = half gain)
     yaw_precision_kd_reduction: 0.7       # Multiply Kd by this in precision zone
     
-    # Yaw feedforward (optional - requires calibration)
-    yaw_feedforward_enabled: false        # Predict torque for smoother turns (disabled until tuned)
-    yaw_rate_to_pwm_ratio: 20.0          # PWM per deg/s (empirical - tune in pool)
+    # Yaw feedforward (optional - requires pool calibration)
+    yaw_feedforward_enabled: false        # DISABLED - requires empirical tuning
+    yaw_rate_to_pwm_ratio: 20.0          # PWM per deg/s (tune in pool for your AUV)
     
-    # ═══════════════════════════════════════════════════════════════════
-    # CASCADE CONTROL (Phase 3 - Experimental)
-    # ═══════════════════════════════════════════════════════════════════
-    cascade_enabled: false                # Master enable for cascade control (disabled by default)
+    # ───────────────────────────────────────────────────────────────────────
+    # PHASE 3: CASCADE CONTROL (Position → Velocity → Thrust)
+    # ───────────────────────────────────────────────────────────────────────
+    # Two-loop cascade improves tracking of position setpoints by:
+    # - Outer loop converts position error → velocity setpoint
+    # - Inner loop converts velocity error → thrust (PWM)
+    # This is EXPERIMENTAL - requires tuning the position and velocity gains.
+    # DISABLED by default until you have stable base performance.
+    cascade_enabled: false                # DISABLED - requires tuning
     
     # Position loop (outer) - converts position error to velocity setpoint
     position_kp: 0.5                      # Velocity per meter of error
@@ -125,13 +148,16 @@ mavlink_inspector:
     max_velocity_setpoint: 0.5            # m/s - max velocity commanded by position loop
     position_update_rate: 20.0            # Hz - position estimation update rate
     
-    # ────────────────────────────────────────────────────────────
-    # Phase 4: Gain Scheduling & Acceleration Limiting
-    # ────────────────────────────────────────────────────────────
+    # ───────────────────────────────────────────────────────────────────────
+    # PHASE 4: GAIN SCHEDULING & ACCELERATION LIMITING
+    # ───────────────────────────────────────────────────────────────────────
+    # Adaptive gains improve performance across the vehicle's speed range.
+    # Three gain sets (low, medium, high speed) provide better handling.
+    # DISABLED by default - requires pool tuning with your specific AUV.
     
     # Master enables
-    gain_scheduling_enabled: false        # Speed-adaptive PID gains (requires pool tuning)
-    accel_limiting_enabled: false         # Smooth speed ramping (50%/sec default)
+    gain_scheduling_enabled: false        # DISABLED - requires pool tuning
+    accel_limiting_enabled: false         # DISABLED - smooth speed ramping
     
     # Speed range breakpoints
     speed_range_low_max: 30               # 0-30% = low speed range
@@ -203,6 +229,12 @@ mavlink_inspector:
     external_yaw_msg_type: 'std_msgs/Float32'  # Or 'sensor_msgs/Imu', 'geometry_msgs/Vector3Stamped'
     external_yaw_timeout: 0.5             # Seconds
     external_yaw_offset: 0.0              # Calibration offset in degrees
+
+    # ════════════════════════════════════════════════════════════════════
+    # PWM CONFIGURATION
+    # ════════════════════════════════════════════════════════════════════
+    pwm_neutral: 1500                     # Neutral PWM value (center point for channels)
+    pwm_range: 400                        # ±400 from neutral (1100-1900 total range)
 
 mavlink_logger:
   ros__parameters:

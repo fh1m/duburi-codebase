@@ -48,7 +48,7 @@ class PlannerContext:
         '_alignment_sub', '_detection_sub',
         '_vehicle_state', '_alignment_status',
         '_detections', '_last_feedback',
-        '_feedback_event', 'duburi',
+        '_feedback_event', 'duburi', '_ready',
     )
 
     def __init__(self, node: Node, cfg: PlannerConfig) -> None:
@@ -56,6 +56,7 @@ class PlannerContext:
         self.cfg = cfg
         self._lock = threading.Lock()
         self.duburi = DuburiClient(node)
+        self._ready = False  # Issue #15: Track readiness without blocking
 
         self._vehicle_state: VehicleState | None = None
         self._alignment_status: AlignmentStatus | None = None
@@ -85,16 +86,20 @@ class PlannerContext:
     # ── Startup ─────────────────────────────────────────────────────
 
     def wait_for_ready(self, timeout: float = 10.0) -> bool:
-        """Block until /driver/command has at least one subscriber.
-
+        """Wait for planner to be ready (call after construction).
+        
+        Polls for /driver/command subscriber without blocking indefinitely.
         DDS discovery can take 1-3 s. If we publish before a subscriber
         matches, the message is silently dropped. This method ensures
         the inspector (or any other subscriber) is connected before the
         first command is sent.
+        
+        Issue #15: Non-blocking version that can be called from any context.
         """
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             if self._cmd_pub.get_subscription_count() > 0:
+                self._ready = True
                 yasmin.YASMIN_LOG_INFO(
                     "[planner] /driver/command subscriber connected")
                 return True

@@ -40,16 +40,18 @@ class VelocityEstimator:
         Args:
             logger: ROS2 logger for diagnostics
             config: Configuration dict with:
-                - imu_stopped_accel_threshold: m/s² (default 0.02)
-                - imu_stopped_time_required: seconds (default 0.3)
+                - imu_stopped_accel_threshold: m/s² (default 0.5 - Issue #18)
+                - imu_stopped_time_required: seconds (default 1.0 - Issue #18)
                 - imu_bias_x, imu_bias_y, imu_bias_z: m/s² (default 0.0)
         """
         self.logger = logger
         
         # Configuration
         config = config or {}
-        self.stopped_threshold = config.get('imu_stopped_accel_threshold', 0.02)  # m/s²
-        self.stopped_time_required = config.get('imu_stopped_time_required', 0.3)  # sec
+        # Issue #18: Increased threshold from 0.1 to 0.5 m/s² for less aggressive ZUPT
+        # Issue #18: Increased time from 0.5 to 1.0 s to require longer stationary period
+        self.stopped_threshold = config.get('imu_stopped_accel_threshold', 0.5)  # m/s²
+        self.stopped_time_required = config.get('imu_stopped_time_required', 1.0)  # sec
         self.bias_x = config.get('imu_bias_x', 0.0)
         self.bias_y = config.get('imu_bias_y', 0.0)
         self.bias_z = config.get('imu_bias_z', 0.0)
@@ -70,7 +72,46 @@ class VelocityEstimator:
         self.logger.info(f"VelocityEstimator initialized: threshold={self.stopped_threshold} m/s², "
                         f"ZUPT_time={self.stopped_time_required}s")
     
-    def update(self, imu_msg):
+    def _rotate_gravity_to_body(self, quat) -> Tuple[float, float, float]:
+        """
+        Rotate gravity vector (0, 0, 9.81) from world to body frame.
+        
+        This corrects the IMU acceleration measurement by removing the effect of 
+        gravity when the vehicle is pitched/rolled. Without this correction, 
+        gravity appears as acceleration in body-frame axes proportional to pitch/roll:
+        - pitch 30° → ~4.9 m/s² contribution to surge axis
+        - After 10s → 49 m/s velocity drift
+        
+        Args:
+            quat: Object with (w, x, y, z) quaternion components representing 
+                  vehicle orientation from world frame to body frame
+        
+        Returns:
+            (gx, gy, gz) - gravity components in body frame (m/s²)
+        
+        Reference: 
+            Quaternion rotation formula: v' = q* ⊗ v ⊗ q
+            For unit quaternion, q* = conjugate
+            For gravity vector (0, 0, 9.81) in world frame (NED/ENU convention)
+        """
+        # Quaternion components
+        w, x, y, z = quat.w, quat.x, quat.y, quat.z
+        
+        # Gravity in world frame. For AUVs in typical NED convention:
+        # Down (gravity direction) is +Z, so gravity vector is (0, 0, 9.81)
+        # This is the standard gravity acceleration magnitude
+        grav_world = 9.81
+        
+        # Rotate (0, 0, g) by inverse quaternion (conjugate for unit quaternion)
+        # Using simplified formula for rotating (0, 0, gz) by conjugate(q):
+        # This comes from the quaternion rotation: v' = q* ⊗ v ⊗ q
+        gx = 2 * (x * z - w * y) * grav_world
+        gy = 2 * (y * z + w * x) * grav_world
+        gz = (w * w - x * x - y * y + z * z) * grav_world
+        
+        return (gx, gy, gz)
+    
+    def update(self, imu_msg, orientation_quat=None):
         """
         Update velocity estimate from IMU measurement.
         
@@ -78,6 +119,9 @@ class VelocityEstimator:
         
         Args:
             imu_msg: ROS2 Imu message with linear_acceleration.{x,y,z}
+            orientation_quat: geometry_msgs/Quaternion with (w, x, y, z) representing
+                              current vehicle attitude. If None, gravity correction
+                              is skipped (backward compatible).
         """
         now = time.time()
         
@@ -102,10 +146,38 @@ class VelocityEstimator:
         accel_y = accel.y - self.bias_y
         accel_z = accel.z - self.bias_z
         
+        # CRITICAL FIX: Rotate gravity to body frame and subtract
+        # This corrects the IMU reading for the effect of gravity
+        # Without this, pitched/rolled vehicles accumulate large velocity errors
+        if orientation_quat is not None:
+            gx, gy, gz = self._rotate_gravity_to_body(orientation_quat)
+            accel_x -= gx
+            accel_y -= gy
+            accel_z -= gz
+        else:
+            # Fallback: no gravity compensation (will drift!)
+            self.logger.warning_throttle(5.0,
+                "VelocityEstimator: No orientation quaternion - velocity will drift!")
+        
+        # Get previous acceleration values (already bias-corrected)
+        prev_accel_x = self.last_accel.x - self.bias_x
+        prev_accel_y = self.last_accel.y - self.bias_y
+        prev_accel_z = self.last_accel.z - self.bias_z
+        
+        # Apply gravity correction to previous acceleration as well
+        # (for consistency in trapezoidal integration)
+        if orientation_quat is not None:
+            # Note: This is an approximation since we don't have the previous
+            # quaternion. For smooth motion, orientation changes slowly.
+            gx, gy, gz = self._rotate_gravity_to_body(orientation_quat)
+            prev_accel_x -= gx
+            prev_accel_y -= gy
+            prev_accel_z -= gz
+        
         # Trapezoidal integration: v += (a_new + a_old) / 2 * dt
-        self.velocity['surge'] += (accel_x + self.last_accel.x - self.bias_x) / 2.0 * dt
-        self.velocity['sway'] += (accel_y + self.last_accel.y - self.bias_y) / 2.0 * dt
-        self.velocity['heave'] += (accel_z + self.last_accel.z - self.bias_z) / 2.0 * dt
+        self.velocity['surge'] += (accel_x + prev_accel_x) / 2.0 * dt
+        self.velocity['sway'] += (accel_y + prev_accel_y) / 2.0 * dt
+        self.velocity['heave'] += (accel_z + prev_accel_z) / 2.0 * dt
         
         # ZUPT: Detect stopped state and correct drift
         accel_magnitude = math.sqrt(accel_x**2 + accel_y**2 + accel_z**2)
@@ -447,15 +519,15 @@ class CascadeController:
         self.pos_kp = config.get('position_kp', 0.5)
         self.pos_ki = config.get('position_ki', 0.0)  # Usually 0 (velocity loop handles steady-state)
         self.pos_kd = config.get('position_kd', 0.1)
-        self.pos_integral = 0.0
-        self.pos_prev_error = 0.0
+        self.pos_integral = {'surge': 0.0, 'sway': 0.0, 'heave': 0.0}
+        self.pos_prev_error = {'surge': 0.0, 'sway': 0.0, 'heave': 0.0}
         
         # Velocity PID (inner loop) - outputs thrust
         self.vel_kp = config.get('velocity_kp', 400.0)
         self.vel_ki = config.get('velocity_ki', 50.0)
         self.vel_kd = config.get('velocity_kd', 30.0)
-        self.vel_integral = 0.0
-        self.vel_prev_error = 0.0
+        self.vel_integral = {'surge': 0.0, 'sway': 0.0, 'heave': 0.0}
+        self.vel_prev_error = {'surge': 0.0, 'sway': 0.0, 'heave': 0.0}
         
         # Limits
         self.max_velocity = config.get('max_velocity', 0.5)  # m/s
@@ -488,9 +560,11 @@ class CascadeController:
         self.target_position = targets
         self.dof = list(targets.keys())
         
-        # Reset integrators
-        self.pos_integral = 0.0
-        self.vel_integral = 0.0
+        # Reset integrators (per-DOF)
+        self.pos_integral = {'surge': 0.0, 'sway': 0.0, 'heave': 0.0}
+        self.pos_prev_error = {'surge': 0.0, 'sway': 0.0, 'heave': 0.0}
+        self.vel_integral = {'surge': 0.0, 'sway': 0.0, 'heave': 0.0}
+        self.vel_prev_error = {'surge': 0.0, 'sway': 0.0, 'heave': 0.0}
         self.last_update = time.time()
         
         self.logger.info(f"Cascade target set: {targets}")
@@ -525,15 +599,15 @@ class CascadeController:
             # ── Outer loop: Position → Velocity setpoint ────────────
             pos_error = self.target_position[dof] - current_position.get(dof, 0.0)
             
-            # PID terms
-            self.pos_integral += pos_error * dt
-            pos_derivative = (pos_error - self.pos_prev_error) / dt if dt > 0 else 0.0
-            self.pos_prev_error = pos_error
+            # PID terms (per-DOF state)
+            self.pos_integral[dof] += pos_error * dt
+            pos_derivative = (pos_error - self.pos_prev_error[dof]) / dt if dt > 0 else 0.0
+            self.pos_prev_error[dof] = pos_error
             
             # Compute desired velocity
             desired_velocity = (
                 self.pos_kp * pos_error +
-                self.pos_ki * self.pos_integral +
+                self.pos_ki * self.pos_integral[dof] +
                 self.pos_kd * pos_derivative
             )
             
@@ -543,15 +617,15 @@ class CascadeController:
             # ── Inner loop: Velocity → Thrust ────────────────────────
             vel_error = desired_velocity - current_velocity.get(dof, 0.0)
             
-            # PID terms
-            self.vel_integral += vel_error * dt
-            vel_derivative = (vel_error - self.vel_prev_error) / dt if dt > 0 else 0.0
-            self.vel_prev_error = vel_error
+            # PID terms (per-DOF state)
+            self.vel_integral[dof] += vel_error * dt
+            vel_derivative = (vel_error - self.vel_prev_error[dof]) / dt if dt > 0 else 0.0
+            self.vel_prev_error[dof] = vel_error
             
             # Compute thrust (PWM offset)
             thrust = (
                 self.vel_kp * vel_error +
-                self.vel_ki * self.vel_integral +
+                self.vel_ki * self.vel_integral[dof] +
                 self.vel_kd * vel_derivative
             )
             

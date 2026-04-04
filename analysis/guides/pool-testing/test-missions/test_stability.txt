@@ -1,0 +1,29 @@
+# Stability and Hold Test
+# Purpose: Test depth hold, yaw hold, and station-keeping
+# Expected duration: ~90 seconds
+# Expected behavior: Maintains depth ±0.05m and yaw ±2° for extended periods
+
+arm
+mode MANUAL
+
+# Test 1: Depth hold at 1.0m
+dive 1.0m 50%
+delay 2
+hold depth 30s
+
+# Test 2: Yaw hold at 90 degrees
+turn right 90 50%
+delay 2
+hold yaw 30s
+
+# Test 3: Combined depth and yaw hold
+hold depth 20s
+hold yaw 20s
+
+# Surface
+surface
+delay 2
+
+# Stop and disarm
+stop
+disarm

@@ -453,6 +453,7 @@ class CommandHandler:
         start_time = time.time()
         in_precision_zone_since = None
         in_final_zone_since = None
+        last_yaw_update = None  # Issue #17: Track actual dt for PID
         
         n.get_logger().info(
             f"Precision yaw to {heading_deg:.1f}° "
@@ -464,6 +465,16 @@ class CommandHandler:
             current_heading = n._telemetry.yaw
             error = self._angle_error(current_heading, heading_deg)
             abs_error = abs(error)
+            
+            # ── Compute PID dt (Issue #17) ──────────────────────────
+            if last_yaw_update is None:
+                dt = 0.05  # Fallback for first iteration
+            else:
+                dt = now - last_yaw_update
+                # Sanity check: if dt is invalid, use fallback
+                if dt <= 0 or dt > 1.0:
+                    dt = 0.05
+            last_yaw_update = now
             
             # ── Zone detection ──────────────────────────────────────
             if abs_error < final_deadband:
@@ -507,7 +518,7 @@ class CommandHandler:
                 in_final_zone_since = None
             
             # ── Compute PID output ──────────────────────────────────
-            dt = 0.05  # Fixed for blocking loop
+            # Issue #17: Use actual dt instead of fixed 0.05
             output = pid.compute(error, dt, measurement_rate=n._telemetry.heading_rate)
             
             # Add feedforward if enabled (optional enhancement)

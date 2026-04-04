@@ -231,7 +231,11 @@ class ConnectionManager:
                     label = 'Pixhawk (serial)'
                 self._logger.info(f'Connecting to {label} at {port}...')
 
-            master = mavutil.mavlink_connection(port, self._baud)
+            master = mavutil.mavlink_connection(
+                port,
+                self._baud,
+                source_system=1,  # Identify as GCS
+            )
             master.wait_heartbeat(timeout=10)
 
             with self._lock:

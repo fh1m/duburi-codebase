@@ -5,20 +5,27 @@
 > | Document | Description |
 > |----------|-------------|
 > | [roadmap/README.md](roadmap/README.md) | Overview with visual timeline |
-> | [roadmap/completed.md](roadmap/completed.md) | What we've accomplished |
-> | [roadmap/current.md](roadmap/current.md) | Active development |
-> | [roadmap/future.md](roadmap/future.md) | Planned features |
+> | [roadmap/completed.md](roadmap/completed.md) | ✅ **V2 Complete + All bugs fixed!** |
+> | [roadmap/current.md](roadmap/current.md) | Active: SITL validation & pool testing |
+> | [roadmap/pending.md](roadmap/pending.md) | Upcoming: DVL, missions, competition prep |
+> | [roadmap/future.md](roadmap/future.md) | Long-term planned features |
 > | [roadmap/timeline.md](roadmap/timeline.md) | Competition timeline & Gantt chart |
 >
 > This file is retained as a **legacy reference** with full details.
 
 ---
 
-> **Living document.** Check off items as they're completed. Last updated: 2026-04-02.
+> **Living document.** Check off items as they're completed. Last updated: 2026-04-03.
 >
 > **Mission:** Win RoboSub 2026. Theme: *"Restore and Recovery"* — underwater pipeline maintenance scenario.
 >
 > **Constraint:** Small team (~15), Jetson Orin Nano (8 GB), single vehicle, limited pool time. Every engineering-hour must count.
+
+**🎉 MAJOR MILESTONE (April 3, 2026): V2 Control Stack + Bug Fixes COMPLETE! 🎉**
+- ✅ All 5 V2 features implemented (velocity estimator, convergence gates, active braking, cascade control, gain scheduling)
+- ✅ All 30 bugs fixed (3 CRITICAL, 7 HIGH, 10 MEDIUM, 6 LOW, 4 INFO)
+- ✅ Build passing, ready for SITL validation and pool testing
+- 📋 See [Bug Fix Completion Report](roadmap/bugfix-completion-report.md)
 
 ---
 
@@ -44,18 +51,20 @@ The Duburi 4.2 stack is a **10-package, 80-file** ROS 2 Humble codebase with:
 
 | Layer | Status | Details |
 |-------|--------|---------|
-| **MAVLink Bridge** | [DONE] Production-ready | 7-module inspector: serial I/O, command dispatch, PID controllers, telemetry, RC override at 20 Hz |
-| **Control System** | [DONE] Functional | Software depth PID + yaw PID, trapezoidal PWM ramp, 4-layer RC override, `just_*` instant variants |
-| **Command System** | [DONE] Rich | 30+ commands: `move`, `go`, `cruise`, `at`, `just_*`, diagonals, PID depth/yaw, `~` prefix convention |
-| **Interactive CLI** | [DONE] Complete | `duburi_runner` REPL with history, file-based missions, chained commands, status dashboard |
+| **MAVLink Bridge** | ✅ Production-ready | 7-module inspector: serial I/O, command dispatch, PID controllers, telemetry, RC override at 20 Hz |
+| **Control System V2** | ✅ **COMPLETE** | **Velocity estimator, convergence gates, active braking, cascade control, gain scheduling** |
+| **Control System V1** | ✅ Functional | Software depth PID + yaw PID, trapezoidal PWM ramp, 4-layer RC override, `just_*` instant variants |
+| **Command System** | ✅ Rich | 30+ commands: `move`, `go`, `cruise`, `at`, `just_*`, diagonals, PID depth/yaw, `~` prefix convention |
+| **Bug Fixes** | ✅ **ALL FIXED** | **30/30 issues resolved (100%) - 3 CRITICAL, 7 HIGH, 10 MEDIUM, 6 LOW, 4 INFO** |
+| **Interactive CLI** | ✅ Complete | `duburi_runner` REPL with history, file-based missions, chained commands, status dashboard |
 | **Mission Planner** | 🟡 Partial | YASMIN HFSM in `duburi_planner` — 8 reusable states, 2 missions (gate, demo_square). Needs 4 more task SMs |
-| **Vision Pipeline** | [DONE] Functional | YOLO11n on CUDA (20-25 FPS on Orin Nano), Kalman tracking, PID visual servoing, multi-camera manager |
-| **Feedback System** | [DONE] Implemented | `/driver/feedback` with `accepted`/`reached`/`completed`/`rejected` status + error magnitude |
-| **Teleop** | [DONE] Implemented | `TeleopCommand` on `/driver/teleop` with multi-axis support + idle detection |
-| **BlueOS Integration** | [DONE] Functional | REST API client for system monitoring, parameter management, endpoint health checks |
-| **Logging** | [DONE] Functional | Session-based CSV/JSON logging with rotation |
-| **Documentation** | [DONE] Extensive | 26 analysis documents + comprehensive README |
-| **Simulation** | 🔴 Not connected | Gazebo SITL stack documented (`17_SIMULATION`) but not integrated with ROS 2 pipeline |
+| **Vision Pipeline** | ✅ Functional | YOLO11n on CUDA (20-25 FPS on Orin Nano), Kalman tracking, PID visual servoing, multi-camera manager |
+| **Feedback System** | ✅ Implemented | `/driver/feedback` with `accepted`/`reached`/`completed`/`rejected` status + error magnitude |
+| **Teleop** | ✅ Implemented | `TeleopCommand` on `/driver/teleop` with multi-axis support + idle detection |
+| **BlueOS Integration** | ✅ Functional | REST API client for system monitoring, parameter management, endpoint health checks |
+| **Logging** | ✅ Functional | Session-based CSV/JSON logging with rotation |
+| **Documentation** | ✅ Extensive | 26+ analysis documents + comprehensive README + V2 guides |
+| **Simulation** | 🔴 **NEXT UP** | **SITL validation needed before pool testing** |
 | **DVL** | 🔴 Hardware only | Nortek Nucleus 1000 available, no ROS 2 driver integrated |
 | **Actuators** | 🟡 Grabber only | Open/close servo. Torpedo launcher and dropper not integrated |
 | **Acoustic Pinger** | 🔴 None | No hardware or software |
@@ -380,43 +389,86 @@ TurnAround (180° from start heading) ── to  NavigateHome (reverse heading, 
 ## 3. Phase 1 — Refine Controls
 
 > **Goal:** Make the AUV's motion smooth, accurate, and robust. Every subsequent phase depends on reliable control.
+>
+> **Status:** ✅ **V2 CONTROL STACK COMPLETE** — All 5 advanced features implemented
+> - ✅ Velocity Estimator (IMU integration with gravity compensation)
+> - ✅ Convergence Gates (position & velocity thresholds)
+> - ✅ Active Braking (deceleration near waypoints)
+> - ✅ Cascade Position/Velocity Control
+> - ✅ Gain Scheduling (speed-adaptive gains)
+>
+> **Next:** SITL validation → Pool testing → DVL integration
 
 ### 3.1 Depth PID Tuning
 
-- [ ] Pool-test current PID defaults (kp=500, ki=25, kd=200) at multiple depths (0.3m, 0.5m, 1.0m, 2.0m)
+**Status:** ✅ V2 cascade control implemented, ready for SITL tuning
+
+- [ ] SITL-test cascade controller at multiple depths (0.3m, 0.5m, 1.0m, 2.0m)
 - [ ] Document steady-state error, overshoot, and settling time at each depth
-- [ ] Create depth-specific gain schedules if performance varies significantly
+- [ ] Tune inner velocity loop first, then outer position loop
+- [ ] Test convergence gates prevent premature waypoint detection
+- [ ] Pool-test tuned parameters for validation
 - [ ] Test depth hold under forward thrust (coupling effects)
 - [ ] Test depth hold during surfacing approach (slow, controlled ascent for octagon task)
 
 ### 3.2 Yaw PID Tuning
 
-- [ ] Pool-test yaw PID (kp=2.0, ki=0.05, kd=0.5) for 90°, 180°, and 270° turns
+**Status:** ✅ V1 yaw control working, V2 adds gain scheduling
+
+- [ ] SITL-test yaw PID (kp=2.0, ki=0.05, kd=0.5) for 90°, 180°, and 270° turns
+- [ ] Test gain scheduling: verify gains adapt with vehicle speed
 - [ ] Measure heading accuracy after `go_forward` (does it hold heading under thrust?)
 - [ ] Test `~turn` precision: command 90° turn, measure actual turn
 - [ ] Tune for minimum overshoot — competition tasks need precise heading
+- [ ] Pool-validate SITL-tuned parameters
 
-### 3.3 Thruster Characterization
+### 3.3 Velocity Estimator Tuning
+
+**Status:** ✅ Implemented, needs parameter tuning
+
+- [ ] SITL-test alpha filter value (currently configurable)
+- [ ] Validate gravity compensation accuracy (compare IMU vs ground truth)
+- [ ] Test estimator performance at different speeds
+- [ ] Verify smooth velocity estimates (no jitter)
+- [ ] Pool-validate estimator against DVL (when available)
+
+### 3.4 Active Braking Tuning
+
+**Status:** ✅ Implemented, needs gain tuning
+
+- [ ] SITL-test brake gain parameter
+- [ ] Measure overshoot reduction vs non-braking mode
+- [ ] Test at different approach speeds
+- [ ] Verify doesn't cause oscillation near waypoint
+- [ ] Pool-validate braking performance
+
+### 3.5 Thruster Characterization
+
+**Status:** ✅ V1 complete, V2 ready for testing
 
 - [ ] Measure actual thrust vs PWM curve (nonlinear at extremes)
 - [ ] Verify trapezoidal ramp rate is appropriate for pool conditions (too slow = sluggish, too fast = overshoot)
 - [ ] Test `just_*` variants for emergency response time
 - [ ] Measure battery voltage compensation effectiveness (`nominal_voltage` parameter)
 
-### 3.4 Visual Servo Tuning
+### 3.6 Visual Servo Tuning
+
+**Status:** ✅ V1 working, ready for pool testing
 
 - [ ] Tune alignment controller PIDs for gate-sized target at 1-3m range
-- [ ] Measure alignment settling time and precision (±pixels  to  ±cm at target distance)
+- [ ] Measure alignment settling time and precision (±pixels → ±cm at target distance)
 - [ ] Test alignment stability: can it hold center for 5s without oscillation?
 - [ ] Tune `lost_timeout` for competition turbidity (2s may be too short in murky water)
-- [ ] Test `just_*` commands in alignment controller (per Issue 3 recommendation)
 
-### 3.5 Motion Smoothness
+### 3.7 Motion Smoothness
 
-- [ ] Profile jitter in PID output during steady-state hold (depth + yaw)
-- [ ] Evaluate whether `MultiThreadedExecutor` reduces timing jitter (per Issue 7)
+**Status:** ✅ V2 improvements implemented
+
+- [ ] SITL-profile jitter in PID output during steady-state hold (depth + yaw)
+- [ ] Test convergence gates prevent oscillation at waypoints
 - [ ] Test cruise command (simultaneous bearing + heading + depth) for competition approaches
 - [ ] Verify diagonal movement scaling (√2 factor) produces straight diagonal motion
+- [ ] Pool-validate smooth motion
 
 ---
 

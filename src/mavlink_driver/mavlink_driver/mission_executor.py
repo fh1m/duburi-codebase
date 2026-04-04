@@ -133,7 +133,17 @@ class MissionExecutorNode(Node):
         self._current_heading = msg.yaw
 
     def _on_feedback(self, msg: DriverCommandFeedback):
-        """Handle command feedback for blocking mode."""
+        """
+        Handle command feedback for blocking mode (non-blocking callback).
+        
+        This callback is intentionally lightweight and non-blocking.
+        It simply updates the state flag when feedback is received.
+        The actual blocking wait happens in _publish_blocking() which runs
+        in the main mission execution thread, not the ROS callback thread.
+        
+        This pattern prevents callback delays from stalling the ROS event loop
+        and makes it easy to add async task processing if needed in the future.
+        """
         with self._command_lock:
             if self._pending_command is None:
                 return

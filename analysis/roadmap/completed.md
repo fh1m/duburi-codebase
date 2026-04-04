@@ -8,6 +8,104 @@
 
 The Duburi 4.2 stack is a **10-package, 80-file** ROS 2 Humble codebase with production-ready control and perception systems.
 
+**Major Milestones:**
+- ✅ V1 Control Stack (March 2026)
+- ✅ V2 Control Redesign (April 2026)
+- ✅ Complete Bug Fix Sprint (30/30 issues, April 2026)
+- ✅ Vision Pipeline (February-March 2026)
+- ✅ Interactive CLI & Mission System (January-March 2026)
+
+---
+
+## Control Stack Redesign V2 (April 2026) ✅
+
+### What Was Built
+
+The V2 control redesign introduced advanced features for mission reliability and precision:
+
+| Component | Status | Description |
+|-----------|--------|-------------|
+| **Velocity Estimator** | ✅ COMPLETE | IMU acceleration integration with gravity compensation via quaternion rotation |
+| **Convergence Gates** | ✅ COMPLETE | Position & velocity thresholds for reliable mission waypoint detection |
+| **Active Braking** | ✅ COMPLETE | Automatic deceleration near waypoints to reduce overshoot |
+| **Cascade Control** | ✅ COMPLETE | Position controller → Velocity controller → Thrust for improved tracking |
+| **Gain Scheduling** | ✅ COMPLETE | Speed-adaptive gains for stable control across different velocities |
+
+### Key Features
+
+1. **Velocity Estimator** — Integrates IMU acceleration with proper gravity compensation
+   - Quaternion-based gravity vector rotation
+   - Alpha filter for noise reduction
+   - Fallback when no external velocity available
+
+2. **Convergence Gates** — Mission reliability improvements
+   - Position threshold for waypoint detection
+   - Velocity threshold for "truly stopped" detection
+   - Prevents premature mission progression
+
+3. **Active Braking** — Reduces overshoot
+   - Detects when approaching waypoint
+   - Applies counter-thrust to decelerate
+   - Configurable brake gain
+
+4. **Cascade Position/Velocity Control** — Better tracking
+   - Outer loop: Position error → Velocity setpoint
+   - Inner loop: Velocity error → Thrust output
+   - Per-DOF integral state management
+
+5. **Gain Scheduling** — Speed adaptation
+   - Gains scale with current velocity
+   - Maintains stability at high speeds
+   - Prevents oscillation at low speeds
+
+### Documentation
+
+- [V2 Features Guide](../guides/v2-features.md)
+- [V2 Architecture](../architecture/v2-control-architecture.md)
+- [Configuration Guide](../guides/configuration.md)
+
+---
+
+## Bug Fixes - Complete Sprint (April 2026) ✅
+
+### Summary
+
+**All 30 issues resolved (100% completion)**
+- 🚨 3 CRITICAL issues FIXED
+- ⚠️ 7 HIGH priority issues FIXED
+- 🔵 10 MEDIUM priority issues FIXED
+- 🟢 6 LOW priority issues FIXED
+- ℹ️ 4 INFO/enhancement issues IMPLEMENTED
+
+### Critical Fixes (3/3) ✅
+
+1. **GCS Heartbeat Rate** — Increased from 1Hz to 2Hz for better GCS connection reliability
+2. **RC Override Watchdog** — Verified existing 1-second watchdog implementation
+3. **Depth from SCALED_PRESSURE** — Fixed depth reading to use pressure sensor (not AHRS2 MSL altitude)
+
+### High Priority Fixes (7/7) ✅
+
+4. **IMU Gravity Compensation** — Proper quaternion rotation of gravity vector before integration
+5. **Thread Safety** — Added locks to `_ramped` dict in rc_controller
+6. **CH_THROTTLE Neutral** — Verified derivative-on-measurement prevents oscillation
+7. **PID Derivative Kick** — Verified correct implementation (derivative-on-measurement)
+8. **MAV_FRAME Correction** — Changed from GLOBAL_INT to BODY_NED for local movements
+9. **Cascade Controller Integrals** — Per-DOF integral state management
+10. **IMU Gravity Fallback** — Proper gravity handling when DVL unavailable
+
+### Medium Priority Fixes (10/10) ✅
+
+11. **DVL Bottom Lock** — Detection and handling of bottom lock loss
+12-20. **Documentation, threading, parameter validation, timing fixes**
+
+### Low Priority & Info (10/10) ✅
+
+21-30. **Code clarity, parameter docs, MAVLink watchdog, simulation support**
+
+**Detailed Reports:**
+- [Bug Fix Completion Report](../roadmap/bugfix-completion-report.md)
+- [Detailed Bug Tracking](../roadmap/bugfixes-2026-04.md)
+
 ---
 
 ## Control Stack Redesign V1 (March-April 2026)

@@ -33,6 +33,7 @@ from duburi_interfaces.msg import (
 
 from .constants import MISSION_PATHS, HISTORY_FILE
 from .command_parser import parse_command
+from duburi_common.constants import DEFAULT_SPEED_PERCENT
 
 
 class DuburiRunnerNode(Node):
@@ -56,7 +57,7 @@ class DuburiRunnerNode(Node):
             VehicleDiagnostics, '/mavlink/diagnostics', self._on_diag,
             QoSProfile(reliability=ReliabilityPolicy.RELIABLE, depth=1)
         )
-        self._default_speed = 50
+        self._default_speed = DEFAULT_SPEED_PERCENT  # Default thrust percentage (0-100%)
         self._armed = False
         self._last_state = None   # type: VehicleState | None
         self._last_diag = None    # type: VehicleDiagnostics | None
@@ -116,9 +117,9 @@ class DuburiRunnerNode(Node):
 
     def _publish(self, cmd: DriverCommand) -> bool:
         """Publish command. Returns True if sent, False if rejected (not armed)."""
-        c = cmd.command.lower()
+        cmd_lower = cmd.command.lower()
         from duburi_common.constants import UNARMED_ALLOWED
-        if not self._armed and c not in UNARMED_ALLOWED:
+        if not self._armed and cmd_lower not in UNARMED_ALLOWED:
             print(f'  [WARNING] Vehicle not armed! Arm first.')
             return False
         self._cmd_pub.publish(cmd)

@@ -36,10 +36,21 @@ the interactive **Runner CLI**, **mission file** syntax, and the **Python API**
 
 | Parameter | Syntax | Default | Description |
 |-----------|--------|---------|-------------|
-| **gain/speed** | `<N>%` | `50%` | Thruster power 0–100%. Mapped to PWM offset from 1500. |
+| **speed** | `<N>%` | `50%` | Thrust percentage (0–100%). Maps to PWM offset from 1500 via voltage-compensated mapping. Example: `50%` = half-speed ahead. |
 | **duration** | `<N>s` | indefinite | How long to hold the movement. `0` = run until next command. |
 | **heading** | `<degrees>` | — | Absolute compass heading 0–360°. |
 | **depth** | `<metres>` | — | Depth below surface. Positive = below. |
+
+#### Speed Parameter Details
+
+- **Range:** 0–100% (thrust percentage)
+- **Default:** 50% (configurable via `DEFAULT_SPEED_PERCENT` in constants)
+- **Mapping:** Percentage is converted to PWM offset (typically 400–600 μs from neutral 1500 μs)
+- **Voltage Compensation:** PWM is adjusted based on battery voltage to maintain consistent thrust
+- **Examples:**
+  - `forward 30%` — Move forward at 30% thrust
+  - `left 75% 5s` — Strafe left at 75% for 5 seconds
+  - `move depth 0.5` — Move to 0.5m depth at default speed
 
 ### Prefix Convention
 

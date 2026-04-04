@@ -1,0 +1,211 @@
+# ════════════════════════════════════════════════════════════════════════════
+# V2 FEATURES FULLY ENABLED - For Testing Advanced Control Features
+# ════════════════════════════════════════════════════════════════════════════
+#
+# This configuration file enables all V2 control features for comprehensive
+# testing of the advanced control system. Use this AFTER successfully testing
+# individual features with defaults.yaml and enabling them one at a time.
+#
+# WARNING: This configuration may cause aggressive/unstable behavior if not
+# properly tuned for YOUR specific AUV. Test in a controlled pool environment.
+#
+# Usage:
+#   ros2 launch mavlink_inspector duburi_control.launch.py \
+#       params_file:=config/v2_enabled.yaml
+#
+
+mavlink_inspector:
+  ros__parameters:
+    # ═════════════════════════════════════════════════════════════════════
+    # CONNECTION (Copy from defaults)
+    # ═════════════════════════════════════════════════════════════════════
+    connection_port: "/dev/ttyACM0"
+    baud: 115200
+    heartbeat_timeout: 3.0
+    reconnect_backoff: 2.0
+    reconnect_max: 15.0
+    ack_timeout: 3.0
+    
+    # ═════════════════════════════════════════════════════════════════════
+    # DEPTH PID (Copy from defaults)
+    # ═════════════════════════════════════════════════════════════════════
+    depth_kp: 800.0
+    depth_ki: 50.0
+    depth_kd: 100.0
+    depth_max_integral: 1.0
+    depth_tolerance: 0.08
+
+    # ═════════════════════════════════════════════════════════════════════
+    # YAW PID (Copy from defaults)
+    # ═════════════════════════════════════════════════════════════════════
+    yaw_kp: 2.0
+    yaw_ki: 0.05
+    yaw_kd: 0.5
+    yaw_max_integral: 50.0
+    yaw_ema_alpha: 0.3
+    yaw_anti_windup: true
+
+    # ═════════════════════════════════════════════════════════════════════
+    # MOVEMENT / RAMP (Copy from defaults)
+    # ═════════════════════════════════════════════════════════════════════
+    ramp_rate: 800
+    decel_time: 1.0
+    brake_enabled: true
+    brake_strength: 0.3
+    brake_duration: 0.5
+    min_speed_pct: 10.0
+    pid_max_rate: 50
+    
+    # ═════════════════════════════════════════════════════════════════════
+    # AUTO STATION-KEEPING (Copy from defaults)
+    # ═════════════════════════════════════════════════════════════════════
+    auto_depth_hold: true
+    auto_heading_hold: true
+
+    # ═════════════════════════════════════════════════════════════════════
+    # YAW SETTLING (Copy from defaults)
+    # ═════════════════════════════════════════════════════════════════════
+    yaw_tolerance: 3.0
+    yaw_settle_duration: 0.3
+
+    # ═════════════════════════════════════════════════════════════════════
+    # SYSTEM (Copy from defaults)
+    # ═════════════════════════════════════════════════════════════════════
+    nominal_voltage: 0.0
+    surface_depth: 0.0
+    surface_throttle_duration: 10.0
+    yaw_source: "attitude"
+
+    # ═════════════════════════════════════════════════════════════════════
+    # SAFETY (Copy from defaults)
+    # ═════════════════════════════════════════════════════════════════════
+    rc_watchdog_timeout: 0.5
+
+    # ═════════════════════════════════════════════════════════════════════
+    # V2 FEATURES - ALL ENABLED FOR TESTING
+    # ═════════════════════════════════════════════════════════════════════
+
+    # ─────────────────────────────────────────────────────────────────────
+    # PHASE 1: CONVERGENCE GATES (ENABLED)
+    # ─────────────────────────────────────────────────────────────────────
+    convergence_enabled: true
+    convergence_velocity_threshold: 0.05
+    convergence_settling_time: 200
+    convergence_timeout: 5.0
+    
+    imu_stopped_accel_threshold: 0.02
+    imu_stopped_time_required: 0.3
+    imu_bias_x: 0.0
+    imu_bias_y: 0.0
+
+    # ─────────────────────────────────────────────────────────────────────
+    # PHASE 2: PRECISION YAW CONTROL (ENABLED)
+    # ─────────────────────────────────────────────────────────────────────
+    rotate_in_place_enabled: true
+    yaw_precision_deadband: 5.0
+    yaw_final_deadband: 1.0
+    yaw_settling_time: 0.5
+    yaw_precision_kp_reduction: 0.5
+    yaw_precision_kd_reduction: 0.7
+    
+    yaw_feedforward_enabled: true        # Enabled for V2 testing
+    yaw_rate_to_pwm_ratio: 20.0
+
+    # ─────────────────────────────────────────────────────────────────────
+    # PHASE 3: CASCADE CONTROL (ENABLED)
+    # ─────────────────────────────────────────────────────────────────────
+    cascade_enabled: true                # ENABLED for cascade testing
+    
+    position_kp: 0.5
+    position_ki: 0.0
+    position_kd: 0.1
+    position_tolerance: 0.1
+    
+    velocity_kp: 400.0
+    velocity_ki: 50.0
+    velocity_kd: 30.0
+    
+    max_velocity_setpoint: 0.5
+    position_update_rate: 20.0
+
+    # ─────────────────────────────────────────────────────────────────────
+    # PHASE 4: GAIN SCHEDULING (ENABLED)
+    # ─────────────────────────────────────────────────────────────────────
+    gain_scheduling_enabled: true        # ENABLED for adaptive gain testing
+    accel_limiting_enabled: true         # ENABLED for smooth ramping
+
+    speed_range_low_max: 30
+    speed_range_medium_max: 60
+
+    # Yaw gain sets (3 ranges)
+    yaw_gains_low_kp: 2.5
+    yaw_gains_low_ki: 0.08
+    yaw_gains_low_kd: 0.6
+    yaw_gains_medium_kp: 2.0
+    yaw_gains_medium_ki: 0.05
+    yaw_gains_medium_kd: 0.5
+    yaw_gains_high_kp: 1.2
+    yaw_gains_high_ki: 0.02
+    yaw_gains_high_kd: 0.3
+
+    # Depth gain sets (3 ranges)
+    depth_gains_low_kp: 900
+    depth_gains_low_ki: 60
+    depth_gains_low_kd: 120
+    depth_gains_medium_kp: 800
+    depth_gains_medium_ki: 50
+    depth_gains_medium_kd: 100
+    depth_gains_high_kp: 600
+    depth_gains_high_ki: 30
+    depth_gains_high_kd: 70
+
+    # Velocity cascade gain sets (3 ranges - Phase 3 inner loop)
+    velocity_gains_low_kp: 450
+    velocity_gains_low_ki: 60
+    velocity_gains_low_kd: 35
+    velocity_gains_medium_kp: 400
+    velocity_gains_medium_ki: 50
+    velocity_gains_medium_kd: 30
+    velocity_gains_high_kp: 300
+    velocity_gains_high_ki: 35
+    velocity_gains_high_kd: 20
+
+    # Acceleration limiting
+    max_accel_pct_per_sec: 50.0
+
+    # ═════════════════════════════════════════════════════════════════════
+    # PHASE 5: MULTI-SOURCE SENSOR ARCHITECTURE (Copy from defaults)
+    # ═════════════════════════════════════════════════════════════════════
+    velocity_source_priority: ['dvl', 'imu_estimate']
+    yaw_source_priority: ['dvl_imu', 'external', 'pixhawk']
+
+    # DVL (Nortek Nucleus 1000)
+    dvl_enabled: false
+    dvl_topic: '/dvl/velocity'
+    dvl_timeout: 1.0
+    dvl_min_quality: 0.5
+    dvl_min_altitude: 0.3
+    dvl_max_altitude: 50.0
+
+    # DVL Internal IMU
+    dvl_imu_enabled: false
+    dvl_imu_topic: '/dvl/orientation'
+    dvl_imu_msg_type: 'geometry_msgs/QuaternionStamped'
+    dvl_imu_timeout: 0.5
+
+    # External Yaw
+    external_yaw_enabled: false
+    external_yaw_topic: '/external_imu/yaw'
+    external_yaw_msg_type: 'std_msgs/Float32'
+    external_yaw_timeout: 0.5
+    external_yaw_offset: 0.0
+
+    # ═════════════════════════════════════════════════════════════════════
+    # PWM CONFIGURATION (Copy from defaults)
+    # ═════════════════════════════════════════════════════════════════════
+    pwm_neutral: 1500
+    pwm_range: 400
+
+mavlink_logger:
+  ros__parameters:
+    log_directory: "~/auv_logs"

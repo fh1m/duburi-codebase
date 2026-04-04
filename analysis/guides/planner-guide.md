@@ -776,6 +776,184 @@ mission_node:
 5. If the AUV is too fast → decrease `gate.approach_speed`
 6. Edit `config/planner.yaml`, re-launch. No rebuild needed.
 
+### V2 Control Parameters Integration
+
+The planner integrates with the V2 control stack features (convergence, braking, cascade control). These parameters are set on the **mavlink_inspector** node, not the planner node.
+
+#### Convergence Gates
+
+Convergence gates ensure the AUV reaches and stabilizes at targets before the planner proceeds to the next state.
+
+**Enable convergence for precision missions:**
+```bash
+# At launch
+ros2 launch duburi_bringup main.launch.py \
+    convergence_enabled:=true
+
+# Or at runtime
+ros2 param set /mavlink_inspector convergence_enabled true
+```
+
+**Parameters:**
+```yaml
+mavlink_inspector:
+  ros__parameters:
+    convergence_enabled: true
+    convergence_velocity_threshold: 0.05  # m/s - "stopped" threshold
+    convergence_settling_time: 0.2        # seconds - stability duration
+    convergence_timeout: 5.0              # seconds - max wait time
+```
+
+**How it affects planner missions:**
+- `DriveState` with `drive_duration: 5.0` → drives for 5s, then waits for convergence
+- `DemoLegState` → moves forward, then waits for velocity to stabilize
+- Prevents next state from executing before AUV reaches target
+
+**When to use:**
+- ✅ Gate passing (precision alignment critical)
+- ✅ Torpedo firing (must be stationary)
+- ✅ Multi-step manipulation tasks
+- ❌ Search patterns (unnecessary overhead)
+- ❌ Fast transit (adds delay)
+
+#### Active Braking
+
+Reduces overshoot at the end of movement commands.
+
+**Enable braking:**
+```bash
+ros2 param set /mavlink_inspector braking_enabled true
+```
+
+**Parameters:**
+```yaml
+mavlink_inspector:
+  ros__parameters:
+    braking_enabled: true
+    braking_threshold: 0.1       # m/s - start braking below this
+    braking_duration_max: 2.0    # seconds - max braking time
+```
+
+**Effect on missions:**
+- `DriveState` stops at intended position (~80% less overshoot)
+- Faster state transitions (reduced settling time)
+- More predictable positioning
+
+#### Gain Scheduling
+
+Automatically adjusts gains based on speed.
+
+**Enable gain scheduling:**
+```bash
+ros2 param set /mavlink_inspector gain_scheduling_enabled true
+```
+
+**Speed ranges:**
+- 0-30%: High gains (precise, low-speed)
+- 30-60%: Medium gains (balanced)
+- 60-100%: Low gains (stable, high-speed)
+
+**Planner integration:**
+```yaml
+# In planner.yaml
+gate:
+  approach_speed: 30     # Uses high-gain schedule (precise)
+  
+search:
+  search_speed: 50       # Uses medium-gain schedule (balanced)
+  
+transit:
+  cruise_speed: 70       # Uses low-gain schedule (stable)
+```
+
+#### Cascade Position Control
+
+For waypoint-based missions (future feature).
+
+**Enable cascade:**
+```bash
+ros2 param set /mavlink_inspector cascade_enabled true
+```
+
+**When available, allows:**
+```python
+# In custom state
+ctx.send('move_to_position', x=5.0, y=2.0, z=-0.5)
+# AUV moves to absolute position, planner waits for convergence
+```
+
+#### Recommended V2 Settings for Planner Missions
+
+**For competition (precision required):**
+```yaml
+mavlink_inspector:
+  ros__parameters:
+    convergence_enabled: true
+    braking_enabled: true
+    gain_scheduling_enabled: true
+    cascade_enabled: false  # Not needed for current missions
+    
+    convergence_timeout: 8.0  # Longer for mission reliability
+    default_speed_percent: 40  # Conservative for precision
+```
+
+**For testing/development (fast iteration):**
+```yaml
+mavlink_inspector:
+  ros__parameters:
+    convergence_enabled: false  # Faster state transitions
+    braking_enabled: true       # Still want good stopping
+    gain_scheduling_enabled: true
+    
+    default_speed_percent: 50
+```
+
+#### Planner State Compatibility
+
+How V2 features affect each state type:
+
+| State | Convergence | Braking | Notes |
+|-------|-------------|---------|-------|
+| `SubmergeState` | ✓ | ✓ | Waits for stable depth |
+| `SearchState` | ✗ | ✗ | Continuous rotation |
+| `AlignState` | ✓ | ✓ | Vision servoing benefits from stability |
+| `DriveState` | ✓ | ✓ | Full V2 benefit - precise drive-through |
+| `DemoLegState` | ✓ | ✓ | Square pattern precision |
+| `DemoTurnState` | ✓ | ✓ | Sharp 90° turns |
+| `SurfaceState` | ✓ | ✗ | Waits for surface arrival |
+
+#### Debugging V2 Integration
+
+**Check V2 status:**
+```bash
+ros2 param get /mavlink_inspector convergence_enabled
+ros2 param get /mavlink_inspector braking_enabled
+```
+
+**Monitor convergence:**
+```bash
+# Watch for convergence messages in logs
+ros2 topic echo /mavlink_inspector/status
+
+# Expected output:
+# [INFO] Convergence achieved in 1.2s
+# [INFO] Proceeding to next command
+```
+
+**Troubleshoot timeouts:**
+```bash
+# If seeing frequent timeouts:
+ros2 param set /mavlink_inspector convergence_timeout 10.0
+
+# Or disable for that mission:
+ros2 param set /mavlink_inspector convergence_enabled false
+```
+
+**See also:**
+- [Command Reference](../reference/command-reference.md) - V2 command documentation
+- [Control Stack V2](../design-decisions/control-stack-v2.md) - Technical details
+- [Mavlink Runner README](../../src/mavlink_runner/README.md) - V2 feature guide
+
 ---
 
 ## 11. Creating Your Own Mission — Step by Step

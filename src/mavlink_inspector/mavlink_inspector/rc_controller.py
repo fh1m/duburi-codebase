@@ -14,6 +14,7 @@ Channel mapping (Duburi 4.2 / ArduSub):
 from __future__ import annotations
 
 import math
+import threading
 import time
 
 
@@ -26,8 +27,22 @@ CH_YAW = 4
 CH_FORWARD = 5
 CH_LATERAL = 6
 
+# PWM Configuration - can be overridden via parameters
 NEUTRAL_PWM = 1500
 PWM_RANGE = 400  # ±400 from 1500 (1100-1900)
+
+def set_pwm_config(neutral: int, pwm_range: int):
+    """Update PWM configuration (called by inspector_node during init)."""
+    global NEUTRAL_PWM, PWM_RANGE
+    NEUTRAL_PWM = neutral
+    PWM_RANGE = pwm_range
+    # Update NEUTRAL_CHANNELS dict with new neutral value
+    global NEUTRAL_CHANNELS
+    NEUTRAL_CHANNELS = {
+        CH_PITCH: NEUTRAL_PWM, CH_ROLL: NEUTRAL_PWM,
+        CH_THROTTLE: NEUTRAL_PWM, CH_YAW: NEUTRAL_PWM,
+        CH_FORWARD: NEUTRAL_PWM, CH_LATERAL: NEUTRAL_PWM,
+    }
 
 NEUTRAL_CHANNELS = {
     CH_PITCH: NEUTRAL_PWM, CH_ROLL: NEUTRAL_PWM,
@@ -124,6 +139,7 @@ class RcController:
         self._min_speed_pct = min_speed_pct        # Minimum meaningful speed
         self._ramped: dict[int, float] = {}
         self._last_ramp_time: float | None = None  # C4 fix: track real dt for ramp
+        self._lock = threading.Lock()              # Thread safety for _ramped dict
 
         # Movement phase tracking
         self._movement_start_time: float | None = None
@@ -211,11 +227,12 @@ class RcController:
             return 'ramping_down'
         elif self._current_phase == 'ramping_up':
             # Check if we've reached target speed
-            all_at_target = all(
-                abs(self._ramped.get(ch, NEUTRAL_PWM) - tgt) < 5
-                for ch, tgt in self._movement_original_targets.items()
-                if ch in RAMP_CHANNELS
-            )
+            with self._lock:
+                all_at_target = all(
+                    abs(self._ramped.get(ch, NEUTRAL_PWM) - tgt) < 5
+                    for ch, tgt in self._movement_original_targets.items()
+                    if ch in RAMP_CHANNELS
+                )
             if all_at_target:
                 return 'cruising'
             return 'ramping_up'
@@ -269,10 +286,11 @@ class RcController:
         targets = movement.get('channels', {}) if movement is not None else {}
 
         if bypass_ramp:
-            for ch in RAMP_CHANNELS:
-                val = float(targets.get(ch, NEUTRAL_PWM))
-                self._ramped[ch] = val
-                channels[ch] = int(round(val))
+            with self._lock:
+                for ch in RAMP_CHANNELS:
+                    val = float(targets.get(ch, NEUTRAL_PWM))
+                    self._ramped[ch] = val
+                    channels[ch] = int(round(val))
             self._last_ramp_time = time.time()  # C4 fix: update time on bypass too
             self._current_phase = 'neutral'
         else:
@@ -305,22 +323,32 @@ class RcController:
                     self._current_phase = 'neutral'
                     self.end_movement()
 
-            for ch in RAMP_CHANNELS:
-                target = float(effective_targets.get(ch, NEUTRAL_PWM))
-                current = self._ramped.get(ch, float(NEUTRAL_PWM))
-                diff = target - current
-                if abs(diff) <= max_step:
-                    current = target
-                else:
-                    current += max_step if diff > 0 else -max_step
-                self._ramped[ch] = current
-                channels[ch] = int(round(current))
+            with self._lock:
+                for ch in RAMP_CHANNELS:
+                    target = float(effective_targets.get(ch, NEUTRAL_PWM))
+                    current = self._ramped.get(ch, float(NEUTRAL_PWM))
+                    
+                    # Issue #19: Skip ramping if braking is active for this channel
+                    if self._current_phase == 'braking' and ch in [CH_FORWARD, CH_LATERAL, CH_THROTTLE]:
+                        # Instant brake - no ramping for movement channels
+                        current = target
+                    else:
+                        # Normal ramping logic
+                        diff = target - current
+                        if abs(diff) <= max_step:
+                            current = target
+                        else:
+                            current += max_step if diff > 0 else -max_step
+                    
+                    self._ramped[ch] = current
+                    channels[ch] = int(round(current))
 
         return channels
 
     def clear_ramp(self):
         """Reset ramp state — instant neutral for safety stop."""
-        self._ramped.clear()
+        with self._lock:
+            self._ramped.clear()
         self._last_ramp_time = None  # C4 fix: reset time tracking
         self.end_movement()  # Reset phase tracking
 
@@ -330,8 +358,9 @@ class RcController:
         Used by yaw commands to immediately stop forward/lateral thrust
         (POOL FIX 1) without resetting all ramp state.
         """
-        for ch in channel_ids:
-            self._ramped[ch] = float(NEUTRAL_PWM)
+        with self._lock:
+            for ch in channel_ids:
+                self._ramped[ch] = float(NEUTRAL_PWM)
 
     # ── RC sending ───────────────────────────────────────────────────
 

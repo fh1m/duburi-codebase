@@ -271,7 +271,18 @@ class DVLSource(SensorSource):
         else:
             self._quality = 0.2
         
-        self._bottom_lock = self._quality > 0.3
+        # Determine bottom_lock status
+        # Check for explicit bottom_lock field (if available in message)
+        if hasattr(msg, 'bottom_lock'):
+            is_locked = msg.bottom_lock
+        elif hasattr(msg.twist, 'bottom_lock'):
+            is_locked = msg.twist.bottom_lock
+        else:
+            # Fallback: use variance heuristic for bottom_lock detection
+            # High variance = poor lock (quality < 0.3 indicates no lock)
+            is_locked = self._quality > 0.3
+        
+        self._bottom_lock = is_locked
         self.last_update = time.time()
         self.status = SourceStatus.HEALTHY if self._bottom_lock else SourceStatus.DEGRADED
     
